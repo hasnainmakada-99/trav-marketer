@@ -1,0 +1,1260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quotation — AI Marketing & Communication Platform | Annual Subscription</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        
+        :root {
+            --primary: #1a1a2e;
+            --accent: #e94560;
+            --accent-light: #ff6b6b;
+            --blue: #0f3460;
+            --blue-light: #16213e;
+            --gold: #f0a500;
+            --green: #059669;
+            --green-light: #d1fae5;
+            --bg: #ffffff;
+            --text: #2d2d2d;
+            --text-light: #666666;
+            --border: #e8e8e8;
+            --section-bg: #f9fafb;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            color: var(--text);
+            background: var(--bg);
+            line-height: 1.6;
+            font-size: 14px;
+        }
+
+        @media print {
+            body { font-size: 12px; }
+            .page-break { page-break-before: always; }
+            .no-print { display: none; }
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 0 30px;
+        }
+
+        /* HEADER */
+        .header {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--blue) 50%, var(--blue-light) 100%);
+            color: white;
+            padding: 50px 0 40px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .header::after {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 500px;
+            height: 500px;
+            background: radial-gradient(circle, rgba(233,69,96,0.15) 0%, transparent 70%);
+            border-radius: 50%;
+        }
+
+        .header-content {
+            position: relative;
+            z-index: 1;
+        }
+
+        .doc-type {
+            display: inline-block;
+            background: var(--accent);
+            color: white;
+            padding: 5px 18px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin-bottom: 20px;
+        }
+
+        .header h1 {
+            font-size: 30px;
+            font-weight: 800;
+            margin-bottom: 8px;
+            letter-spacing: -0.5px;
+        }
+
+        .header .subtitle {
+            font-size: 16px;
+            font-weight: 300;
+            opacity: 0.85;
+            margin-bottom: 10px;
+        }
+
+        .header .price-hero {
+            display: inline-block;
+            background: var(--accent);
+            padding: 8px 24px;
+            border-radius: 10px;
+            font-size: 22px;
+            font-weight: 800;
+            margin-bottom: 25px;
+        }
+
+        .header .price-hero small {
+            font-size: 13px;
+            font-weight: 400;
+            opacity: 0.85;
+        }
+
+        .header-meta {
+            display: flex;
+            gap: 40px;
+            font-size: 13px;
+            opacity: 0.9;
+        }
+
+        .header-meta div {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .header-meta .label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            opacity: 0.6;
+            margin-bottom: 3px;
+        }
+
+        .header-meta .value {
+            font-weight: 600;
+        }
+
+        /* SECTIONS */
+        .section {
+            padding: 35px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .section:last-child {
+            border-bottom: none;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 22px;
+        }
+
+        .section-number {
+            background: var(--primary);
+            color: white;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        .section-title {
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        /* TABLES */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+        }
+
+        thead th {
+            background: var(--primary);
+            color: white;
+            padding: 12px 16px;
+            text-align: left;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        thead th:first-child {
+            border-radius: 8px 0 0 0;
+        }
+
+        thead th:last-child {
+            border-radius: 0 8px 0 0;
+        }
+
+        tbody td {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        tbody tr:nth-child(even) {
+            background: var(--section-bg);
+        }
+
+        tbody tr:hover {
+            background: #f0f4ff;
+        }
+
+        /* AGENT CARDS */
+        .agent-card {
+            background: white;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 18px;
+            position: relative;
+            transition: box-shadow 0.2s;
+        }
+
+        .agent-card:hover {
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+        }
+
+        .agent-card .agent-badge {
+            position: absolute;
+            top: -1px;
+            right: 20px;
+            background: var(--accent);
+            color: white;
+            padding: 4px 14px;
+            border-radius: 0 0 8px 8px;
+            font-size: 11px;
+            font-weight: 700;
+        }
+
+        .agent-card .agent-badge.green {
+            background: var(--green);
+        }
+
+        .agent-card h3 {
+            font-size: 17px;
+            font-weight: 700;
+            color: var(--blue);
+            margin-bottom: 4px;
+        }
+
+        .agent-card .agent-desc {
+            font-size: 12px;
+            color: var(--accent);
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+
+        .agent-card ul {
+            list-style: none;
+            padding: 0;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2px 20px;
+        }
+
+        .agent-card ul li {
+            padding: 4px 0 4px 22px;
+            position: relative;
+            font-size: 13px;
+            color: var(--text-light);
+        }
+
+        .agent-card ul li::before {
+            content: '✓';
+            position: absolute;
+            left: 0;
+            color: #22c55e;
+            font-weight: 700;
+        }
+
+        /* PRICING BOX */
+        .pricing-summary {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--blue) 100%);
+            border-radius: 16px;
+            padding: 35px;
+            color: white;
+            margin: 25px 0;
+        }
+
+        .pricing-summary h3 {
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            opacity: 0.7;
+            margin-bottom: 20px;
+        }
+
+        .pricing-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .pricing-item {
+            background: rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .pricing-item .label {
+            font-size: 12px;
+            opacity: 0.7;
+            margin-bottom: 5px;
+        }
+
+        .pricing-item .amount {
+            font-size: 26px;
+            font-weight: 800;
+        }
+
+        .pricing-item .amount small {
+            font-size: 13px;
+            font-weight: 400;
+            opacity: 0.7;
+        }
+
+        .pricing-item .note {
+            font-size: 11px;
+            opacity: 0.6;
+            margin-top: 4px;
+        }
+
+        .pricing-item .amount .strike {
+            text-decoration: line-through;
+            opacity: 0.5;
+            font-size: 16px;
+            font-weight: 400;
+        }
+
+        .total-box {
+            grid-column: 1 / -1;
+            background: var(--accent);
+            border-radius: 12px;
+            padding: 22px;
+            text-align: center;
+        }
+
+        .total-box .label {
+            font-size: 12px;
+            opacity: 0.8;
+            margin-bottom: 5px;
+        }
+
+        .total-box .amount {
+            font-size: 36px;
+            font-weight: 800;
+        }
+
+        .total-box .amount small {
+            font-size: 16px;
+            font-weight: 400;
+            opacity: 0.8;
+        }
+
+        .savings-badge {
+            display: inline-block;
+            background: #22c55e;
+            color: white;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 700;
+            margin-top: 8px;
+        }
+
+        /* HIGHLIGHTS */
+        .highlight-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin: 20px 0;
+        }
+
+        .highlight-card {
+            background: var(--section-bg);
+            border-radius: 10px;
+            padding: 18px 14px;
+            text-align: center;
+        }
+
+        .highlight-card .icon {
+            font-size: 26px;
+            margin-bottom: 6px;
+        }
+
+        .highlight-card .h-title {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 3px;
+        }
+
+        .highlight-card .h-desc {
+            font-size: 10px;
+            color: var(--text-light);
+        }
+
+        /* COMPARISON NOTE */
+        .comparison-note {
+            background: #fffbeb;
+            border: 1px solid #f59e0b;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+
+        .comparison-note h4 {
+            color: #b45309;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .comparison-note p {
+            font-size: 13px;
+            color: #92400e;
+        }
+
+        .savings-note {
+            background: var(--green-light);
+            border: 1px solid var(--green);
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+
+        .savings-note h4 {
+            color: #065f46;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .savings-note p {
+            font-size: 13px;
+            color: #065f46;
+        }
+
+        /* TERMS LIST */
+        .terms-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .terms-list li {
+            padding: 8px 0 8px 24px;
+            position: relative;
+            font-size: 13px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .terms-list li:last-child {
+            border-bottom: none;
+        }
+
+        .terms-list li::before {
+            content: '→';
+            position: absolute;
+            left: 0;
+            color: var(--accent);
+            font-weight: 700;
+        }
+
+        /* TECH STACK */
+        .tech-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+        }
+
+        .tech-item {
+            background: var(--section-bg);
+            border-radius: 8px;
+            padding: 12px 14px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .tech-item .tech-icon {
+            font-size: 20px;
+        }
+
+        .tech-item .tech-info .tech-name {
+            font-weight: 600;
+            font-size: 12px;
+        }
+
+        .tech-item .tech-info .tech-role {
+            font-size: 10px;
+            color: var(--text-light);
+        }
+
+        /* FOOTER */
+        .footer {
+            background: var(--primary);
+            color: white;
+            padding: 30px 0;
+            text-align: center;
+            font-size: 12px;
+            opacity: 0.8;
+        }
+
+        .footer p {
+            margin: 3px 0;
+        }
+
+        /* CTA */
+        .cta-section {
+            text-align: center;
+            padding: 35px;
+            background: var(--section-bg);
+            border-radius: 16px;
+            margin: 25px 0;
+        }
+
+        .cta-section h3 {
+            font-size: 20px;
+            margin-bottom: 10px;
+            color: var(--primary);
+        }
+
+        .cta-section p {
+            color: var(--text-light);
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+
+        .signature-area {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            margin-top: 40px;
+        }
+
+        .signature-box {
+            border-top: 2px solid var(--border);
+            padding-top: 15px;
+            text-align: center;
+        }
+
+        .signature-box .sig-label {
+            font-size: 12px;
+            color: var(--text-light);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .signature-box .sig-line {
+            height: 60px;
+        }
+
+        /* TIMELINE BAR */
+        .timeline-bar {
+            display: flex;
+            gap: 0;
+            margin: 20px 0;
+        }
+
+        .timeline-step {
+            flex: 1;
+            text-align: center;
+            padding: 12px 8px;
+            background: var(--section-bg);
+            border-right: 2px solid white;
+            position: relative;
+        }
+
+        .timeline-step:first-child {
+            border-radius: 10px 0 0 10px;
+        }
+
+        .timeline-step:last-child {
+            border-radius: 0 10px 10px 0;
+            border-right: none;
+        }
+
+        .timeline-step .step-label {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--accent);
+        }
+
+        .timeline-step .step-desc {
+            font-size: 11px;
+            color: var(--text-light);
+            margin-top: 2px;
+        }
+
+        .timeline-step .step-time {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--primary);
+            margin-top: 3px;
+        }
+
+        /* INCLUDED BADGE */
+        .included {
+            display: inline-block;
+            background: var(--green-light);
+            color: var(--green);
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+        }
+
+        .extra {
+            display: inline-block;
+            background: #fef3c7;
+            color: #b45309;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- HEADER -->
+    <div class="header">
+        <div class="container header-content">
+            <div class="doc-type">Quotation — Annual Service Plan</div>
+            <h1>AI Marketing & Communication Platform</h1>
+            <p class="subtitle">Complete Grexa-equivalent solution — custom-built for your business</p>
+            <div class="price-hero">₹49,999/year <small>all-inclusive (incl. GST)</small></div>
+            
+            <div class="header-meta">
+                <div>
+                    <span class="label">Quotation No.</span>
+                    <span class="value">QTN-2026-001</span>
+                </div>
+                <div>
+                    <span class="label">Date</span>
+                    <span class="value">30 March 2026</span>
+                </div>
+                <div>
+                    <span class="label">Valid Until</span>
+                    <span class="value">30 April 2026</span>
+                </div>
+                <div>
+                    <span class="label">Plan Duration</span>
+                    <span class="value">12 Months + 2 Months Free</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+
+        <!-- SECTION 1: EXECUTIVE SUMMARY -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">1</div>
+                <div class="section-title">What You Get</div>
+            </div>
+            <p style="font-size: 14px; color: var(--text-light); margin-bottom: 20px;">
+                We will build and manage a <strong>complete AI marketing platform for your business</strong> — just like Grexa AI, but <strong>custom-made for you</strong>. AI will chat with your customers on WhatsApp, capture leads, send reminders, and help you grow sales — all on autopilot, 24/7. One simple price, everything included.
+            </p>
+
+            <div class="highlight-grid">
+                <div class="highlight-card">
+                    <div class="icon">🤖</div>
+                    <div class="h-title">WhatsApp AI Agent</div>
+                    <div class="h-desc">24/7 chatbot — handles multiple queries</div>
+                </div>
+                <div class="highlight-card">
+                    <div class="icon">📈</div>
+                    <div class="h-title">Lead Conversion AI</div>
+                    <div class="h-desc">Capture, qualify & convert leads</div>
+                </div>
+                <div class="highlight-card">
+                    <div class="icon">📊</div>
+                    <div class="h-title">CRM + Dashboard</div>
+                    <div class="h-desc">Leads, analytics & revenue insights</div>
+                </div>
+                <div class="highlight-card">
+                    <div class="icon">🔄</div>
+                    <div class="h-title">Marketing AI Agent</div>
+                    <div class="h-desc">Campaigns, reminders & re-marketing</div>
+                </div>
+            </div>
+
+            <div class="savings-note">
+                <h4>💰 Better Value Than Grexa AI</h4>
+                <p>
+                    Grexa AI charges <strong>₹15,000/quarter (₹60,000/year + GST = ₹70,800/year)</strong> for their standard plan. At <strong>₹49,999/year all-inclusive</strong>, you get the same AI agents + <strong>full customization, dedicated support, and 14 months of service</strong> — saving over ₹20,000 compared to Grexa's annual cost.
+                </p>
+            </div>
+        </div>
+
+        <!-- SECTION 2: AI AGENTS — FULL FEATURE BREAKDOWN -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">2</div>
+                <div class="section-title">Your AI Marketing Team — All 4 Agents Included</div>
+            </div>
+
+            <p style="font-size: 13px; color: var(--text-light); margin-bottom: 20px;">
+                You get <strong>4 AI assistants</strong> that work for your business round-the-clock — just like having a full marketing team, but automated and affordable.
+            </p>
+
+            <!-- Agent 1: WhatsApp Chat AI -->
+            <div class="agent-card">
+                <div class="agent-badge">Agent 1</div>
+                <h3>🤖 WhatsApp Chat AI Agent</h3>
+                <div class="agent-desc">Your 24/7 Personal Assistant — Chats With Customers Round-the-Clock</div>
+                <ul>
+                    <li>Exclusively trained on your business</li>
+                    <li>Handles unlimited conversations simultaneously</li>
+                    <li>Handles multiple queries in one conversation</li>
+                    <li>Knows your services, pricing & testimonials</li>
+                    <li>Remembers customer purchase history</li>
+                    <li>Human-like, natural conversations</li>
+                    <li>Multilingual — English, Hindi, Marathi + 9 more</li>
+                    <li>Instant replies — no customer left waiting</li>
+                </ul>
+            </div>
+
+            <!-- Agent 2: Lead Conversion AI -->
+            <div class="agent-card">
+                <div class="agent-badge">Agent 2</div>
+                <h3>📈 Lead Conversion AI Agent</h3>
+                <div class="agent-desc">Captures Every Enquiry, Connects Instantly, Converts Into Customers</div>
+                <ul>
+                    <li>Captures leads from WhatsApp & walk-ins</li>
+                    <li>Collects every lead's details & interests</li>
+                    <li>Instantly connects with leads on WhatsApp</li>
+                    <li>Shares brochures, product info & testimonials</li>
+                    <li>Auto follow-ups for unresponsive leads</li>
+                    <li>Analyses chats to identify potential customers</li>
+                    <li>Missed call detection & auto WhatsApp trigger</li>
+                    <li>Lead performance tracking & conversion metrics</li>
+                </ul>
+            </div>
+
+            <!-- Agent 3: Promotional Marketing AI -->
+            <div class="agent-card">
+                <div class="agent-badge">Agent 3</div>
+                <h3>📣 Promotional Marketing AI Agent</h3>
+                <div class="agent-desc">Boosts Repeat Sales, Google Reviews & Customer Retention</div>
+                <ul>
+                    <li>Repeat purchase reminders</li>
+                    <li>Follow-up visit reminders</li>
+                    <li>Discount & promotional offer campaigns</li>
+                    <li>Upselling & cross-selling campaigns</li>
+                    <li>Pending payment reminders</li>
+                    <li>Google review request automation</li>
+                    <li>Membership renewal reminders</li>
+                    <li>Campaign analytics & conversion tracking</li>
+                </ul>
+            </div>
+
+            <!-- Agent 4: CRM + Dashboard -->
+            <div class="agent-card">
+                <div class="agent-badge green">Agent 4</div>
+                <h3>📊 AI CRM & Revenue Dashboard</h3>
+                <div class="agent-desc">Complete Business Intelligence — All Your Data in One Place</div>
+                <ul>
+                    <li>Revenue dashboard with insights on the go</li>
+                    <li>Customer purchase history & sales reports</li>
+                    <li>Lead pipeline — new, contacted, converted</li>
+                    <li>Chat inbox (WhatsApp Web-style interface)</li>
+                    <li>Communication history & chat logs</li>
+                    <li>Invoice sharing via WhatsApp</li>
+                    <li>Multi-role staff access (Owner, Admin, Manager, Staff)</li>
+                    <li>Real-time notifications & live updates</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- PAGE BREAK FOR PRINT -->
+        <div class="page-break"></div>
+
+        <!-- SECTION 3: HEAD-TO-HEAD COMPARISON -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">3</div>
+                <div class="section-title">Head-to-Head — Us vs. Grexa AI</div>
+            </div>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 36%;">Feature</th>
+                        <th style="width: 32%;">Grexa AI (₹70,800/yr with GST)</th>
+                        <th style="width: 32%;">Our Plan (₹49,999/yr incl. GST)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>WhatsApp AI Chatbot (24/7)</strong></td>
+                        <td>✅ Included</td>
+                        <td>✅ Custom-trained + multi-query handling</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Lead Conversion AI Agent</strong></td>
+                        <td>✅ Included</td>
+                        <td>✅ With missed call auto-trigger</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Promotional Marketing AI</strong></td>
+                        <td>✅ Template-based</td>
+                        <td>✅ Custom campaigns + segmentation</td>
+                    </tr>
+                    <tr>
+                        <td><strong>CRM + Revenue Dashboard</strong></td>
+                        <td>✅ Standard</td>
+                        <td>✅ Customized to your business</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Multilingual Support</strong></td>
+                        <td>✅ 12 languages</td>
+                        <td>✅ Unlimited (AI-powered)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Multi-Role Staff Access</strong></td>
+                        <td>✅ 4 roles</td>
+                        <td>✅ 4 roles (Owner, Admin, Manager, Staff)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Google Business Profile AI</strong></td>
+                        <td>✅ Included</td>
+                        <td>⏳ Available as add-on</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Dedicated Support</strong></td>
+                        <td>General support team</td>
+                        <td>✅ Direct developer access</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Customization</strong></td>
+                        <td>❌ One-size-fits-all</td>
+                        <td>✅ Tailored to your business</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Platform Lock-in</strong></td>
+                        <td>⚠️ Tied to Grexa platform</td>
+                        <td>✅ Your data, your control</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Plan Duration</strong></td>
+                        <td>12 months</td>
+                        <td><strong>14 months (12 + 2 free)</strong></td>
+                    </tr>
+                    <tr style="background: var(--green-light) !important;">
+                        <td><strong>Annual Price (incl. GST)</strong></td>
+                        <td style="font-weight: 700; color: var(--accent);">₹70,800/year</td>
+                        <td style="font-weight: 700; color: var(--green);">₹49,999/year</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- SECTION 4: SETUP & DEPLOYMENT TIMELINE -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">4</div>
+                <div class="section-title">Setup & Deployment Timeline</div>
+            </div>
+
+            <p style="font-size: 13px; color: var(--text-light); margin-bottom: 15px;">
+                We build your platform step by step. Your <strong>WhatsApp AI chatbot goes live in just 2 weeks</strong> — you start getting results right away while we build the rest.
+            </p>
+
+            <div class="timeline-bar">
+                <div class="timeline-step">
+                    <div class="step-label">Week 1–2</div>
+                    <div class="step-desc">WhatsApp AI + Lead Capture</div>
+                    <div class="step-time">🟢 Go Live</div>
+                </div>
+                <div class="timeline-step">
+                    <div class="step-label">Week 3–4</div>
+                    <div class="step-desc">Lead Capture + CRM</div>
+                    <div class="step-time">Build</div>
+                </div>
+                <div class="timeline-step">
+                    <div class="step-label">Week 5–6</div>
+                    <div class="step-desc">Dashboard + Analytics</div>
+                    <div class="step-time">Build</div>
+                </div>
+                <div class="timeline-step">
+                    <div class="step-label">Week 7–8</div>
+                    <div class="step-desc">Automation + Campaigns</div>
+                    <div class="step-time">🏁 Complete</div>
+                </div>
+            </div>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Milestone</th>
+                        <th>What Gets Delivered</th>
+                        <th>Duration</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Setup</strong></td>
+                        <td>We collect your business info (services, prices, FAQs) and set up accounts</td>
+                        <td>3–5 days</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Step 1 — WhatsApp AI</strong></td>
+                        <td>Your AI chatbot goes live on WhatsApp — starts talking to customers & capturing leads</td>
+                        <td>10–12 days</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Step 2 — Lead Capture + CRM</strong></td>
+                        <td>Lead capture system, missed call auto-reply on WhatsApp, CRM & pipeline setup</td>
+                        <td>10–12 days</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Step 3 — Dashboard</strong></td>
+                        <td>Your business dashboard — revenue, chats, reports, everything at a glance</td>
+                        <td>10–12 days</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Step 4 — Automation</strong></td>
+                        <td>Auto follow-ups, promotional campaigns, review reminders — all on autopilot</td>
+                        <td>8–10 days</td>
+                    </tr>
+                    <tr>
+                        <td colspan="2" style="text-align: right; font-weight: 700;">Total Setup Time</td>
+                        <td style="font-weight: 700; color: var(--accent);">~6–8 Weeks</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <p style="font-size: 12px; color: var(--text-light); margin-top: 8px;">
+                * Your WhatsApp AI goes live in Week 2 itself — you don't have to wait for everything to be ready. The setup period does not count toward your 14-month subscription.
+            </p>
+        </div>
+
+        <!-- SECTION 5: PRICING -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">5</div>
+                <div class="section-title">Pricing & Plan Details</div>
+            </div>
+
+            <div class="pricing-summary">
+                <h3>Annual Plan — All Inclusive</h3>
+                <div class="pricing-grid">
+                    <div class="pricing-item">
+                        <div class="label">Plan Duration</div>
+                        <div class="amount">14 Months</div>
+                        <div class="note">12 months + 2 months FREE</div>
+                    </div>
+                    <div class="pricing-item">
+                        <div class="label">Setup & Onboarding</div>
+                        <div class="amount">FREE</div>
+                        <div class="note">~6-8 weeks build + deployment</div>
+                    </div>
+                    <div class="pricing-item">
+                        <div class="label">Grexa AI Equivalent</div>
+                        <div class="amount"><span class="strike">₹70,800</span></div>
+                        <div class="note">₹60,000 + 18% GST per year</div>
+                    </div>
+                    <div class="pricing-item">
+                        <div class="label">Ongoing Support</div>
+                        <div class="amount">Included</div>
+                        <div class="note">Bug fixes, updates & monitoring</div>
+                    </div>
+                    <div class="total-box">
+                        <div class="label">Complete Annual Price (Including GST)</div>
+                        <div class="amount">₹49,999 <small>/year</small></div>
+                        <div class="savings-badge">Save ₹20,800+ vs Grexa AI</div>
+                    </div>
+                </div>
+            </div>
+
+            <h4 style="font-size: 15px; margin: 25px 0 15px; color: var(--primary);">What's Included in ₹49,999</h4>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>What You Get</th>
+                        <th>Details</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Complete Platform Build</strong></td>
+                        <td>All 4 AI assistants + dashboard — built and deployed for you</td>
+                        <td><span class="included">INCLUDED</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>AI Training for Your Business</strong></td>
+                        <td>AI learns your services, pricing, FAQs and talks like your best salesperson</td>
+                        <td><span class="included">INCLUDED</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>14 Months Service</strong></td>
+                        <td>12 months + 2 bonus months — full access to everything</td>
+                        <td><span class="included">INCLUDED</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Hosting (Appwrite Cloud)</strong></td>
+                        <td>Your platform runs on Appwrite — secure, fast, always online</td>
+                        <td><span class="included">INCLUDED</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Support & Fixes</strong></td>
+                        <td>Any issues? We fix them. Updates and monitoring included</td>
+                        <td><span class="included">INCLUDED</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>WhatsApp + Phone Number Setup</strong></td>
+                        <td>We connect your WhatsApp Business number to the AI system</td>
+                        <td><span class="included">INCLUDED</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>₹500 WhatsApp Credit</strong></td>
+                        <td>Free messaging credit to get started (same as Grexa)</td>
+                        <td><span class="included">₹500 FREE</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>WhatsApp Messages (after ₹500)</strong></td>
+                        <td>₹0.50 – ₹2 per message — charged by WhatsApp directly, not us</td>
+                        <td><span class="extra">PAY AS YOU USE</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>AI Processing</strong></td>
+                        <td>~₹300–₹800/month for typical usage — same as Grexa charges</td>
+                        <td><span class="extra">PAY AS YOU USE</span></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="comparison-note" style="margin-top: 20px;">
+                <h4>📌 About Pay-As-You-Use Costs</h4>
+                <p>
+                    WhatsApp charges every business for messages — including Grexa (they also include only ₹500 initially). These are <strong>not our charges</strong> — they go directly to WhatsApp/Meta. For a typical small business, expect <strong>₹500–₹1,500/month</strong> total for messaging + AI. We don't add any markup.
+                </p>
+            </div>
+        </div>
+
+        <!-- PAGE BREAK FOR PRINT -->
+        <div class="page-break"></div>
+
+        <!-- SECTION 6: HOW IT WORKS -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">6</div>
+                <div class="section-title">How It Works — Simple & Reliable</div>
+            </div>
+
+            <p style="font-size: 14px; color: var(--text-light); margin-bottom: 20px;">
+                Your entire platform runs on <strong>Appwrite</strong> — a secure, enterprise-grade cloud backend that handles everything: user accounts, data storage, real-time updates, and all the automation logic. Think of it as the engine that powers your whole system. No complicated setup, no multiple servers to manage.
+            </p>
+
+            <div class="tech-grid">
+                <div class="tech-item">
+                    <div class="tech-icon">🔧</div>
+                    <div class="tech-info">
+                        <div class="tech-name">Appwrite Cloud</div>
+                        <div class="tech-role">Your entire backend — data, security, automation, real-time updates</div>
+                    </div>
+                </div>
+                <div class="tech-item">
+                    <div class="tech-icon">💬</div>
+                    <div class="tech-info">
+                        <div class="tech-name">WhatsApp Business</div>
+                        <div class="tech-role">Official Meta API for messaging your customers</div>
+                    </div>
+                </div>
+                <div class="tech-item">
+                    <div class="tech-icon">🧠</div>
+                    <div class="tech-info">
+                        <div class="tech-name">AI (ChatGPT-level)</div>
+                        <div class="tech-role">Powers the smart chatbot & marketing automation</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="comparison-note" style="margin-top: 20px;">
+                <h4>🔒 Why Appwrite?</h4>
+                <p>
+                    Appwrite is a trusted cloud platform used by thousands of businesses worldwide. It keeps all your customer data <strong>secure and private</strong>, provides <strong>real-time updates</strong> (you see new leads instantly), and handles everything from login security to database storage — all in one place. This means a <strong>faster, more reliable, and more affordable</strong> system for you.
+                </p>
+            </div>
+        </div>
+
+        <!-- SECTION 7: PAYMENT TERMS -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">7</div>
+                <div class="section-title">Payment Structure</div>
+            </div>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Payment</th>
+                        <th>Amount</th>
+                        <th>When</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>50% Advance</strong></td>
+                        <td style="font-weight: 700;">₹25,000</td>
+                        <td>At project kickoff — before setup begins</td>
+                    </tr>
+                    <tr>
+                        <td><strong>50% On Delivery</strong></td>
+                        <td style="font-weight: 700;">₹24,999</td>
+                        <td>After full platform deployment & handover</td>
+                    </tr>
+                    <tr style="background: var(--green-light) !important;">
+                        <td style="font-weight: 700;">TOTAL</td>
+                        <td style="font-weight: 800; font-size: 16px;">₹49,999</td>
+                        <td style="font-weight: 600;">14 months of full service (incl. GST)</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <p style="font-size: 12px; color: var(--text-light); margin-top: 10px;">
+                * No hidden charges. The above is the complete annual price. Usage-based API costs (WhatsApp credits, AI tokens) are billed separately at actual rates — same as Grexa AI's model.
+            </p>
+        </div>
+
+        <!-- SECTION 8: SUBSCRIPTION TERMS -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">8</div>
+                <div class="section-title">Subscription Terms</div>
+            </div>
+
+            <ul class="terms-list">
+                <li><strong>You get 14 months</strong> — 12 months + 2 bonus months, starting after your platform is fully ready.</li>
+                <li><strong>Setup time (~6–8 weeks)</strong> is extra — your 14 months start only after everything is live.</li>
+                <li><strong>We handle all fixes</strong> — if anything breaks, we fix it. Updates included throughout your plan.</li>
+                <li><strong>Your data is yours</strong> — all leads, chats, and customer info belongs to you, always.</li>
+                <li><strong>Your WhatsApp number</strong> — set up under your name. You own it completely.</li>
+                <li><strong>After 14 months</strong> — renew at a discounted rate, or export all your data.</li>
+                <li><strong>No lock-in</strong> — no hidden penalties. You only pay what's agreed.</li>
+                <li><strong>100% confidential</strong> — your business data and customer info is never shared with anyone.</li>
+                <li><strong>₹49,999 = final price</strong> — GST already included. No surprises.</li>
+            </ul>
+        </div>
+
+        <!-- SECTION 9: WHAT'S NOT INCLUDED -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">9</div>
+                <div class="section-title">What's Not Included (Optional Add-Ons)</div>
+            </div>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Item</th>
+                        <th>Status</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Google Business Profile (GBP) AI</td>
+                        <td><span class="extra">ADD-ON</span></td>
+                        <td>Auto Google posts, SEO keywords, review replies — can add later</td>
+                    </tr>
+                    <tr>
+                        <td>AI Voice Call Agent (AI answers calls on your number)</td>
+                        <td><span class="extra">ADD-ON</span></td>
+                        <td>Can be added once platform starts generating revenue</td>
+                    </tr>
+                    <tr>
+                        <td>AI Outbound Calling (robot makes calls to customers)</td>
+                        <td><span class="extra">ADD-ON</span></td>
+                        <td>AI calls customers proactively — can add in future if needed</td>
+                    </tr>
+                    <tr>
+                        <td>Mobile App (from App Store/Play Store)</td>
+                        <td><span class="extra">ADD-ON</span></td>
+                        <td>Not needed — your dashboard works perfectly on mobile browser</td>
+                    </tr>
+                    <tr>
+                        <td>WhatsApp Green Tick ✅</td>
+                        <td>—</td>
+                        <td>We help you apply — approval is from Meta/WhatsApp</td>
+                    </tr>
+                    <tr>
+                        <td>Writing your business content</td>
+                        <td>—</td>
+                        <td>You share your business info, we set it up for the AI</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- SECTION 10: ACCEPTANCE -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">10</div>
+                <div class="section-title">Accept & Get Started</div>
+            </div>
+
+            <div class="cta-section">
+                <h3>Ready to Grow Your Business with AI?</h3>
+                <p>Your AI chatbot will be talking to customers within 2 weeks. Full platform ready in ~8 weeks.</p>
+
+                <div style="text-align: left; max-width: 520px; margin: 0 auto;">
+                    <p style="font-size: 13px; margin-bottom: 8px;"><strong>To get started, we just need:</strong></p>
+                    <ul style="font-size: 13px; color: var(--text-light); padding-left: 20px;">
+                        <li>Your confirmation — via WhatsApp, email, or sign below</li>
+                        <li>Advance payment of <strong>₹25,000</strong> (50% of total)</li>
+                        <li>Your business details — services, pricing, FAQs, testimonials</li>
+                        <li>Your WhatsApp Business number</li>
+                        <li>Any existing customer list (optional — helps us import into your CRM)</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="signature-area">
+                <div class="signature-box">
+                    <div class="sig-line"></div>
+                    <div class="sig-label">Client Signature & Date</div>
+                </div>
+                <div class="signature-box">
+                    <div class="sig-line"></div>
+                    <div class="sig-label">Developer Signature & Date</div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- FOOTER -->
+    <div class="footer">
+        <div class="container">
+            <p><strong>Quotation QTN-2026-001</strong> | AI Marketing & Communication Platform — Annual Plan</p>
+            <p>Generated on 30 March 2026 | Valid until 30 April 2026</p>
+            <p style="margin-top: 8px; font-size: 11px; opacity: 0.6;">This document is confidential and intended solely for the named recipient.</p>
+        </div>
+    </div>
+
+</body>
+</html>
