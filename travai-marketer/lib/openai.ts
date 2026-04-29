@@ -6,9 +6,14 @@
 
 import OpenAI from 'openai';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+let _openai: OpenAI | null = null;
+
+function getOpenAI(): OpenAI {
+  if (!_openai) {
+    _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+  return _openai;
+}
 
 interface Message {
   role: 'user' | 'assistant' | 'system';
@@ -37,7 +42,7 @@ export async function getChatResponse(
       },
     ];
 
-    const response = await openai.chat.completions.create({
+    const response = await getOpenAI().chat.completions.create({
       model,
       messages,
       temperature: 0.7,
@@ -69,7 +74,7 @@ Don't use salesy language.`;
 ${businessContext}
 ${targetAudience ? `Target audience: ${targetAudience}` : ''}`;
 
-    const response = await openai.chat.completions.create({
+    const response = await getOpenAI().chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
@@ -114,7 +119,7 @@ Generate an engaging Google Business Profile post that:
 ${businessContext}
 ${keywordsStr}`;
 
-    const response = await openai.chat.completions.create({
+    const response = await getOpenAI().chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
@@ -159,7 +164,7 @@ Generate a professional, warm reply to a Google Business Profile review.
 Business: ${businessContext}
 Review: "${review}"`;
 
-    const response = await openai.chat.completions.create({
+    const response = await getOpenAI().chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
@@ -241,7 +246,7 @@ export async function classifyIntent(
   businessContext: string
 ): Promise<string> {
   try {
-    const response = await openai.chat.completions.create({
+    const response = await getOpenAI().chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
@@ -284,7 +289,7 @@ export async function extractCustomerInfo(
   intendedService?: string;
 }> {
   try {
-    const response = await openai.chat.completions.create({
+    const response = await getOpenAI().chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
