@@ -2,9 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'appwrite';
 import { generateGBPPost } from '@/lib/openai';
 import {
+  createGoogleLocalPost,
+  getAccessTokenForTeam,
+  getBusinessConfigByTeamId,
+} from '@/lib/gbp';
+import {
   createDocument,
   listDocuments,
-  getDocument,
   updateDocument,
   deleteDocument,
 } from '@/lib/appwrite';
@@ -24,6 +28,9 @@ export async function POST(request: NextRequest) {
       createdBy,
       autoGenerate,
       keywords,
+      publishNow,
+      googleLocationName,
+      languageCode,
     } = body;
 
     if (!teamId || !createdBy) {
@@ -37,11 +44,15 @@ export async function POST(request: NextRequest) {
 
     // Auto-generate content if requested
     if (autoGenerate) {
-      const business = await getDocument('business_configs', teamId);
+      const business = await getBusinessConfigByTeamId(teamId);
+      if (!business) {
+        return NextResponse.json(
+          { error: 'Business configuration not found for team' },
+          { status: 404 }
+        );
+      }
       const businessContext = `Business: ${business.businessName}
-Type: ${business.businessType}
-Services: ${business.services?.join(', ') || 'General services'}
-Description: ${business.description || 'No description'}`;
+Description: ${String((business as unknown as Record<string, unknown>).businessDescription || 'No description')}`;
       
       const generatedContent = await generateGBPPost(
         businessContext,
@@ -50,13 +61,53 @@ Description: ${business.description || 'No description'}`;
       finalContent = generatedContent;
     }
 
+    if (!finalContent || String(finalContent).trim().length === 0) {
+      return NextResponse.json(
+        { error: 'Post content is required (or enable autoGenerate)' },
+        { status: 400 }
+      );
+    }
+
+    let googlePostId: string | null = null;
+    let status = 'draft';
+    let postedAt: string | null = null;
+
+    if (publishNow) {
+      const accessToken = await getAccessTokenForTeam(teamId);
+      const business = await getBusinessConfigByTeamId(teamId);
+      const connectedLocation =
+        typeof business?.googleLocationId === 'string' ? business.googleLocationId : null;
+      const locationName =
+        typeof googleLocationName === 'string' && googleLocationName.length > 0
+          ? googleLocationName
+          : connectedLocation;
+
+      if (!locationName) {
+        return NextResponse.json(
+          { error: 'No connected Google location found. Connect GBP first.' },
+          { status: 400 }
+        );
+      }
+
+      const createdPost = await createGoogleLocalPost(
+        accessToken,
+        locationName,
+        String(finalContent || ''),
+        typeof languageCode === 'string' ? languageCode : 'en'
+      );
+
+      googlePostId = createdPost.name || null;
+      status = 'posted';
+      postedAt = new Date().toISOString();
+    }
+
     const post = await createDocument('gbp_posts', {
       teamId,
       title: title || 'Auto-generated Post',
       content: finalContent,
-      googlePostId: null,
-      status: 'draft',
-      postedAt: null,
+      googlePostId,
+      status,
+      postedAt,
       type: type || 'auto_generated',
       createdBy,
       createdAt: new Date().toISOString(),
@@ -92,7 +143,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const queries = [
+    const queries: string[] = [
       Query.equal('teamId', teamId),
     ];
 
@@ -102,7 +153,7 @@ export async function GET(request: NextRequest) {
 
     queries.push(Query.limit(limit), Query.offset(offset));
 
-    const posts = await listDocuments('gbp_posts', queries as any);
+    const posts = await listDocuments('gbp_posts', queries);
 
     return NextResponse.json(posts, { status: 200 });
   } catch (error) {

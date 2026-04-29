@@ -193,7 +193,10 @@ export default function DashboardPage() {
               <li>✓ Auto-replies</li>
               <li>✓ SEO optimization</li>
             </ul>
-            <button className="w-full px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-sm font-medium transition-colors">
+            <button
+              onClick={() => router.push('/dashboard/gbp')}
+              className="w-full px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-sm font-medium transition-colors"
+            >
               Manage GBP
             </button>
           </div>
