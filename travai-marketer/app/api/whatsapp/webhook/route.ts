@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Query } from 'appwrite';
-import { parseWhatsAppWebhook, verifyWebhookToken } from '@/lib/whatsapp';
+import { Query } from 'node-appwrite';
+import { parseWhatsAppWebhook, verifyWebhookToken, sendWhatsAppMessage } from '@/lib/whatsapp';
 import { getChatResponse, classifyIntent, extractCustomerInfo } from '@/lib/openai';
 import { createDocument, getDocument, listDocuments, updateDocument } from '@/lib/appwrite';
 
@@ -115,12 +115,12 @@ async function processIncomingMessage(message: any) {
       teamId: customer.teamId,
       customerId: customer.$id,
       phone: phone,
-      type: 'incoming',
+      role: 'user',
+      message: text || `[${type}]`,
       messageType: type,
-      text: text || null,
-      mediaId: type !== 'text' ? messageId : null,
-      status: 'received',
-      timestamp: new Date(timestamp * 1000).toISOString(),
+      sentBy: 'customer',
+      metaMessageId: messageId || null,
+      deliveryStatus: 'received',
       createdAt: new Date().toISOString(),
     });
 
@@ -161,15 +161,13 @@ async function processMessageStatus(status: any) {
 
     // Find the conversation with this messageId
     const conversations = await listDocuments('conversations', [
-      Query.equal('mediaId', messageId),
+      Query.equal('metaMessageId', messageId),
     ]);
 
     if (conversations.documents.length > 0) {
       const convo = conversations.documents[0];
       await updateDocument('conversations', convo.$id, {
-        status: msgStatus,
-        deliveredAt: msgStatus === 'delivered' ? new Date().toISOString() : null,
-        readAt: msgStatus === 'read' ? new Date().toISOString() : null,
+        deliveryStatus: msgStatus,
       });
     }
   } catch (error) {
@@ -227,8 +225,8 @@ async function generateAndSendResponse(
     const history = convos.documents
       .slice(-5)
       .map((c: any) => ({
-        role: (c.type === 'incoming' ? 'user' : 'assistant') as 'user' | 'assistant',
-        content: c.text || '[media]',
+        role: (c.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+        content: c.message || '[media]',
       }));
 
     // Generate AI response
@@ -240,43 +238,34 @@ async function generateAndSendResponse(
 
     const response = await getChatResponse(userMessage, systemPrompt, history);
 
-    // Save the outgoing message
+    // Send via WhatsApp Cloud API (Meta)
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
+    const whatsappToken = process.env.WHATSAPP_TOKEN || '';
+    const sendResult = await sendWhatsAppMessage({
+      phoneNumberId,
+      recipientPhone: phone,
+      message: response,
+      whatsappToken,
+    });
+
+    // Save the outgoing message with the actual Meta message ID
     await createDocument('conversations', {
       teamId: customer.teamId,
       customerId: customer.$id,
       phone: phone,
-      type: 'outgoing',
+      role: 'assistant',
+      message: response,
       messageType: 'text',
-      text: response,
-      status: 'sending',
-      timestamp: new Date().toISOString(),
+      sentBy: 'ai',
+      metaMessageId: sendResult.messageId || null,
+      deliveryStatus: sendResult.success ? 'sent' : 'failed',
       createdAt: new Date().toISOString(),
     });
 
-    // Send via WhatsApp API
-    const sendResult = await fetch(
-      `https://api.whatsapp.com/send?phone=${phone}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.WHATSAPP_TOKEN}`,
-        },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          to: phone,
-          type: 'text',
-          text: { body: response },
-        }),
-      }
-    );
-
-    const sendData = await sendResult.json();
-
-    if (sendResult.ok && sendData.messages) {
-      console.log(`✅ Response sent to ${phone}`);
+    if (sendResult.success) {
+      console.log(`✅ AI response sent to ${phone}`);
     } else {
-      console.error(`❌ Failed to send response:`, sendData);
+      console.error(`❌ Failed to send AI response:`, sendResult.error);
     }
   } catch (error) {
     console.error('[WhatsApp] Error generating/sending response:', error);

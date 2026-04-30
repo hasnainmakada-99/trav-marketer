@@ -12,11 +12,9 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* Force light mode for the platform – we don't have a dark theme yet. */
+html {
+  color-scheme: light;
 }
 
 body {
@@ -24,3 +22,31 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Ensure all form inputs always have dark, readable text on white background.
+   Use !important to win over Tailwind preflight + browser autofill styles. */
+input:not([type="checkbox"]):not([type="radio"]),
+textarea,
+select {
+  color: #111827 !important; /* gray-900 */
+  background-color: #ffffff !important;
+  -webkit-text-fill-color: #111827 !important; /* Safari/Chrome autofill */
+  caret-color: #111827 !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #9ca3af !important; /* gray-400 */
+  opacity: 1 !important;
+}
+
+/* Chrome/Edge autofill keeps yellow background — override it */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  -webkit-box-shadow: 0 0 0 1000px #ffffff inset !important;
+  -webkit-text-fill-color: #111827 !important;
+}
+

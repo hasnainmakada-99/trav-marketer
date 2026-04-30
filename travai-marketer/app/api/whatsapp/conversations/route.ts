@@ -1,19 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Query } from 'appwrite';
+import { Query } from 'node-appwrite';
 import { listDocuments } from '@/lib/appwrite';
 
 interface ConversationDoc {
   $id: string;
+  $createdAt?: string;
   teamId: string;
   customerId?: string;
   phone: string;
-  type: 'incoming' | 'outgoing';
+  role?: 'user' | 'assistant';
+  message?: string | null;
   messageType?: string;
-  text?: string | null;
-  status?: string;
-  timestamp?: string;
+  sentBy?: 'customer' | 'ai' | 'staff';
+  metaMessageId?: string | null;
+  deliveryStatus?: string;
   createdAt?: string;
-  readAt?: string | null;
 }
 
 interface CustomerDoc {
@@ -61,20 +62,20 @@ export async function GET(request: NextRequest) {
       const phone = m.phone;
       if (!phone) continue;
 
-      const existing = byPhone.get(phone);
-      const ts = m.timestamp || m.createdAt || new Date().toISOString();
+      const isIncoming = m.role === 'user' || m.sentBy === 'customer';
+      const ts = m.createdAt || m.$createdAt || new Date().toISOString();
 
+      const existing = byPhone.get(phone);
       if (!existing) {
         byPhone.set(phone, {
           phone,
-          lastMessage: m.text || `[${m.messageType || 'media'}]`,
+          lastMessage: m.message || `[${m.messageType || 'media'}]`,
           lastTimestamp: ts,
-          lastType: m.type,
-          unreadCount:
-            m.type === 'incoming' && !m.readAt && m.status !== 'read' ? 1 : 0,
+          lastType: isIncoming ? 'incoming' : 'outgoing',
+          unreadCount: isIncoming && m.deliveryStatus !== 'read' ? 1 : 0,
         });
       } else {
-        if (m.type === 'incoming' && !m.readAt && m.status !== 'read') {
+        if (isIncoming && m.deliveryStatus !== 'read') {
           existing.unreadCount += 1;
         }
       }
@@ -103,10 +104,8 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ conversations });
   } catch (error) {
-    console.error('[WA conversations] Error:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed' },
-      { status: 500 }
-    );
+    // Collection may not exist yet (fresh install) or have no data — return empty list.
+    console.warn('[WA conversations] Returning empty list:', error instanceof Error ? error.message : error);
+    return NextResponse.json({ conversations: [] });
   }
 }

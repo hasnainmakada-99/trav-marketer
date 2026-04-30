@@ -66,24 +66,22 @@ export async function POST(request: NextRequest) {
     }
 
     // Save the message to database
-    if (customerId) {
-      try {
-        await createDocument('conversations', {
-          teamId: body.teamId || 'system',
-          customerId: customerId,
-          phone: phone,
-          type: 'outgoing',
-          messageType: 'text',
-          text: message,
-          mediaId: result.messageId,
-          status: 'sent',
-          timestamp: new Date().toISOString(),
-          createdAt: new Date().toISOString(),
-        });
-      } catch (dbError) {
-        console.error('Failed to save message to database:', dbError);
-        // Don't fail the API call if database save fails
-      }
+    try {
+      await createDocument('conversations', {
+        teamId: body.teamId || 'system',
+        customerId: customerId || 'manual',
+        phone: phone,
+        role: 'assistant',
+        message: templateName ? `[template: ${templateName}]` : message,
+        messageType: templateName ? 'template' : 'text',
+        sentBy: 'staff',
+        metaMessageId: result.messageId || null,
+        deliveryStatus: 'sent',
+        createdAt: new Date().toISOString(),
+      });
+    } catch (dbError) {
+      console.error('Failed to save message to database:', dbError);
+      // Don't fail the API call if database save fails
     }
 
     return NextResponse.json(

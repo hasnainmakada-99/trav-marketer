@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Query } from 'appwrite';
+import { Query } from 'node-appwrite';
 import { listDocuments } from '@/lib/appwrite';
 
 interface ConversationDoc {
@@ -48,10 +48,9 @@ export async function GET(
       messages: (result.documents || []) as unknown as ConversationDoc[],
     });
   } catch (error) {
-    console.error('[WA thread] Error:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed' },
-      { status: 500 }
-    );
+    // Collection may not exist yet — return empty thread.
+    console.warn('[WA thread] Returning empty thread:', error instanceof Error ? error.message : error);
+    const { phone } = await params;
+    return NextResponse.json({ phone: decodeURIComponent(phone), messages: [] });
   }
 }
