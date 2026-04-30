@@ -8,8 +8,8 @@ import { account, getCurrentUser } from '@/lib/appwrite-client';
 const NAV_ITEMS = [
   { href: '/dashboard', label: 'Dashboard', icon: '🏠', exact: true },
   { href: '/dashboard/gbp', label: 'Google Business', icon: '🌐' },
+  { href: '/dashboard/whatsapp', label: 'WhatsApp', icon: '💬' },
   { href: '/dashboard/campaigns', label: 'Campaigns', icon: '📢', comingSoon: true },
-  { href: '/dashboard/whatsapp', label: 'WhatsApp', icon: '💬', comingSoon: true },
   { href: '/dashboard/leads', label: 'Leads', icon: '🎯', comingSoon: true },
 ];
 

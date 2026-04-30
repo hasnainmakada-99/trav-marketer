@@ -1,8 +1,18 @@
 /**
- * WhatsApp API Helper Functions
- * 
- * Utilities for sending and receiving WhatsApp messages via Meta Cloud API
+ * WhatsApp Cloud API Helper Functions (Meta Graph API v21.0)
+ *
+ * Docs: https://developers.facebook.com/docs/whatsapp/cloud-api
  */
+
+const GRAPH_API_VERSION = 'v21.0';
+const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
+
+interface SendResult {
+  success: boolean;
+  messageId?: string;
+  error?: string;
+  raw?: unknown;
+}
 
 interface SendWhatsAppMessageParams {
   phoneNumberId: string;
@@ -16,31 +26,52 @@ interface SendWhatsAppTemplateParams {
   recipientPhone: string;
   templateName: string;
   templateLanguage?: string;
-  parameters?: Record<string, any>;
+  parameters?: Array<string | number>;
   whatsappToken: string;
 }
 
+export interface WhatsAppTemplate {
+  id?: string;
+  name: string;
+  language: string;
+  status: string;
+  category: string;
+  components?: Array<{
+    type: string;
+    text?: string;
+    format?: string;
+    example?: unknown;
+  }>;
+}
+
+function normalizePhone(phone: string): string {
+  // Strip everything except digits. Meta API expects E.164 without "+".
+  return phone.replace(/[^\d]/g, '');
+}
+
 /**
- * Send a text message via WhatsApp
+ * Send a free-form text message via WhatsApp.
+ * Note: only works inside a 24-hour customer-initiated session window.
  */
 export async function sendWhatsAppMessage({
   phoneNumberId,
   recipientPhone,
   message,
   whatsappToken,
-}: SendWhatsAppMessageParams) {
+}: SendWhatsAppMessageParams): Promise<SendResult> {
   try {
     const response = await fetch(
-      `https://graph.instagram.com/v18.0/${phoneNumberId}/messages`,
+      `${GRAPH_API_BASE}/${phoneNumberId}/messages`,
       {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${whatsappToken}`,
+          Authorization: `Bearer ${whatsappToken}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           messaging_product: 'whatsapp',
-          to: recipientPhone,
+          recipient_type: 'individual',
+          to: normalizePhone(recipientPhone),
           type: 'text',
           text: {
             preview_url: true,
@@ -50,76 +81,131 @@ export async function sendWhatsAppMessage({
       }
     );
 
+    const data = await response.json();
+
     if (!response.ok) {
-      throw new Error(`WhatsApp API error: ${response.statusText}`);
+      return {
+        success: false,
+        error: data?.error?.message || `WhatsApp API error: ${response.status}`,
+        raw: data,
+      };
     }
 
-    const data = await response.json();
-    return data;
+    return {
+      success: true,
+      messageId: data?.messages?.[0]?.id,
+      raw: data,
+    };
   } catch (error) {
-    console.error('Error sending WhatsApp message:', error);
-    throw error;
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
   }
 }
 
 /**
- * Send a pre-approved WhatsApp template message
+ * Send an approved WhatsApp template message (works outside the 24-hour window).
  */
 export async function sendWhatsAppTemplate({
   phoneNumberId,
   recipientPhone,
   templateName,
-  templateLanguage = 'en',
-  parameters = {},
+  templateLanguage = 'en_US',
+  parameters = [],
   whatsappToken,
-}: SendWhatsAppTemplateParams) {
+}: SendWhatsAppTemplateParams): Promise<SendResult> {
   try {
+    const components =
+      parameters.length > 0
+        ? [
+            {
+              type: 'body',
+              parameters: parameters.map((value) => ({
+                type: 'text',
+                text: String(value),
+              })),
+            },
+          ]
+        : undefined;
+
     const response = await fetch(
-      `https://graph.instagram.com/v18.0/${phoneNumberId}/messages`,
+      `${GRAPH_API_BASE}/${phoneNumberId}/messages`,
       {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${whatsappToken}`,
+          Authorization: `Bearer ${whatsappToken}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           messaging_product: 'whatsapp',
-          to: recipientPhone,
+          to: normalizePhone(recipientPhone),
           type: 'template',
           template: {
             name: templateName,
-            language: {
-              code: templateLanguage,
-            },
-            components: [
-              {
-                type: 'body',
-                parameters: Object.values(parameters).map(value => ({
-                  type: 'text',
-                  text: String(value),
-                })),
-              },
-            ],
+            language: { code: templateLanguage },
+            ...(components ? { components } : {}),
           },
         }),
       }
     );
 
+    const data = await response.json();
+
     if (!response.ok) {
-      throw new Error(`WhatsApp API error: ${response.statusText}`);
+      return {
+        success: false,
+        error: data?.error?.message || `WhatsApp API error: ${response.status}`,
+        raw: data,
+      };
     }
 
-    const data = await response.json();
-    return data;
+    return {
+      success: true,
+      messageId: data?.messages?.[0]?.id,
+      raw: data,
+    };
   } catch (error) {
-    console.error('Error sending WhatsApp template:', error);
-    throw error;
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
   }
 }
 
 /**
- * Verify WhatsApp webhook token
- * Used when setting up the webhook endpoint
+ * Fetch all message templates from a WhatsApp Business Account.
+ */
+export async function listWhatsAppTemplates({
+  whatsappBusinessAccountId,
+  whatsappToken,
+}: {
+  whatsappBusinessAccountId: string;
+  whatsappToken: string;
+}): Promise<WhatsAppTemplate[]> {
+  const response = await fetch(
+    `${GRAPH_API_BASE}/${whatsappBusinessAccountId}/message_templates?limit=200`,
+    {
+      headers: {
+        Authorization: `Bearer ${whatsappToken}`,
+      },
+      cache: 'no-store',
+    }
+  );
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      data?.error?.message || `Failed to list templates: ${response.status}`
+    );
+  }
+
+  return (data?.data ?? []) as WhatsAppTemplate[];
+}
+
+/**
+ * Verify WhatsApp webhook token (used by GET /api/whatsapp/webhook).
  */
 export function verifyWebhookToken(
   token: string,
@@ -129,20 +215,54 @@ export function verifyWebhookToken(
 }
 
 /**
- * Parse incoming WhatsApp webhook payload
+ * Parse incoming WhatsApp webhook payload.
  */
-export function parseWhatsAppWebhook(body: any) {
+interface IncomingMessage {
+  from: string;
+  id: string;
+  timestamp: string;
+  type: string;
+  text?: { body?: string };
+  image?: { id?: string; caption?: string; mime_type?: string };
+  document?: { id?: string; filename?: string; mime_type?: string };
+  audio?: { id?: string };
+  video?: { id?: string };
+  interactive?: { type?: string };
+}
+
+interface IncomingStatus {
+  id: string;
+  recipient_id: string;
+  status: string;
+  timestamp: string;
+  errors?: unknown[];
+}
+
+interface WebhookPayload {
+  entry?: Array<{
+    changes?: Array<{
+      value?: {
+        metadata?: { phone_number_id?: string; display_phone_number?: string };
+        contacts?: Array<{ profile?: { name?: string }; wa_id?: string }>;
+        messages?: IncomingMessage[];
+        statuses?: IncomingStatus[];
+      };
+    }>;
+  }>;
+}
+
+export function parseWhatsAppWebhook(body: WebhookPayload) {
   try {
     const entry = body.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const value = changes?.value;
+    const change = entry?.changes?.[0];
+    const value = change?.value;
 
     return {
-      waBusinessAccountId: value?.metadata?.phone_number_id,
       phoneNumberId: value?.metadata?.phone_number_id,
+      displayPhoneNumber: value?.metadata?.display_phone_number,
+      contact: value?.contacts?.[0],
       messages: value?.messages || [],
       statuses: value?.statuses || [],
-      metadata: value?.metadata,
     };
   } catch (error) {
     console.error('Error parsing WhatsApp webhook:', error);
@@ -150,76 +270,62 @@ export function parseWhatsAppWebhook(body: any) {
   }
 }
 
-/**
- * Extract message from WhatsApp webhook payload
- */
-export function extractMessage(message: any) {
+export function extractMessage(message: IncomingMessage) {
   if (!message) return null;
 
-  const phone = message.from;
-  const timestamp = message.timestamp;
+  const base = {
+    phone: message.from,
+    timestamp: message.timestamp,
+    messageId: message.id,
+    type: message.type,
+  };
 
   if (message.type === 'text') {
-    return {
-      phone,
-      timestamp,
-      type: 'text',
-      text: message.text?.body || '',
-      messageId: message.id,
-    };
+    return { ...base, text: message.text?.body || '' };
   }
 
   if (message.type === 'image') {
     return {
-      phone,
-      timestamp,
-      type: 'image',
-      imageId: message.image?.id,
-      messageId: message.id,
+      ...base,
+      mediaId: message.image?.id,
+      caption: message.image?.caption,
+      mimeType: message.image?.mime_type,
     };
   }
 
   if (message.type === 'document') {
     return {
-      phone,
-      timestamp,
-      type: 'document',
-      documentId: message.document?.id,
+      ...base,
+      mediaId: message.document?.id,
       fileName: message.document?.filename,
-      messageId: message.id,
+      mimeType: message.document?.mime_type,
     };
   }
 
-  if (message.type === 'interactive') {
+  if (message.type === 'audio' || message.type === 'video') {
     return {
-      phone,
-      timestamp,
-      type: 'interactive',
-      interactionType: message.interactive?.type,
-      messageId: message.id,
+      ...base,
+      mediaId:
+        message.type === 'audio' ? message.audio?.id : message.video?.id,
     };
   }
 
-  return null;
+  return base;
 }
 
-/**
- * Extract delivery status from WhatsApp webhook
- */
-export function extractStatus(status: any) {
+export function extractStatus(status: IncomingStatus) {
   if (!status) return null;
-
   return {
     phone: status.recipient_id,
     messageId: status.id,
-    status: status.status, // sent / delivered / read / failed
+    status: status.status,
     timestamp: status.timestamp,
     errors: status.errors,
   };
 }
 
 /**
- * Mark message as read (send read receipt)
+ * Mark message as read (sends a read receipt to the customer).
  */
 export async function markMessageAsRead({
   phoneNumberId,
@@ -230,26 +336,46 @@ export async function markMessageAsRead({
   messageId: string;
   whatsappToken: string;
 }) {
-  try {
-    const response = await fetch(
-      `https://graph.instagram.com/v18.0/${phoneNumberId}/messages`,
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${whatsappToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          status: 'read',
-          message_id: messageId,
-        }),
-      }
-    );
+  const response = await fetch(
+    `${GRAPH_API_BASE}/${phoneNumberId}/messages`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${whatsappToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        status: 'read',
+        message_id: messageId,
+      }),
+    }
+  );
 
-    return await response.json();
-  } catch (error) {
-    console.error('Error marking message as read:', error);
-    throw error;
+  return response.json();
+}
+
+/**
+ * Get WhatsApp Business profile info (display name, about, etc.).
+ */
+export async function getWhatsAppProfile({
+  phoneNumberId,
+  whatsappToken,
+}: {
+  phoneNumberId: string;
+  whatsappToken: string;
+}) {
+  const response = await fetch(
+    `${GRAPH_API_BASE}/${phoneNumberId}/whatsapp_business_profile?fields=about,address,description,email,profile_picture_url,websites,vertical`,
+    {
+      headers: { Authorization: `Bearer ${whatsappToken}` },
+      cache: 'no-store',
+    }
+  );
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data?.error?.message || 'Failed to fetch profile');
   }
+  return data?.data?.[0] || null;
 }
