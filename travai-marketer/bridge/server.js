@@ -229,22 +229,70 @@ async function sendTypingAndText(sock, jid, text) {
 }
 
 async function sendSupportButtons(sock, jid, headerText, options) {
-  const buttons = options.slice(0, 5).map((label, index) => ({
+  const maxButtons = Math.min(5, Math.max(1, options.length));
+  const selected = options.slice(0, maxButtons);
+
+  // Strategy:
+  // 1) Try template quick-reply buttons (best visual parity with "tap buttons")
+  // 2) Fallback to legacy buttons payload
+  // 3) Fallback to list picker (still interactive, not poll)
+  const templateButtons = selected.slice(0, 3).map((label, index) => ({
+    index: index + 1,
+    quickReplyButton: {
+      displayText: label,
+      id: `svc_${index + 1}`,
+    },
+  }));
+
+  try {
+    const sentTemplate = await sock.sendMessage(jid, {
+      text: headerText,
+      footer: 'Traventions Customer Support',
+      templateButtons,
+    });
+    rememberBotMessageId(sentTemplate);
+    return sentTemplate;
+  } catch (templateError) {
+    console.warn(
+      `Template buttons unavailable for ${jid}: ${templateError?.message || String(templateError)}`
+    );
+  }
+
+  const legacyButtons = selected.map((label, index) => ({
     buttonId: `svc_${index + 1}`,
     buttonText: { displayText: label },
     type: 1,
   }));
 
-  const message = {
+  try {
+    const sentLegacy = await sock.sendMessage(jid, {
+      text: headerText,
+      footer: 'Traventions Customer Support',
+      buttons: legacyButtons,
+      headerType: 1,
+    });
+    rememberBotMessageId(sentLegacy);
+    return sentLegacy;
+  } catch (legacyError) {
+    console.warn(
+      `Legacy buttons unavailable for ${jid}: ${legacyError?.message || String(legacyError)}`
+    );
+  }
+
+  const rows = selected.map((label, index) => ({
+    title: label,
+    rowId: `svc_${index + 1}`,
+    description: `Select ${label}`,
+  }));
+  const sentList = await sock.sendMessage(jid, {
     text: headerText,
     footer: 'Traventions Customer Support',
-    buttons,
-    headerType: 1,
-  };
-
-  const sent = await sock.sendMessage(jid, message);
-  rememberBotMessageId(sent);
-  return sent;
+    title: 'Choose a service',
+    buttonText: 'Select service',
+    sections: [{ title: 'Support options', rows }],
+  });
+  rememberBotMessageId(sentList);
+  return sentList;
 }
 
 async function askAiForReply(payload) {
