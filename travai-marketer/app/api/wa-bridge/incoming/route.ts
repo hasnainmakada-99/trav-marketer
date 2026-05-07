@@ -21,6 +21,43 @@ interface BridgeIncomingBody {
   messageId?: string;
   timestamp?: string | number;
   teamId?: string;
+  eventType?: 'incoming_message' | 'staff_outgoing';
+}
+
+const SUPPORT_MENU_OPTIONS = [
+  'Hotel',
+  'Holiday Package',
+  'Flights',
+  'Airport Transfer',
+  'Booking Status',
+] as const;
+
+function isGreetingMessage(text: string) {
+  const normalized = text.trim().toLowerCase();
+  return /^(hi|hello|hey|hlo|helo|namaste|yo|good morning|good afternoon|good evening)$/.test(
+    normalized
+  );
+}
+
+function mapQuickMenuSelectionToIntentText(text: string) {
+  const normalized = text.trim().toLowerCase();
+  const compact = normalized.replace(/\s+/g, ' ');
+  if (compact === '1' || compact.includes('hotel')) {
+    return 'Customer selected Hotel. Provide concise hotel assistance options, price ranges, and next steps.';
+  }
+  if (compact === '2' || compact.includes('holiday') || compact.includes('package')) {
+    return 'Customer selected Holiday Package. Ask destination + budget + days and suggest best matching packages/itinerary.';
+  }
+  if (compact === '3' || compact.includes('flight')) {
+    return 'Customer selected Flights. Ask origin, destination, dates, travellers and share flight-planning guidance.';
+  }
+  if (compact === '4' || compact.includes('transfer')) {
+    return 'Customer selected Airport Transfer. Ask route, date/time, passengers, and luggage details.';
+  }
+  if (compact === '5' || compact.includes('status')) {
+    return 'Customer selected Booking Status. Ask for booking reference and registered phone/email.';
+  }
+  return null;
 }
 
 function resolveTeamId(preferred?: string) {
@@ -108,6 +145,7 @@ async function buildReply(params: {
   customerId: string;
   userMessage: string;
   intent: string;
+  customerName?: string;
 }) {
   const [historyResult, knowledge, businessConfigResult] = await Promise.all([
     listDocuments('conversations', [
@@ -182,24 +220,50 @@ ${websiteKnowledge}`.trim();
 
   if (!process.env.OPENAI_API_KEY) {
     if (packageIntent) {
-      return normalizeToWhatsAppMarkdown(buildRuleBasedItinerary(params.userMessage));
+      return {
+        reply: normalizeToWhatsAppMarkdown(buildRuleBasedItinerary(params.userMessage)),
+        quickMenu: false,
+      };
     }
-    return normalizeToWhatsAppMarkdown(
-      'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.'
-    );
+    return {
+      reply: normalizeToWhatsAppMarkdown(
+        'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.'
+      ),
+      quickMenu: false,
+    };
   }
 
-  const response = await getChatResponse(params.userMessage, systemPrompt, history);
+  if (isGreetingMessage(params.userMessage)) {
+    const namePart = params.customerName ? ` ${params.customerName}` : '';
+    const quickMenuReply = normalizeToWhatsAppMarkdown(
+      `Welcome to Traventions!${namePart}\n\nI'm your travel support assistant.\nPlease choose a service:\n1. Hotel\n2. Holiday Package\n3. Flights\n4. Airport Transfer\n5. Booking Status`
+    );
+    return {
+      reply: quickMenuReply,
+      quickMenu: true,
+      quickMenuOptions: [...SUPPORT_MENU_OPTIONS],
+    };
+  }
+
+  const quickSelectionPrompt = mapQuickMenuSelectionToIntentText(params.userMessage);
+  const effectiveUserMessage = quickSelectionPrompt || params.userMessage;
+  const response = await getChatResponse(effectiveUserMessage, systemPrompt, history);
   if (packageIntent) {
     const preferredUrl = knowledge.bestWebsiteUrl || WEBSITE_FALLBACK_URL;
     const alreadyHasUrl = response.includes(preferredUrl);
     if (!alreadyHasUrl) {
-      return normalizeToWhatsAppMarkdown(
-        `${response}\n\nFor latest live packages and booking, visit ${preferredUrl}.`
-      );
+      return {
+        reply: normalizeToWhatsAppMarkdown(
+          `${response}\n\nFor latest live packages and booking, visit ${preferredUrl}.`
+        ),
+        quickMenu: false,
+      };
     }
   }
-  return normalizeToWhatsAppMarkdown(response);
+  return {
+    reply: normalizeToWhatsAppMarkdown(response),
+    quickMenu: false,
+  };
 }
 
 /**
@@ -224,10 +288,11 @@ export async function POST(request: NextRequest) {
     const body = (await request.json()) as BridgeIncomingBody;
     const from = body.from?.trim();
     const text = body.message?.trim();
+    const eventType = body.eventType || 'incoming_message';
 
-    if (!from || !text) {
+    if (!from) {
       return NextResponse.json(
-        { error: 'Missing required fields: from, message' },
+        { error: 'Missing required field: from' },
         { status: 400 }
       );
     }
@@ -239,6 +304,38 @@ export async function POST(request: NextRequest) {
       email?: string;
       teamId?: string;
     };
+
+    if (eventType === 'staff_outgoing') {
+      if (!text) {
+        return NextResponse.json({ success: true, shouldReply: false, ignored: 'empty_staff_event' });
+      }
+      await createDocument('conversations', {
+        teamId,
+        customerId: customer.$id,
+        phone: from,
+        role: 'assistant',
+        message: text,
+        messageType: 'text',
+        sentBy: 'staff',
+        metaMessageId: body.messageId || null,
+        deliveryStatus: 'manual',
+        createdAt: new Date().toISOString(),
+      });
+      return NextResponse.json({
+        success: true,
+        teamId,
+        customerId: customer.$id,
+        shouldReply: false,
+        suppressed: 'human_handover',
+      });
+    }
+
+    if (!text) {
+      return NextResponse.json(
+        { error: 'Missing required field: message' },
+        { status: 400 }
+      );
+    }
 
     if (process.env.OPENAI_API_KEY) {
       const extractedInfo = await extractCustomerInfo(text);
@@ -284,12 +381,14 @@ export async function POST(request: NextRequest) {
       ? await classifyIntent(text, `Team: ${teamId}, channel: whatsapp_web`)
       : 'other';
 
-    const reply = await buildReply({
+    const built = await buildReply({
       teamId,
       customerId: customer.$id,
       userMessage: text,
       intent,
+      customerName: customer.name || body.name || undefined,
     });
+    const reply = built.reply;
 
     await createDocument('conversations', {
       teamId,
@@ -311,6 +410,8 @@ export async function POST(request: NextRequest) {
       intent,
       shouldReply: true,
       reply,
+      quickMenu: Boolean(built.quickMenu),
+      quickMenuOptions: built.quickMenuOptions || null,
     });
   } catch (error) {
     console.error('[WA Bridge Incoming] Error:', error);

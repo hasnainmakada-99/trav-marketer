@@ -42,6 +42,7 @@ let controlPollInFlight = false;
 let latestBridgeStatus = 'starting';
 let latestBridgeReason = 'Initializing bridge session';
 let latestLinkedPhone = null;
+const botSentMessageIds = new Set();
 
 if (
   !BRIDGE_SHARED_SECRET ||
@@ -176,6 +177,38 @@ function isDirectUserJid(jid) {
 function toDirectJid(phone) {
   const digits = String(phone || '').replace(/[^\d]/g, '');
   return digits ? `${digits}@s.whatsapp.net` : '';
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function rememberBotMessageId(response) {
+  const id = response?.key?.id;
+  if (!id) return;
+  botSentMessageIds.add(id);
+  if (botSentMessageIds.size > 2000) {
+    const [first] = botSentMessageIds;
+    if (first) botSentMessageIds.delete(first);
+  }
+}
+
+async function sendTypingAndText(sock, jid, text) {
+  try {
+    await sock.sendPresenceUpdate('composing', jid);
+  } catch {
+    // best-effort presence
+  }
+  const dynamicDelay = Math.max(500, Math.min(2200, Math.floor((text?.length || 0) * 12)));
+  await sleep(dynamicDelay);
+  const sent = await sock.sendMessage(jid, { text });
+  rememberBotMessageId(sent);
+  try {
+    await sock.sendPresenceUpdate('paused', jid);
+  } catch {
+    // best-effort presence
+  }
+  return sent;
 }
 
 async function askAiForReply(payload) {
@@ -339,7 +372,7 @@ async function pollControlCommands() {
 
       const jid = toDirectJid(phone);
       try {
-        await activeSock.sendMessage(jid, { text: message });
+        await sendTypingAndText(activeSock, jid, message);
         await ackCommand(command.id, 'completed', `Sent message to ${phone}`);
         console.log(`Bridge sent dashboard message to ${phone}: ${message.slice(0, 80)}`);
       } catch (sendError) {
@@ -480,7 +513,29 @@ async function startBridge() {
         const id = msg?.key?.id || 'unknown';
 
         if (fromMe) {
-          console.log(`Ignored own outgoing message id=${id}`);
+          if (botSentMessageIds.has(id)) {
+            botSentMessageIds.delete(id);
+            console.log(`Ignored bot outgoing message id=${id}`);
+            continue;
+          }
+          if (isDirectUserJid(jid)) {
+            const ownText = getTextFromMessage(msg.message);
+            if (ownText && ownText.trim()) {
+              const phone = normalizePhoneFromJid(jid);
+              await askAiForReply({
+                from: phone,
+                name: null,
+                message: ownText.trim(),
+                messageId: id,
+                timestamp: msg?.messageTimestamp ? String(msg.messageTimestamp) : null,
+                teamId: TEAM_ID,
+                eventType: 'staff_outgoing',
+              });
+              console.log(`Recorded human handover from WhatsApp app/web for ${phone}`);
+            }
+          } else {
+            console.log(`Ignored own non-direct outgoing message id=${id}`);
+          }
           continue;
         }
         if (!isDirectUserJid(jid)) {
@@ -503,6 +558,7 @@ async function startBridge() {
           messageId: id,
           timestamp: msg?.messageTimestamp ? String(msg.messageTimestamp) : null,
           teamId: TEAM_ID,
+          eventType: 'incoming_message',
         };
 
         const ai = await askAiForReply(payload);
@@ -518,7 +574,28 @@ async function startBridge() {
           continue;
         }
 
-        await sock.sendMessage(jid, { text: ai.reply.trim() });
+        await sendTypingAndText(sock, jid, ai.reply.trim());
+        if (ai.quickMenu && Array.isArray(ai.quickMenuOptions) && ai.quickMenuOptions.length) {
+          try {
+            const pollSent = await sock.sendMessage(jid, {
+              poll: {
+                name: 'Choose a service',
+                values: ai.quickMenuOptions.slice(0, 10),
+                selectableCount: 1,
+              },
+            });
+            rememberBotMessageId(pollSent);
+            await sendTypingAndText(
+              sock,
+              jid,
+              'Tip: You can tap an option above, or reply with 1/2/3/4/5.'
+            );
+          } catch (pollError) {
+            console.warn(
+              `Failed to send quick-menu poll to ${phone}: ${pollError?.message || String(pollError)}`
+            );
+          }
+        }
         console.log(`Replied to ${phone}: ${ai.reply.slice(0, 80)}`);
       } catch (error) {
         const msgText =
