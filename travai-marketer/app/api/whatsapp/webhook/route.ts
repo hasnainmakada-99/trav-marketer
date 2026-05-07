@@ -10,26 +10,17 @@ import {
 import { getChatResponse, classifyIntent, extractCustomerInfo } from '@/lib/openai';
 import { createDocument, listDocuments, updateDocument } from '@/lib/appwrite';
 import { normalizeToWhatsAppMarkdown } from '@/lib/whatsapp-format';
+import {
+  buildRuleBasedItinerary,
+  isPackageIntent,
+  loadTravelKnowledge,
+} from '@/lib/travel-knowledge';
 
 // Verify webhook token from Meta
 const WEBHOOK_VERIFY_TOKEN = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || 'travai_secure_token_2024';
 const WEBSITE_FALLBACK_URL =
   process.env.TRAVENTIONS_WEBSITE_URL || 'https://traventions-ai.vercel.app';
 const HUMAN_HANDOVER_MINUTES = Number(process.env.WA_HUMAN_HANDOVER_MINUTES || '15');
-
-function isPackageIntent(message: string, intent: string) {
-  if (intent === 'booking' || intent === 'inquiry') return true;
-  return /\b(package|packages|itinerary|trip|tour|price|pricing|budget|offer|plan|days|nights)\b/i.test(
-    message
-  );
-}
-
-function extractKeywords(text: string) {
-  return Array.from(new Set(text.toLowerCase().match(/[a-z0-9]{3,}/g) || [])).slice(
-    0,
-    12
-  );
-}
 
 async function hasHumanTakeover(teamId: string, phone: string) {
   const rows = await listDocuments('conversations', [
@@ -68,53 +59,6 @@ async function hasHumanTakeover(teamId: string, phone: string) {
       : 45;
   const handoverWindowMs = safeMinutes * 60 * 1000;
   return Date.now() - latestStaffTs <= handoverWindowMs;
-}
-
-async function buildDatabaseKnowledge(teamId: string, userMessage: string) {
-  const keywords = extractKeywords(userMessage);
-  const [postsResult, campaignsResult] = await Promise.all([
-    listDocuments('gbp_posts', [
-      Query.equal('teamId', teamId),
-      Query.orderDesc('$createdAt'),
-      Query.limit(20),
-    ]).catch(() => ({ documents: [] })),
-    listDocuments('campaigns', [
-      Query.equal('teamId', teamId),
-      Query.orderDesc('$createdAt'),
-      Query.limit(20),
-    ]).catch(() => ({ documents: [] })),
-  ]);
-
-  const snippets: string[] = [];
-  const posts = postsResult.documents as Array<{ title?: string; content?: string }>;
-  for (const post of posts) {
-    const text = [post.title, post.content].filter(Boolean).join(' - ').trim();
-    if (!text) continue;
-    const score = keywords.reduce(
-      (acc, kw) => (text.toLowerCase().includes(kw) ? acc + 1 : acc),
-      0
-    );
-    if (score > 0 || snippets.length < 3) {
-      snippets.push(text);
-    }
-    if (snippets.length >= 8) break;
-  }
-
-  const campaigns = campaignsResult.documents as Array<{ title?: string; message?: string }>;
-  for (const campaign of campaigns) {
-    if (snippets.length >= 8) break;
-    const text = [campaign.title, campaign.message].filter(Boolean).join(' - ').trim();
-    if (!text) continue;
-    const score = keywords.reduce(
-      (acc, kw) => (text.toLowerCase().includes(kw) ? acc + 1 : acc),
-      0
-    );
-    if (score > 0 || snippets.length < 3) {
-      snippets.push(text);
-    }
-  }
-
-  return snippets;
 }
 
 /**
@@ -401,10 +345,7 @@ async function generateAndSendResponse(
       | undefined;
 
     const packageIntent = isPackageIntent(userMessage, intent);
-    const dbSnippets = await buildDatabaseKnowledge(resolvedTeamId, userMessage);
-    const hasPackageData = dbSnippets.some((row) =>
-      /\b(package|itinerary|tour|trip|price|offer|nights|days|budget)\b/i.test(row)
-    );
+    const knowledge = await loadTravelKnowledge(resolvedTeamId, userMessage);
 
     // Generate AI response
     const systemPrompt =
@@ -412,8 +353,10 @@ async function generateAndSendResponse(
       `You are Traventions' WhatsApp assistant.
 Mention Traventions in customer-facing replies.
 For first meaningful assistant reply in a thread, start with "Welcome to Traventions!".
-Use only database knowledge for package/pricing details; do not invent facts.
-If package details are missing, direct the user to ${WEBSITE_FALLBACK_URL}.
+For package/pricing questions:
+- First use database knowledge for exact known details.
+- If DB package data is missing, still provide a practical sample itinerary.
+- Then include the most relevant website page from the index.
 Use only WhatsApp-supported formatting:
 - Bold: *text*
 - Italic: _text_
@@ -426,19 +369,22 @@ Use only WhatsApp-supported formatting:
 Do not use markdown headings like #, ##, ###.
 Current intent: ${intent}
 Package intent: ${packageIntent ? 'yes' : 'no'}
-Package data available: ${hasPackageData ? 'yes' : 'no'}
+Package data available: ${knowledge.hasPackageData ? 'yes' : 'no'}
+Best website page: ${knowledge.bestWebsiteTitle} (${knowledge.bestWebsiteUrl})
 DATABASE KNOWLEDGE:
-${dbSnippets.length ? dbSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : 'No relevant snippets found.'}`.trim();
+${knowledge.databaseSnippets.length ? knowledge.databaseSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : 'No relevant snippets found.'}
+WEBSITE PAGE INDEX:
+${knowledge.websiteSnippets.length ? knowledge.websiteSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : `1. Traventions — ${WEBSITE_FALLBACK_URL}`}`.trim();
 
     const response = process.env.OPENAI_API_KEY
       ? await getChatResponse(userMessage, systemPrompt, history)
-      : packageIntent && !hasPackageData
-      ? `Welcome to Traventions! I do not have the latest package details in the database right now. Please visit ${WEBSITE_FALLBACK_URL} for current options.`
+      : packageIntent
+      ? buildRuleBasedItinerary(userMessage)
       : 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
 
     const responseWithFallback =
-      packageIntent && !hasPackageData && !response.includes(WEBSITE_FALLBACK_URL)
-        ? `${response}\n\nFor latest packages, please visit ${WEBSITE_FALLBACK_URL}.`
+      packageIntent && !response.includes(knowledge.bestWebsiteUrl || WEBSITE_FALLBACK_URL)
+        ? `${response}\n\nFor latest packages, please visit ${knowledge.bestWebsiteUrl || WEBSITE_FALLBACK_URL}.`
         : response;
     const waFormattedResponse = normalizeToWhatsAppMarkdown(responseWithFallback);
 

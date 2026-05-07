@@ -3,6 +3,11 @@ import { Query } from 'node-appwrite';
 import { classifyIntent, extractCustomerInfo, getChatResponse } from '@/lib/openai';
 import { createDocument, listDocuments, updateDocument } from '@/lib/appwrite';
 import { normalizeToWhatsAppMarkdown } from '@/lib/whatsapp-format';
+import {
+  buildRuleBasedItinerary,
+  isPackageIntent,
+  loadTravelKnowledge,
+} from '@/lib/travel-knowledge';
 
 const BRIDGE_SHARED_SECRET = process.env.BRIDGE_SHARED_SECRET || '';
 const WEBSITE_FALLBACK_URL =
@@ -18,22 +23,6 @@ interface BridgeIncomingBody {
   teamId?: string;
 }
 
-interface BusinessConfigDoc {
-  businessName?: string;
-  businessDescription?: string;
-  openaiSystemPrompt?: string;
-}
-
-interface ContentDoc {
-  title?: string;
-  content?: string;
-  message?: string;
-  type?: string;
-  status?: string;
-  createdAt?: string;
-  $createdAt?: string;
-}
-
 function resolveTeamId(preferred?: string) {
   if (preferred && preferred.trim().length > 0) {
     return preferred.trim();
@@ -43,52 +32,6 @@ function resolveTeamId(preferred?: string) {
 
 function unauthorized() {
   return NextResponse.json({ error: 'Unauthorized bridge request' }, { status: 401 });
-}
-
-function extractKeywords(text: string) {
-  const stopwords = new Set([
-    'the',
-    'and',
-    'for',
-    'with',
-    'that',
-    'this',
-    'have',
-    'from',
-    'your',
-    'you',
-    'are',
-    'what',
-    'when',
-    'where',
-    'which',
-    'would',
-    'could',
-    'should',
-    'about',
-    'please',
-    'need',
-  ]);
-  const words = (text.toLowerCase().match(/[a-z0-9]{3,}/g) || []).filter(
-    (w) => !stopwords.has(w)
-  );
-  return Array.from(new Set(words)).slice(0, 14);
-}
-
-function isPackageIntent(message: string, intent: string) {
-  if (intent === 'booking' || intent === 'inquiry') return true;
-  return /\b(package|packages|itinerary|trip|tour|price|pricing|budget|offer|plan|days|nights)\b/i.test(
-    message
-  );
-}
-
-function scoreSnippet(text: string, keywords: string[]) {
-  const lower = text.toLowerCase();
-  let score = 0;
-  for (const kw of keywords) {
-    if (lower.includes(kw)) score += 1;
-  }
-  return score;
 }
 
 async function hasHumanTakeover(teamId: string, phone: string) {
@@ -132,59 +75,6 @@ async function hasHumanTakeover(teamId: string, phone: string) {
   return Date.now() - latestStaffTs <= handoverWindowMs;
 }
 
-async function loadKnowledgeContext(teamId: string, userMessage: string) {
-  const keywords = extractKeywords(userMessage);
-
-  const [businessConfigResult, postsResult, campaignsResult] = await Promise.all([
-    listDocuments('business_configs', [Query.equal('teamId', teamId), Query.limit(1)]).catch(
-      () => ({ documents: [] })
-    ),
-    listDocuments('gbp_posts', [
-      Query.equal('teamId', teamId),
-      Query.orderDesc('$createdAt'),
-      Query.limit(30),
-    ]).catch(() => ({ documents: [] })),
-    listDocuments('campaigns', [
-      Query.equal('teamId', teamId),
-      Query.orderDesc('$createdAt'),
-      Query.limit(30),
-    ]).catch(() => ({ documents: [] })),
-  ]);
-
-  const businessConfig = businessConfigResult.documents[0] as BusinessConfigDoc | undefined;
-  const rawSnippets: Array<{ text: string; score: number }> = [];
-
-  const postDocs = postsResult.documents as unknown as ContentDoc[];
-  for (const post of postDocs) {
-    const text = [post.title, post.content].filter(Boolean).join(' - ').trim();
-    if (!text) continue;
-    rawSnippets.push({ text, score: scoreSnippet(text, keywords) });
-  }
-
-  const campaignDocs = campaignsResult.documents as unknown as ContentDoc[];
-  for (const campaign of campaignDocs) {
-    const text = [campaign.title, campaign.message].filter(Boolean).join(' - ').trim();
-    if (!text) continue;
-    rawSnippets.push({ text, score: scoreSnippet(text, keywords) });
-  }
-
-  const prioritized = rawSnippets
-    .sort((a, b) => b.score - a.score)
-    .map((row) => row.text)
-    .filter((value, index, arr) => arr.indexOf(value) === index)
-    .slice(0, 8);
-
-  const hasPackageData = prioritized.some((snippet) =>
-    /\b(package|itinerary|tour|trip|price|offer|nights|days|budget)\b/i.test(snippet)
-  );
-
-  return {
-    businessConfig,
-    snippets: prioritized,
-    hasPackageData,
-  };
-}
-
 async function findOrCreateCustomer(phone: string, teamId: string, name?: string) {
   const existing = await listDocuments('customers', [
     Query.equal('teamId', teamId),
@@ -219,14 +109,17 @@ async function buildReply(params: {
   userMessage: string;
   intent: string;
 }) {
-  const [historyResult, knowledge] = await Promise.all([
+  const [historyResult, knowledge, businessConfigResult] = await Promise.all([
     listDocuments('conversations', [
       Query.equal('teamId', params.teamId),
       Query.equal('customerId', params.customerId),
       Query.orderDesc('$createdAt'),
       Query.limit(20),
     ]),
-    loadKnowledgeContext(params.teamId, params.userMessage),
+    loadTravelKnowledge(params.teamId, params.userMessage),
+    listDocuments('business_configs', [Query.equal('teamId', params.teamId), Query.limit(1)]).catch(
+      () => ({ documents: [] })
+    ),
   ]);
 
   const historyRows = historyResult.documents as Array<{
@@ -244,11 +137,16 @@ async function buildReply(params: {
 
   const assistantMessages = historyRows.filter((row) => row.role === 'assistant').length;
   const firstAssistantReply = assistantMessages === 0;
-  const businessConfig = knowledge.businessConfig;
-  const databaseKnowledge = knowledge.snippets.length
-    ? knowledge.snippets.map((item, i) => `${i + 1}. ${item}`).join('\n')
+  const businessConfig = businessConfigResult.documents[0] as
+    | { openaiSystemPrompt?: string }
+    | undefined;
+  const databaseKnowledge = knowledge.databaseSnippets.length
+    ? knowledge.databaseSnippets.map((item, i) => `${i + 1}. ${item}`).join('\n')
     : 'No relevant package or itinerary data found in database.';
   const packageIntent = isPackageIntent(params.userMessage, params.intent);
+  const websiteKnowledge = knowledge.websiteSnippets.length
+    ? knowledge.websiteSnippets.map((item, i) => `${i + 1}. ${item}`).join('\n')
+    : `1. Traventions Home — ${WEBSITE_FALLBACK_URL}`;
 
   const systemPrompt =
     `${businessConfig?.openaiSystemPrompt || ''}\n\n` +
@@ -257,9 +155,9 @@ Business name must appear as "Traventions" in customer-facing replies.
 ${firstAssistantReply ? 'Start this reply with: "Welcome to Traventions!".' : 'Do not repeat the welcome line again in every reply.'}
 Current intent: ${params.intent}.
 If user asks for packages/itineraries/pricing:
-- Use only database knowledge below.
-- Never invent package details.
-- If relevant package details are missing, politely direct user to ${WEBSITE_FALLBACK_URL}.
+- First use database knowledge below.
+- If DB package data is missing, still provide a practical sample itinerary based on user budget/days/destination.
+- After answering, include the most relevant page link from the website index.
 Keep tone warm, concise, and practical.
 Use only WhatsApp-supported formatting:
 - Bold: *text*
@@ -274,15 +172,17 @@ Do not use markdown headings like #, ##, ###.
 
 Package intent detected: ${packageIntent ? 'yes' : 'no'}
 Package data available in DB: ${knowledge.hasPackageData ? 'yes' : 'no'}
+Best website page for this query: ${knowledge.bestWebsiteTitle} (${knowledge.bestWebsiteUrl})
 
 DATABASE KNOWLEDGE:
-${databaseKnowledge}`.trim();
+${databaseKnowledge}
+
+WEBSITE PAGE INDEX:
+${websiteKnowledge}`.trim();
 
   if (!process.env.OPENAI_API_KEY) {
-    if (packageIntent && !knowledge.hasPackageData) {
-      return normalizeToWhatsAppMarkdown(
-        `Welcome to Traventions! I do not have the latest package details in the database right now. Please check ${WEBSITE_FALLBACK_URL} for current options, or share your destination and budget and our team will help.`
-      );
+    if (packageIntent) {
+      return normalizeToWhatsAppMarkdown(buildRuleBasedItinerary(params.userMessage));
     }
     return normalizeToWhatsAppMarkdown(
       'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.'
@@ -290,11 +190,12 @@ ${databaseKnowledge}`.trim();
   }
 
   const response = await getChatResponse(params.userMessage, systemPrompt, history);
-  if (packageIntent && !knowledge.hasPackageData) {
-    const alreadyHasUrl = response.includes(WEBSITE_FALLBACK_URL);
+  if (packageIntent) {
+    const preferredUrl = knowledge.bestWebsiteUrl || WEBSITE_FALLBACK_URL;
+    const alreadyHasUrl = response.includes(preferredUrl);
     if (!alreadyHasUrl) {
       return normalizeToWhatsAppMarkdown(
-        `${response}\n\nFor the latest packages, please visit ${WEBSITE_FALLBACK_URL}.`
+        `${response}\n\nFor latest live packages and booking, visit ${preferredUrl}.`
       );
     }
   }
