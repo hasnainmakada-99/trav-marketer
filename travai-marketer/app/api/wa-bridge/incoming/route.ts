@@ -42,19 +42,24 @@ function isGreetingMessage(text: string) {
 function mapQuickMenuSelectionToIntentText(text: string) {
   const normalized = text.trim().toLowerCase();
   const compact = normalized.replace(/\s+/g, ' ');
-  if (compact === '1' || compact.includes('hotel')) {
+  if (compact === '1' || compact.includes('svc_1') || compact.includes('hotel')) {
     return 'Customer selected Hotel. Provide concise hotel assistance options, price ranges, and next steps.';
   }
-  if (compact === '2' || compact.includes('holiday') || compact.includes('package')) {
+  if (
+    compact === '2' ||
+    compact.includes('svc_2') ||
+    compact.includes('holiday') ||
+    compact.includes('package')
+  ) {
     return 'Customer selected Holiday Package. Ask destination + budget + days and suggest best matching packages/itinerary.';
   }
-  if (compact === '3' || compact.includes('flight')) {
+  if (compact === '3' || compact.includes('svc_3') || compact.includes('flight')) {
     return 'Customer selected Flights. Ask origin, destination, dates, travellers and share flight-planning guidance.';
   }
-  if (compact === '4' || compact.includes('transfer')) {
+  if (compact === '4' || compact.includes('svc_4') || compact.includes('transfer')) {
     return 'Customer selected Airport Transfer. Ask route, date/time, passengers, and luggage details.';
   }
-  if (compact === '5' || compact.includes('status')) {
+  if (compact === '5' || compact.includes('svc_5') || compact.includes('status')) {
     return 'Customer selected Booking Status. Ask for booking reference and registered phone/email.';
   }
   return null;

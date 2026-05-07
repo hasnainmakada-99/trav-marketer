@@ -156,6 +156,23 @@ function getTextFromMessage(message) {
   if (typeof message.videoMessage?.caption === 'string') {
     return message.videoMessage.caption;
   }
+  if (typeof message.buttonsResponseMessage?.selectedDisplayText === 'string') {
+    const label = message.buttonsResponseMessage.selectedDisplayText.trim();
+    const id = String(message.buttonsResponseMessage.selectedButtonId || '').trim();
+    return id ? `${label} (${id})` : label;
+  }
+  if (typeof message.templateButtonReplyMessage?.selectedDisplayText === 'string') {
+    const label = message.templateButtonReplyMessage.selectedDisplayText.trim();
+    const id = String(message.templateButtonReplyMessage.selectedId || '').trim();
+    return id ? `${label} (${id})` : label;
+  }
+  if (
+    typeof message.listResponseMessage?.singleSelectReply?.selectedRowId === 'string'
+  ) {
+    const rowId = message.listResponseMessage.singleSelectReply.selectedRowId.trim();
+    const title = String(message.listResponseMessage?.title || '').trim();
+    return title ? `${title} (${rowId})` : rowId;
+  }
   return '';
 }
 
@@ -208,6 +225,25 @@ async function sendTypingAndText(sock, jid, text) {
   } catch {
     // best-effort presence
   }
+  return sent;
+}
+
+async function sendSupportButtons(sock, jid, headerText, options) {
+  const buttons = options.slice(0, 5).map((label, index) => ({
+    buttonId: `svc_${index + 1}`,
+    buttonText: { displayText: label },
+    type: 1,
+  }));
+
+  const message = {
+    text: headerText,
+    footer: 'Traventions Customer Support',
+    buttons,
+    headerType: 1,
+  };
+
+  const sent = await sock.sendMessage(jid, message);
+  rememberBotMessageId(sent);
   return sent;
 }
 
@@ -577,22 +613,20 @@ async function startBridge() {
         await sendTypingAndText(sock, jid, ai.reply.trim());
         if (ai.quickMenu && Array.isArray(ai.quickMenuOptions) && ai.quickMenuOptions.length) {
           try {
-            const pollSent = await sock.sendMessage(jid, {
-              poll: {
-                name: 'Choose a service',
-                values: ai.quickMenuOptions.slice(0, 10),
-                selectableCount: 1,
-              },
-            });
-            rememberBotMessageId(pollSent);
+            await sendSupportButtons(
+              sock,
+              jid,
+              'Please tap one option below to continue:',
+              ai.quickMenuOptions
+            );
             await sendTypingAndText(
               sock,
               jid,
-              'Tip: You can tap an option above, or reply with 1/2/3/4/5.'
+              'If buttons are not visible on your phone, reply with 1/2/3/4/5.'
             );
           } catch (pollError) {
             console.warn(
-              `Failed to send quick-menu poll to ${phone}: ${pollError?.message || String(pollError)}`
+              `Failed to send quick-menu buttons to ${phone}: ${pollError?.message || String(pollError)}`
             );
           }
         }
