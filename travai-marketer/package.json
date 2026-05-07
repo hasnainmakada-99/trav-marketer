@@ -7,6 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "bridge:install": "npm --prefix bridge install",
+    "bridge:start": "npm --prefix bridge start",
     "list-projects": "node scripts/list-projects.js",
     "verify-config": "node scripts/verify-config.js",
     "setup-db": "node scripts/setup-database.js",

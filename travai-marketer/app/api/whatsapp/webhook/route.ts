@@ -1,11 +1,111 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
-import { parseWhatsAppWebhook, verifyWebhookToken, sendWhatsAppMessage } from '@/lib/whatsapp';
+import {
+  extractMessage,
+  extractStatus,
+  parseWhatsAppWebhook,
+  sendWhatsAppMessage,
+  verifyWebhookToken,
+} from '@/lib/whatsapp';
 import { getChatResponse, classifyIntent, extractCustomerInfo } from '@/lib/openai';
-import { createDocument, getDocument, listDocuments, updateDocument } from '@/lib/appwrite';
+import { createDocument, listDocuments, updateDocument } from '@/lib/appwrite';
+import { normalizeToWhatsAppMarkdown } from '@/lib/whatsapp-format';
 
 // Verify webhook token from Meta
 const WEBHOOK_VERIFY_TOKEN = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || 'travai_secure_token_2024';
+const WEBSITE_FALLBACK_URL =
+  process.env.TRAVENTIONS_WEBSITE_URL || 'https://traventions-ai.vercel.app';
+
+function isPackageIntent(message: string, intent: string) {
+  if (intent === 'booking' || intent === 'inquiry') return true;
+  return /\b(package|packages|itinerary|trip|tour|price|pricing|budget|offer|plan|days|nights)\b/i.test(
+    message
+  );
+}
+
+function extractKeywords(text: string) {
+  return Array.from(new Set(text.toLowerCase().match(/[a-z0-9]{3,}/g) || [])).slice(
+    0,
+    12
+  );
+}
+
+async function hasHumanTakeover(teamId: string, phone: string) {
+  const rows = await listDocuments('conversations', [
+    Query.equal('teamId', teamId),
+    Query.equal('phone', phone),
+    Query.orderDesc('$createdAt'),
+    Query.limit(100),
+  ]);
+
+  let latestStaffTs = 0;
+  let latestAiTs = 0;
+
+  for (const doc of rows.documents as Array<{
+    sentBy?: string;
+    createdAt?: string;
+    $createdAt?: string;
+  }>) {
+    const ts = new Date(doc.createdAt || doc.$createdAt || 0).getTime();
+    if (!Number.isFinite(ts) || ts <= 0) continue;
+
+    if (doc.sentBy === 'staff' && ts > latestStaffTs) {
+      latestStaffTs = ts;
+    }
+    if (doc.sentBy === 'ai' && ts > latestAiTs) {
+      latestAiTs = ts;
+    }
+  }
+
+  return latestStaffTs > 0 && latestStaffTs > latestAiTs;
+}
+
+async function buildDatabaseKnowledge(teamId: string, userMessage: string) {
+  const keywords = extractKeywords(userMessage);
+  const [postsResult, campaignsResult] = await Promise.all([
+    listDocuments('gbp_posts', [
+      Query.equal('teamId', teamId),
+      Query.orderDesc('$createdAt'),
+      Query.limit(20),
+    ]).catch(() => ({ documents: [] })),
+    listDocuments('campaigns', [
+      Query.equal('teamId', teamId),
+      Query.orderDesc('$createdAt'),
+      Query.limit(20),
+    ]).catch(() => ({ documents: [] })),
+  ]);
+
+  const snippets: string[] = [];
+  const posts = postsResult.documents as Array<{ title?: string; content?: string }>;
+  for (const post of posts) {
+    const text = [post.title, post.content].filter(Boolean).join(' - ').trim();
+    if (!text) continue;
+    const score = keywords.reduce(
+      (acc, kw) => (text.toLowerCase().includes(kw) ? acc + 1 : acc),
+      0
+    );
+    if (score > 0 || snippets.length < 3) {
+      snippets.push(text);
+    }
+    if (snippets.length >= 8) break;
+  }
+
+  const campaigns = campaignsResult.documents as Array<{ title?: string; message?: string }>;
+  for (const campaign of campaigns) {
+    if (snippets.length >= 8) break;
+    const text = [campaign.title, campaign.message].filter(Boolean).join(' - ').trim();
+    if (!text) continue;
+    const score = keywords.reduce(
+      (acc, kw) => (text.toLowerCase().includes(kw) ? acc + 1 : acc),
+      0
+    );
+    if (score > 0 || snippets.length < 3) {
+      snippets.push(text);
+    }
+  }
+
+  return snippets;
+}
 
 /**
  * GET /api/whatsapp/webhook
@@ -62,19 +162,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true }, { status: 200 });
     }
 
-    const { messages, statuses } = webhook;
+    const { messages, statuses, phoneNumberId } = webhook;
 
     // Process incoming messages
     if (messages && messages.length > 0) {
       for (const msg of messages) {
-        await processIncomingMessage(msg);
+        await processIncomingMessage(msg, phoneNumberId || '');
       }
     }
 
     // Process message statuses (delivered, read, failed)
     if (statuses && statuses.length > 0) {
       for (const status of statuses) {
-        await processMessageStatus(status);
+        await processMessageStatus(status, phoneNumberId || '');
       }
     }
 
@@ -91,28 +191,44 @@ export async function POST(request: NextRequest) {
 /**
  * Process an incoming message from WhatsApp
  */
-async function processIncomingMessage(message: any) {
+async function processIncomingMessage(
+  message: Parameters<typeof extractMessage>[0],
+  webhookPhoneNumberId: string
+) {
   try {
-    const { phone, timestamp, type, text, messageId } = message;
+    const incoming = extractMessage(message);
+    if (!incoming || !incoming.phone) {
+      console.warn('[WhatsApp] Skipping message: missing sender phone');
+      return;
+    }
+
+    const phone = incoming.phone;
+    const type = incoming.type || 'text';
+    const text = 'text' in incoming ? (incoming.text || '') : '';
+    const messageId = incoming.messageId || null;
+    const teamId = await resolveTeamIdByPhoneNumberId(webhookPhoneNumberId);
 
     console.log(`📨 Incoming ${type} message from ${phone}:`, text || messageId);
 
     // Find or create customer record
-    let customer = await findOrCreateCustomer(phone);
+    let customer = await findOrCreateCustomer(phone, teamId);
 
     // Extract customer info from message (name, email, etc.)
-    const extractedInfo = await extractCustomerInfo(text || '');
-    if (extractedInfo.name && !customer.name) {
-      customer = await updateDocument('customers', customer.$id, {
-        name: extractedInfo.name,
-        email: extractedInfo.email,
-        phone: extractedInfo.phone || phone,
-      });
+    if (text && process.env.OPENAI_API_KEY) {
+      const extractedInfo = await extractCustomerInfo(text);
+      if (extractedInfo.name && !customer.name) {
+        customer = await updateDocument('customers', customer.$id, {
+          name: extractedInfo.name,
+          email: extractedInfo.email,
+          phone: extractedInfo.phone || phone,
+          updatedAt: new Date().toISOString(),
+        });
+      }
     }
 
     // Save the conversation message
     await createDocument('conversations', {
-      teamId: customer.teamId,
+      teamId,
       customerId: customer.$id,
       phone: phone,
       role: 'user',
@@ -124,22 +240,41 @@ async function processIncomingMessage(message: any) {
       createdAt: new Date().toISOString(),
     });
 
-    // Classify the intent
-    const businessContext = `Business: ${customer.businessName || 'Unknown'}, Type: ${customer.businessType || 'general'}, Services: ${customer.services?.join(', ') || 'general'}`;
-    const intent = await classifyIntent(text || '', businessContext);
+    if (!text) {
+      return;
+    }
 
-    // If it's an inquiry or greeting, generate an AI response
-    if (['inquiry', 'greeting', 'booking'].includes(intent)) {
-      await generateAndSendResponse(customer, text, phone, intent);
+    const handover = await hasHumanTakeover(teamId, phone);
+    if (handover) {
+      console.log(`[WhatsApp] AI suppressed for ${phone} due to staff takeover`);
+      return;
+    }
+
+    // Classify the intent only when OpenAI key exists, otherwise fall back.
+    const businessContext = `Team: ${teamId}, channel: whatsapp`;
+    const intent = process.env.OPENAI_API_KEY
+      ? await classifyIntent(text, businessContext)
+      : 'other';
+
+    // Generate an AI response for normal conversational intents.
+    if (['inquiry', 'booking', 'followup', 'other'].includes(intent)) {
+      await generateAndSendResponse(
+        customer,
+        text,
+        phone,
+        intent,
+        webhookPhoneNumberId,
+        teamId
+      );
     } else if (intent === 'complaint') {
       // Route complaints to staff
       await createDocument('leads', {
-        teamId: customer.teamId,
+        teamId,
         phone: phone,
         name: customer.name,
         email: customer.email,
         source: 'whatsapp',
-        status: 'complaint',
+        status: 'new',
         notes: `Customer complaint: ${text}`,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -153,15 +288,26 @@ async function processIncomingMessage(message: any) {
 /**
  * Process a message status update (delivery, read, failed)
  */
-async function processMessageStatus(status: any) {
+async function processMessageStatus(
+  status: Parameters<typeof extractStatus>[0],
+  webhookPhoneNumberId: string
+) {
   try {
-    const { phone, messageId, status: msgStatus, timestamp } = status;
+    const parsed = extractStatus(status);
+    if (!parsed || !parsed.messageId) {
+      return;
+    }
+
+    const { phone, messageId, status: msgStatus } = parsed;
+    const teamId = await resolveTeamIdByPhoneNumberId(webhookPhoneNumberId);
 
     console.log(`📦 Message ${messageId} from ${phone}: ${msgStatus}`);
 
     // Find the conversation with this messageId
     const conversations = await listDocuments('conversations', [
+      Query.equal('teamId', teamId),
       Query.equal('metaMessageId', messageId),
+      Query.limit(1),
     ]);
 
     if (conversations.documents.length > 0) {
@@ -178,10 +324,12 @@ async function processMessageStatus(status: any) {
 /**
  * Find or create a customer record
  */
-async function findOrCreateCustomer(phone: string) {
+async function findOrCreateCustomer(phone: string, teamId: string) {
   try {
     const result = await listDocuments('customers', [
+      Query.equal('teamId', teamId),
       Query.equal('phone', phone),
+      Query.limit(1),
     ]);
 
     if (result.documents.length > 0) {
@@ -190,14 +338,9 @@ async function findOrCreateCustomer(phone: string) {
 
     // Create new customer
     return await createDocument('customers', {
-      teamId: 'system', // Will be updated when assigned to a business
+      teamId,
       phone: phone,
-      name: null,
-      email: null,
-      businessName: null,
-      businessType: null,
-      services: [],
-      totalSpent: 0,
+      source: 'whatsapp',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
@@ -211,50 +354,106 @@ async function findOrCreateCustomer(phone: string) {
  * Generate an AI response and send it via WhatsApp
  */
 async function generateAndSendResponse(
-  customer: any,
+  customer: { $id: string; teamId?: string; name?: string; email?: string },
   userMessage: string,
   phone: string,
-  intent: string
+  intent: string,
+  webhookPhoneNumberId: string,
+  teamId: string
 ) {
   try {
+    const resolvedTeamId =
+      teamId || customer.teamId || process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'system';
+
     // Get recent conversation history
     const convos = await listDocuments('conversations', [
+      Query.equal('teamId', resolvedTeamId),
       Query.equal('customerId', customer.$id),
+      Query.orderDesc('$createdAt'),
+      Query.limit(10),
     ]);
 
-    const history = convos.documents
-      .slice(-5)
-      .map((c: any) => ({
+    const historyRows = convos.documents as Array<{ role?: string; message?: string }>;
+    const history = historyRows
+      .slice(0, 5)
+      .reverse()
+      .map((c) => ({
         role: (c.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
         content: c.message || '[media]',
       }));
 
-    // Generate AI response
-    const systemPrompt = `You are a helpful customer service assistant for ${customer.businessName}. 
-    Business type: ${customer.businessType}
-    Services: ${customer.services?.join(', ') || 'General services'}
-    Keep responses concise (under 500 characters) and friendly.
-    Current intent: ${intent}`;
+    const businessConfigResult = await listDocuments('business_configs', [
+      Query.equal('teamId', resolvedTeamId),
+      Query.limit(1),
+    ]);
+    const businessConfig = businessConfigResult.documents[0] as
+      | { businessName?: string; openaiSystemPrompt?: string }
+      | undefined;
 
-    const response = await getChatResponse(userMessage, systemPrompt, history);
+    const packageIntent = isPackageIntent(userMessage, intent);
+    const dbSnippets = await buildDatabaseKnowledge(resolvedTeamId, userMessage);
+    const hasPackageData = dbSnippets.some((row) =>
+      /\b(package|itinerary|tour|trip|price|offer|nights|days|budget)\b/i.test(row)
+    );
+
+    // Generate AI response
+    const systemPrompt =
+      `${businessConfig?.openaiSystemPrompt || ''}\n\n` +
+      `You are Traventions' WhatsApp assistant.
+Mention Traventions in customer-facing replies.
+For first meaningful assistant reply in a thread, start with "Welcome to Traventions!".
+Use only database knowledge for package/pricing details; do not invent facts.
+If package details are missing, direct the user to ${WEBSITE_FALLBACK_URL}.
+Use only WhatsApp-supported formatting:
+- Bold: *text*
+- Italic: _text_
+- Strikethrough: ~text~
+- Bullets: * item
+- Numbered lists: 1. item
+- Quote: > text
+- Inline code: \`code\`
+- Code block: \`\`\`code\`\`\`
+Do not use markdown headings like #, ##, ###.
+Current intent: ${intent}
+Package intent: ${packageIntent ? 'yes' : 'no'}
+Package data available: ${hasPackageData ? 'yes' : 'no'}
+DATABASE KNOWLEDGE:
+${dbSnippets.length ? dbSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : 'No relevant snippets found.'}`.trim();
+
+    const response = process.env.OPENAI_API_KEY
+      ? await getChatResponse(userMessage, systemPrompt, history)
+      : packageIntent && !hasPackageData
+      ? `Welcome to Traventions! I do not have the latest package details in the database right now. Please visit ${WEBSITE_FALLBACK_URL} for current options.`
+      : 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
+
+    const responseWithFallback =
+      packageIntent && !hasPackageData && !response.includes(WEBSITE_FALLBACK_URL)
+        ? `${response}\n\nFor latest packages, please visit ${WEBSITE_FALLBACK_URL}.`
+        : response;
+    const waFormattedResponse = normalizeToWhatsAppMarkdown(responseWithFallback);
 
     // Send via WhatsApp Cloud API (Meta)
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
+    const phoneNumberId = webhookPhoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID || '';
     const whatsappToken = process.env.WHATSAPP_TOKEN || '';
+
+    if (!phoneNumberId || !whatsappToken) {
+      throw new Error('Missing WHATSAPP_PHONE_NUMBER_ID or WHATSAPP_TOKEN');
+    }
+
     const sendResult = await sendWhatsAppMessage({
       phoneNumberId,
       recipientPhone: phone,
-      message: response,
+      message: waFormattedResponse,
       whatsappToken,
     });
 
     // Save the outgoing message with the actual Meta message ID
     await createDocument('conversations', {
-      teamId: customer.teamId,
+      teamId: resolvedTeamId,
       customerId: customer.$id,
       phone: phone,
       role: 'assistant',
-      message: response,
+      message: waFormattedResponse,
       messageType: 'text',
       sentBy: 'ai',
       metaMessageId: sendResult.messageId || null,
@@ -270,4 +469,24 @@ async function generateAndSendResponse(
   } catch (error) {
     console.error('[WhatsApp] Error generating/sending response:', error);
   }
+}
+
+async function resolveTeamIdByPhoneNumberId(phoneNumberId: string): Promise<string> {
+  if (!phoneNumberId) {
+    return process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'system';
+  }
+
+  const configs = await listDocuments('business_configs', [
+    Query.equal('whatsappPhoneNumberId', phoneNumberId),
+    Query.limit(1),
+  ]);
+
+  if (configs.documents.length > 0) {
+    const teamId = (configs.documents[0] as { teamId?: string }).teamId;
+    if (teamId) {
+      return teamId;
+    }
+  }
+
+  return process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'system';
 }

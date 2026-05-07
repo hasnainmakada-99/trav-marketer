@@ -1,4 +1,4 @@
-import { Query } from 'appwrite';
+import { Query } from 'node-appwrite';
 import { listDocuments, updateDocument, createDocument } from '@/lib/appwrite';
 
 const GOOGLE_OAUTH_AUTHORIZE_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -16,6 +16,7 @@ interface GoogleTokenResponse {
 interface GbpOAuthState {
   teamId: string;
   redirectTo?: string;
+  redirectUri?: string;
 }
 
 interface BusinessConfigDocument {
@@ -56,18 +57,34 @@ interface GoogleReviewListResponse {
   }>;
 }
 
-function getOAuthConfig() {
+function getOAuthConfig(options?: {
+  requireClientSecret?: boolean;
+  redirectUriOverride?: string;
+}) {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
   const redirectUri =
+    options?.redirectUriOverride ||
     process.env.GOOGLE_REDIRECT_URI ||
-    `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/gbp/callback`;
+    `${appUrl.replace(/\/+$/, '')}/api/gbp/callback`;
 
-  if (!clientId || !clientSecret || !redirectUri) {
-    throw new Error('Google OAuth is not fully configured');
+  const missing: string[] = [];
+  if (!clientId) {
+    missing.push('GOOGLE_CLIENT_ID');
+  }
+  if (options?.requireClientSecret && !clientSecret) {
+    missing.push('GOOGLE_CLIENT_SECRET');
+  }
+  if (!redirectUri) {
+    missing.push('GOOGLE_REDIRECT_URI');
   }
 
-  return { clientId, clientSecret, redirectUri };
+  if (missing.length > 0) {
+    throw new Error(`Google OAuth is not fully configured. Missing: ${missing.join(', ')}`);
+  }
+
+  return { clientId: clientId || '', clientSecret: clientSecret || '', redirectUri };
 }
 
 function parseJsonSafe<T>(value: string): T | null {
@@ -95,8 +112,12 @@ export function decodeState(encodedState: string): GbpOAuthState | null {
   }
 }
 
-export function buildGoogleConsentUrl(teamId: string, redirectTo?: string): string {
-  const { clientId, redirectUri } = getOAuthConfig();
+export function buildGoogleConsentUrl(
+  teamId: string,
+  redirectTo?: string,
+  redirectUriOverride?: string
+): string {
+  const { clientId, redirectUri } = getOAuthConfig({ redirectUriOverride });
   const url = new URL(GOOGLE_OAUTH_AUTHORIZE_URL);
 
   url.searchParams.set('client_id', clientId);
@@ -106,7 +127,7 @@ export function buildGoogleConsentUrl(teamId: string, redirectTo?: string): stri
   url.searchParams.set('access_type', 'offline');
   url.searchParams.set('include_granted_scopes', 'true');
   url.searchParams.set('prompt', 'consent');
-  url.searchParams.set('state', encodeState({ teamId, redirectTo }));
+  url.searchParams.set('state', encodeState({ teamId, redirectTo, redirectUri }));
 
   return url.toString();
 }
@@ -132,8 +153,14 @@ async function exchangeToken(body: URLSearchParams): Promise<GoogleTokenResponse
   return parsed;
 }
 
-export async function exchangeCodeForTokens(code: string): Promise<GoogleTokenResponse> {
-  const { clientId, clientSecret, redirectUri } = getOAuthConfig();
+export async function exchangeCodeForTokens(
+  code: string,
+  redirectUriOverride?: string
+): Promise<GoogleTokenResponse> {
+  const { clientId, clientSecret, redirectUri } = getOAuthConfig({
+    requireClientSecret: true,
+    redirectUriOverride,
+  });
   const body = new URLSearchParams({
     code,
     client_id: clientId,
@@ -146,7 +173,9 @@ export async function exchangeCodeForTokens(code: string): Promise<GoogleTokenRe
 }
 
 export async function refreshAccessToken(refreshToken: string): Promise<GoogleTokenResponse> {
-  const { clientId, clientSecret } = getOAuthConfig();
+  const { clientId, clientSecret } = getOAuthConfig({
+    requireClientSecret: true,
+  });
   const body = new URLSearchParams({
     client_id: clientId,
     client_secret: clientSecret,
@@ -193,15 +222,42 @@ export async function saveGoogleConnection(
   } else {
     // No config exists yet — create one automatically so the client
     // can connect GBP without any prior manual DB setup.
-    await createDocument('business_configs', {
+    const now = new Date().toISOString();
+    const fullPayload: Record<string, unknown> = {
       teamId,
       businessName: 'My Business',
       googleAccessToken: updates.googleAccessToken,
       googleRefreshToken: updates.googleRefreshToken || null,
       googleLocationId: updates.googleLocationId || null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+      whatsappToken: '__PENDING_WHATSAPP_TOKEN__',
+      whatsappPhoneNumberId: '__PENDING_PHONE_NUMBER_ID__',
+      whatsappVerifyToken:
+        process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || '__PENDING_WHATSAPP_VERIFY_TOKEN__',
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    try {
+      await createDocument('business_configs', fullPayload);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const mightBeUnknownAttr =
+        message.includes('Unknown attribute') || message.includes('Invalid document structure');
+
+      if (!mightBeUnknownAttr) {
+        throw error;
+      }
+
+      await createDocument('business_configs', {
+        teamId,
+        businessName: 'My Business',
+        googleAccessToken: updates.googleAccessToken,
+        googleRefreshToken: updates.googleRefreshToken || null,
+        googleLocationId: updates.googleLocationId || null,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
   }
 }
 

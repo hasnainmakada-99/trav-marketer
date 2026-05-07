@@ -53,7 +53,23 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ teamId, accounts: result }, { status: 200 });
   } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+
+    // Not-connected state should not be treated as a hard server error by the UI.
+    if (
+      message.includes('No business configuration found') ||
+      message.includes('Google access is not connected')
+    ) {
+      return NextResponse.json(
+        { teamId: null, accounts: [], connected: false, reason: message },
+        { status: 200 }
+      );
+    }
+
     console.error('[GBP Locations] Error:', error);
-    return NextResponse.json({ error: 'Failed to fetch GBP locations' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Failed to fetch GBP locations', reason: message },
+      { status: 500 }
+    );
   }
 }

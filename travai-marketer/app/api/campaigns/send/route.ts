@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Query } from 'appwrite';
+import { Query } from 'node-appwrite';
 import { listDocuments, updateDocument } from '@/lib/appwrite';
 
 /**

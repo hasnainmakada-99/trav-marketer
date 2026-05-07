@@ -6,12 +6,13 @@ interface ConversationDoc {
   $id: string;
   teamId: string;
   phone: string;
-  type: 'incoming' | 'outgoing';
+  role?: 'user' | 'assistant';
+  sentBy?: 'customer' | 'ai' | 'staff';
+  message?: string | null;
   messageType?: string;
-  text?: string | null;
-  status?: string;
-  timestamp?: string;
+  deliveryStatus?: string;
   createdAt?: string;
+  $createdAt?: string;
 }
 
 /**
@@ -20,21 +21,43 @@ interface ConversationDoc {
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ phone: string }> }
+  context: { params: Promise<{ phone: string }> | { phone: string } }
 ) {
-  try {
-    const { phone } = await params;
-    const { searchParams } = new URL(request.url);
-    const teamId = searchParams.get('teamId');
+  let decodedPhone = '';
 
-    if (!teamId || !phone) {
+  try {
+    const routeParams = await Promise.resolve(context.params);
+    const routePhone = routeParams?.phone || '';
+    decodedPhone = routePhone ? decodeURIComponent(routePhone) : '';
+
+    if (!decodedPhone) {
+      const fromPath = request.nextUrl.pathname.split('/').pop() || '';
+      decodedPhone = fromPath ? decodeURIComponent(fromPath) : '';
+    }
+    if (!decodedPhone) {
+      const rawUrl = request.url || '';
+      const marker = '/api/whatsapp/conversations/';
+      const idx = rawUrl.indexOf(marker);
+      if (idx >= 0) {
+        const after = rawUrl.slice(idx + marker.length);
+        const end = after.indexOf('?');
+        const token = end >= 0 ? after.slice(0, end) : after;
+        decodedPhone = token ? decodeURIComponent(token) : '';
+      }
+    }
+
+    const teamId =
+      request.nextUrl.searchParams.get('teamId') ||
+      new URL(request.url).searchParams.get('teamId') ||
+      process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID ||
+      'system';
+
+    if (!decodedPhone) {
       return NextResponse.json(
         { error: 'teamId and phone required' },
         { status: 400 }
       );
     }
-
-    const decodedPhone = decodeURIComponent(phone);
 
     const result = await listDocuments('conversations', [
       Query.equal('teamId', teamId),
@@ -43,14 +66,34 @@ export async function GET(
       Query.limit(500),
     ]);
 
+    const messages = ((result.documents || []) as unknown as ConversationDoc[]).map(
+      (doc) => {
+        const isOutgoing =
+          doc.role === 'assistant' || doc.sentBy === 'ai' || doc.sentBy === 'staff';
+
+        return {
+          $id: doc.$id,
+          phone: doc.phone,
+          type: (isOutgoing ? 'outgoing' : 'incoming') as 'incoming' | 'outgoing',
+          messageType: doc.messageType || 'text',
+          text: doc.message || null,
+          status: doc.deliveryStatus || undefined,
+          timestamp: doc.createdAt || doc.$createdAt || null,
+          createdAt: doc.createdAt || doc.$createdAt || null,
+        };
+      }
+    );
+
     return NextResponse.json({
       phone: decodedPhone,
-      messages: (result.documents || []) as unknown as ConversationDoc[],
+      messages,
     });
   } catch (error) {
-    // Collection may not exist yet — return empty thread.
-    console.warn('[WA thread] Returning empty thread:', error instanceof Error ? error.message : error);
-    const { phone } = await params;
-    return NextResponse.json({ phone: decodeURIComponent(phone), messages: [] });
+    // Collection may not exist yet; return empty thread.
+    console.warn(
+      '[WA thread] Returning empty thread:',
+      error instanceof Error ? error.message : error
+    );
+    return NextResponse.json({ phone: decodedPhone, messages: [] });
   }
 }

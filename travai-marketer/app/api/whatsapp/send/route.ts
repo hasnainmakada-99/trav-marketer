@@ -1,6 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sendWhatsAppMessage, sendWhatsAppTemplate } from '@/lib/whatsapp';
-import { createDocument, updateDocument } from '@/lib/appwrite';
+import { createDocument, getDocument, updateDocument } from '@/lib/appwrite';
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForBridgeCommandResult(commandId: string, timeoutMs = 6000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const doc = (await getDocument('bridge_commands', commandId)) as {
+        status?: string;
+        message?: string | null;
+      };
+      if (doc.status === 'completed' || doc.status === 'failed') {
+        return { status: doc.status, message: doc.message || null };
+      }
+    } catch {
+      // command doc may not be visible instantly; keep polling
+    }
+    await sleep(450);
+  }
+  return { status: 'pending', message: null };
+}
 
 /**
  * POST /api/whatsapp/send
@@ -15,14 +38,88 @@ export async function POST(request: NextRequest) {
       message,
       templateName,
       templateParams,
-      conversationId,
     } = body;
 
     // Validate required fields
-    if (!phone || !message) {
+    if (!phone || (!message && !templateName)) {
       return NextResponse.json(
-        { error: 'Missing required fields: phone and message' },
+        { error: 'Missing required fields: phone and message/templateName' },
         { status: 400 }
+      );
+    }
+
+    const bridgeModeEnabled = Boolean(process.env.BRIDGE_SHARED_SECRET);
+    const normalizedPhone = String(phone || '').replace(/[^\d]/g, '');
+    const normalizedMessage = String(message || '').trim();
+    const teamId = body.teamId || 'system';
+
+    // Bridge mode for text sends (dashboard/live chat) so it works with WA Web linked number.
+    if (!templateName && bridgeModeEnabled) {
+      const controlUrl = new URL('/api/wa-bridge/control', request.url);
+      const controlRes = await fetch(controlUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teamId,
+          action: 'send_text',
+          payload: {
+            phone: normalizedPhone,
+            message: normalizedMessage,
+            customerId: customerId || 'manual',
+          },
+        }),
+      });
+      const controlData = await controlRes.json();
+      if (!controlRes.ok) {
+        return NextResponse.json(
+          { error: controlData?.error || 'Failed to queue bridge send' },
+          { status: 400 }
+        );
+      }
+      const commandId = String(controlData?.commandId || '');
+      const commandResult = commandId
+        ? await waitForBridgeCommandResult(commandId, 6500)
+        : { status: 'pending', message: null };
+      if (commandResult.status === 'failed') {
+        return NextResponse.json(
+          {
+            error:
+              commandResult.message ||
+              'Bridge failed to send message. Restart bridge and try again.',
+          },
+          { status: 400 }
+        );
+      }
+
+      try {
+        await createDocument('conversations', {
+          teamId,
+          customerId: customerId || 'manual',
+          phone: normalizedPhone,
+          role: 'assistant',
+          message: normalizedMessage,
+          messageType: 'text',
+          sentBy: 'staff',
+          metaMessageId: commandId || null,
+          deliveryStatus:
+            commandResult.status === 'completed' ? 'bridged' : 'queued',
+          createdAt: new Date().toISOString(),
+        });
+      } catch (dbError) {
+        console.error('Failed to save bridge message to database:', dbError);
+      }
+
+      return NextResponse.json(
+        {
+          success: true,
+          mode: 'bridge',
+          queued: commandResult.status !== 'completed',
+          commandId: commandId || null,
+          phone: normalizedPhone,
+          status: commandResult.status,
+          timestamp: new Date().toISOString(),
+        },
+        { status: 200 }
       );
     }
 
@@ -32,7 +129,10 @@ export async function POST(request: NextRequest) {
 
     if (!phoneNumberId || !whatsappToken) {
       return NextResponse.json(
-        { error: 'WhatsApp credentials not configured' },
+        {
+          error:
+            'WhatsApp Cloud API is not configured. Set WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_TOKEN.',
+        },
         { status: 500 }
       );
     }
@@ -43,7 +143,7 @@ export async function POST(request: NextRequest) {
     if (templateName) {
       result = await sendWhatsAppTemplate({
         phoneNumberId,
-        recipientPhone: phone,
+        recipientPhone: normalizedPhone,
         templateName,
         parameters: templateParams || [],
         whatsappToken,
@@ -51,8 +151,8 @@ export async function POST(request: NextRequest) {
     } else {
       result = await sendWhatsAppMessage({
         phoneNumberId,
-        recipientPhone: phone,
-        message,
+        recipientPhone: normalizedPhone,
+        message: normalizedMessage,
         whatsappToken,
       });
     }
@@ -68,11 +168,13 @@ export async function POST(request: NextRequest) {
     // Save the message to database
     try {
       await createDocument('conversations', {
-        teamId: body.teamId || 'system',
+        teamId,
         customerId: customerId || 'manual',
-        phone: phone,
+        phone: normalizedPhone,
         role: 'assistant',
-        message: templateName ? `[template: ${templateName}]` : message,
+        message: templateName
+          ? `[template: ${templateName}]`
+          : normalizedMessage,
         messageType: templateName ? 'template' : 'text',
         sentBy: 'staff',
         metaMessageId: result.messageId || null,
@@ -88,7 +190,7 @@ export async function POST(request: NextRequest) {
       {
         success: true,
         messageId: result.messageId,
-        phone: phone,
+        phone: normalizedPhone,
         timestamp: new Date().toISOString(),
       },
       { status: 200 }
@@ -138,7 +240,7 @@ export async function PUT(request: NextRequest) {
     const results = {
       sent: 0,
       failed: 0,
-      errors: [] as any[],
+      errors: [] as Array<{ phone: string; error: string }>,
     };
 
     // Send to each recipient
@@ -182,7 +284,7 @@ export async function PUT(request: NextRequest) {
           results.failed++;
           results.errors.push({
             phone: recipient.phone,
-            error: sendResult.error,
+            error: sendResult.error || 'Failed to send message',
           });
         }
       } catch (error) {

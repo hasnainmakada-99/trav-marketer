@@ -2,6 +2,8 @@
 
 # dependencies
 /node_modules
+/bridge/node_modules
+bridge/node_modules
 /.pnp
 .pnp.*
 .yarn/*
@@ -33,6 +35,14 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+tmp-*.log
+
+# bridge runtime state
+/bridge/.wwebjs_auth/
+/bridge/.wwebjs_cache/
+/bridge/.baileys_auth/
+/bridge/baileys_auth/
+/bridge/.bridge.lock
 
 # env files (can opt-in for committing if needed)
 .env*

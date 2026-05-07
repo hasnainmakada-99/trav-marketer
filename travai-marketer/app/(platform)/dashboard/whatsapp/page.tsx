@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, type ReactNode } from 'react';
 
 const TEAM_ID =
   process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
@@ -34,6 +34,209 @@ interface Template {
   status: string;
   category: string;
   components?: Array<{ type: string; text?: string; format?: string }>;
+}
+
+function renderInlineMarkdown(text: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*\n]+\*|_[^_\n]+_|~[^~\n]+~|https?:\/\/[^\s]+)/g;
+  let lastIndex = 0;
+  let key = 0;
+
+  for (const match of text.matchAll(pattern)) {
+    const full = match[0];
+    const start = match.index ?? 0;
+    if (start > lastIndex) {
+      parts.push(text.slice(lastIndex, start));
+    }
+
+    if (/^https?:\/\//.test(full)) {
+      parts.push(
+        <a
+          key={`md-${key++}`}
+          href={full}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline break-all"
+        >
+          {full}
+        </a>
+      );
+    } else if (full.startsWith('`') && full.endsWith('`')) {
+      parts.push(
+        <code key={`md-${key++}`} className="px-1 rounded bg-black/10 font-mono text-[0.95em]">
+          {full.slice(1, -1)}
+        </code>
+      );
+    } else if (
+      (full.startsWith('**') && full.endsWith('**')) ||
+      (full.startsWith('__') && full.endsWith('__'))
+    ) {
+      parts.push(<strong key={`md-${key++}`}>{full.slice(2, -2)}</strong>);
+    } else if (
+      full.startsWith('*') &&
+      full.endsWith('*')
+    ) {
+      // WhatsApp uses single *...* for bold.
+      parts.push(<strong key={`md-${key++}`}>{full.slice(1, -1)}</strong>);
+    } else if (full.startsWith('_') && full.endsWith('_')) {
+      parts.push(<em key={`md-${key++}`}>{full.slice(1, -1)}</em>);
+    } else if (full.startsWith('~') && full.endsWith('~')) {
+      parts.push(<span key={`md-${key++}`} className="line-through">{full.slice(1, -1)}</span>);
+    } else {
+      parts.push(full);
+    }
+
+    lastIndex = start + full.length;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return parts;
+}
+
+function renderMessageMarkdown(raw?: string | null): ReactNode {
+  const text = (raw || '').replace(/\r\n/g, '\n').trim();
+  if (!text) {
+    return <span className="opacity-70">[empty]</span>;
+  }
+
+  const lines = text.split('\n');
+  const blocks: ReactNode[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i].trim();
+    if (!line) {
+      i += 1;
+      continue;
+    }
+
+    if (line.startsWith('```')) {
+      const codeLines: string[] = [];
+      i += 1;
+      while (i < lines.length && !lines[i].trim().startsWith('```')) {
+        codeLines.push(lines[i]);
+        i += 1;
+      }
+      if (i < lines.length && lines[i].trim().startsWith('```')) {
+        i += 1;
+      }
+      blocks.push(
+        <pre
+          key={`code-${i}`}
+          className="whitespace-pre-wrap break-words rounded bg-black/10 p-2 font-mono text-xs"
+        >
+          {codeLines.join('\n')}
+        </pre>
+      );
+      continue;
+    }
+
+    if (/^(-{3,}|\*{3,})$/.test(line)) {
+      blocks.push(<hr key={`hr-${i}`} className="my-2 border-current/20" />);
+      i += 1;
+      continue;
+    }
+
+    const headingMatch = line.match(/^(#{1,3})\s+(.+)$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      const content = headingMatch[2];
+      const headingClass =
+        level === 1 ? 'text-base font-bold' : level === 2 ? 'text-sm font-semibold' : 'text-sm font-semibold';
+      blocks.push(
+        <div key={`h-${i}`} className={`${headingClass} mt-1`}>
+          {renderInlineMarkdown(content)}
+        </div>
+      );
+      i += 1;
+      continue;
+    }
+
+    if (/^[-*]\s+/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
+        items.push(lines[i].trim().replace(/^[-*]\s+/, ''));
+        i += 1;
+      }
+      blocks.push(
+        <ul key={`ul-${i}`} className="list-disc pl-5 space-y-1">
+          {items.map((item, idx) => (
+            <li key={`uli-${idx}`}>{renderInlineMarkdown(item)}</li>
+          ))}
+        </ul>
+      );
+      continue;
+    }
+
+    if (/^\d+\.\s+/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
+        items.push(lines[i].trim().replace(/^\d+\.\s+/, ''));
+        i += 1;
+      }
+      blocks.push(
+        <ol key={`ol-${i}`} className="list-decimal pl-5 space-y-1">
+          {items.map((item, idx) => (
+            <li key={`oli-${idx}`}>{renderInlineMarkdown(item)}</li>
+          ))}
+        </ol>
+      );
+      continue;
+    }
+
+    if (/^>\s+/.test(line)) {
+      const quoteLines: string[] = [];
+      while (i < lines.length && /^>\s+/.test(lines[i].trim())) {
+        quoteLines.push(lines[i].trim().replace(/^>\s+/, ''));
+        i += 1;
+      }
+      blocks.push(
+        <blockquote
+          key={`quote-${i}`}
+          className="border-l-2 border-current/25 pl-3 italic opacity-90"
+        >
+          {quoteLines.map((q, idx) => (
+            <p key={`q-${idx}`}>{renderInlineMarkdown(q)}</p>
+          ))}
+        </blockquote>
+      );
+      continue;
+    }
+
+    const paragraphLines = [lines[i]];
+    i += 1;
+    while (i < lines.length) {
+      const probe = lines[i].trim();
+      if (
+        !probe ||
+        /^[-*]\s+/.test(probe) ||
+        /^\d+\.\s+/.test(probe) ||
+        /^(-{3,}|\*{3,})$/.test(probe) ||
+        /^(#{1,3})\s+(.+)$/.test(probe)
+      ) {
+        break;
+      }
+      paragraphLines.push(lines[i]);
+      i += 1;
+    }
+    const para = paragraphLines.join('\n');
+    blocks.push(
+      <p key={`p-${i}`} className="whitespace-pre-wrap">
+        {renderInlineMarkdown(para)}
+      </p>
+    );
+  }
+
+  return <div className="space-y-2">{blocks}</div>;
+}
+
+function formatMessagePreview(text?: string | null, messageType?: string) {
+  const value = (text || '').trim();
+  if (value.length > 0) return value;
+  if (messageType === 'text') return 'Text message';
+  return `[${messageType || 'media'}]`;
 }
 
 function Toast({
@@ -95,7 +298,7 @@ export default function WhatsAppPage() {
           </div>
           <div className="flex items-center gap-2 text-xs text-gray-500">
             <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-            Connected via Meta Cloud API
+            Connected via WA Web Bridge
           </div>
         </div>
 
@@ -125,7 +328,7 @@ export default function WhatsAppPage() {
         {tab === 'inbox' && <InboxTab showToast={showToast} />}
         {tab === 'send' && <SendTab showToast={showToast} />}
         {tab === 'templates' && <TemplatesTab showToast={showToast} />}
-        {tab === 'setup' && <SetupTab />}
+        {tab === 'setup' && <SetupTab showToast={showToast} />}
       </div>
     </div>
   );
@@ -164,9 +367,9 @@ function InboxTab({
     setThreadLoading(true);
     try {
       const res = await fetch(
-        `/api/whatsapp/conversations/${encodeURIComponent(
-          phone
-        )}?teamId=${encodeURIComponent(TEAM_ID)}`
+        `/api/whatsapp/conversations?teamId=${encodeURIComponent(
+          TEAM_ID
+        )}&phone=${encodeURIComponent(phone)}`
       );
       const data = await res.json();
       setThread(data.messages || []);
@@ -178,11 +381,18 @@ function InboxTab({
   }, []);
 
   useEffect(() => {
-    loadConvos();
+    const t = setTimeout(() => {
+      void loadConvos();
+    }, 0);
+    return () => clearTimeout(t);
   }, [loadConvos]);
 
   useEffect(() => {
-    if (selected) loadThread(selected);
+    if (!selected) return;
+    const t = setTimeout(() => {
+      void loadThread(selected);
+    }, 0);
+    return () => clearTimeout(t);
   }, [selected, loadThread]);
 
   const handleSendReply = async () => {
@@ -321,9 +531,11 @@ function InboxTab({
                         : 'bg-white text-gray-800 rounded-bl-none'
                     }`}
                   >
-                    <p className="text-sm whitespace-pre-wrap break-words">
-                      {m.text || `[${m.messageType || 'media'}]`}
-                    </p>
+                    <div className="text-sm break-words leading-relaxed">
+                      {renderMessageMarkdown(
+                        formatMessagePreview(m.text, m.messageType)
+                      )}
+                    </div>
                     <p
                       className={`text-[10px] mt-1 ${
                         m.type === 'outgoing'
@@ -380,10 +592,62 @@ function SendTab({
   const [templateParams, setTemplateParams] = useState('');
   const [mode, setMode] = useState<'text' | 'template'>('text');
   const [sending, setSending] = useState(false);
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
+  const [templatesNotice, setTemplatesNotice] = useState<string | null>(null);
+  const [integrationStatus, setIntegrationStatus] = useState<
+    'connected' | 'disconnected' | 'unknown' | 'bridge_only'
+  >('unknown');
+
+  const approvedTemplates = templates.filter((t) => t.status === 'APPROVED');
+
+  const loadTemplates = useCallback(async () => {
+    setTemplatesLoading(true);
+    setTemplatesError(null);
+    setTemplatesNotice(null);
+    try {
+      const res = await fetch('/api/whatsapp/templates', { cache: 'no-store' });
+      const data = await res.json();
+      setTemplates(data.templates || []);
+      if (
+        data.integrationStatus === 'connected' ||
+        data.integrationStatus === 'disconnected' ||
+        data.integrationStatus === 'bridge_only'
+      ) {
+        setIntegrationStatus(data.integrationStatus);
+      } else {
+        setIntegrationStatus('unknown');
+      }
+      setTemplatesError(data.error || null);
+      setTemplatesNotice(data.notice || null);
+    } catch (error) {
+      setTemplatesError(
+        error instanceof Error ? error.message : 'Failed to load templates'
+      );
+      setTemplatesNotice(null);
+      setIntegrationStatus('unknown');
+      setTemplates([]);
+    } finally {
+      setTemplatesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      void loadTemplates();
+    }, 0);
+    return () => clearTimeout(t);
+  }, [loadTemplates]);
 
   const handleSend = async () => {
-    if (!phone.trim()) {
+    const normalizedPhone = phone.replace(/[^\d]/g, '');
+    if (!normalizedPhone) {
       showToast('Phone number required', 'error');
+      return;
+    }
+    if (normalizedPhone.length < 8) {
+      showToast('Enter a valid phone number with country code', 'error');
       return;
     }
     if (mode === 'text' && !message.trim()) {
@@ -398,7 +662,7 @@ function SendTab({
     setSending(true);
     try {
       const body: Record<string, unknown> = {
-        phone: phone.trim(),
+        phone: normalizedPhone,
         teamId: TEAM_ID,
       };
 
@@ -406,7 +670,6 @@ function SendTab({
         body.message = message.trim();
       } else {
         body.templateName = templateName.trim();
-        body.message = ' '; // route requires `message` field
         body.templateParams = templateParams
           .split(',')
           .map((p) => p.trim())
@@ -423,7 +686,6 @@ function SendTab({
 
       showToast('Message sent successfully', 'success');
       setMessage('');
-      setTemplateName('');
       setTemplateParams('');
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Failed', 'error');
@@ -434,101 +696,165 @@ function SendTab({
 
   return (
     <div className="h-full overflow-y-auto p-6">
-      <div className="max-w-2xl mx-auto bg-white rounded-lg border border-gray-200 p-6">
-        <h2 className="text-lg font-bold text-gray-900 mb-1">Send Message</h2>
-        <p className="text-sm text-gray-500 mb-6">
-          Free-form text only works inside the 24-hour customer-initiated window.
-          Outside that window, use a pre-approved template.
-        </p>
+      <div className="max-w-4xl mx-auto grid gap-4 lg:grid-cols-[1.3fr_1fr]">
+        <div className="bg-white rounded-lg border border-gray-200 p-6">
+          <h2 className="text-lg font-bold text-gray-900 mb-1">Send Message</h2>
+          <p className="text-sm text-gray-500 mb-6">
+            Text messages work inside the 24-hour window. For outreach or old chats, use approved templates.
+          </p>
 
-        <div className="flex gap-2 mb-5">
-          <button
-            onClick={() => setMode('text')}
-            className={`px-4 py-2 rounded-lg text-sm font-medium ${
-              mode === 'text'
-                ? 'bg-emerald-600 text-white'
-                : 'bg-gray-100 text-gray-700'
-            }`}
-          >
-            Text Message
-          </button>
-          <button
-            onClick={() => setMode('template')}
-            className={`px-4 py-2 rounded-lg text-sm font-medium ${
-              mode === 'template'
-                ? 'bg-emerald-600 text-white'
-                : 'bg-gray-100 text-gray-700'
-            }`}
-          >
-            Template Message
-          </button>
-        </div>
-
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Recipient phone (with country code, no +)
-            </label>
-            <input
-              type="text"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="919876543210"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            />
+          <div className="flex gap-2 mb-5">
+            <button
+              onClick={() => setMode('text')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                mode === 'text'
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-gray-100 text-gray-700'
+              }`}
+            >
+              Text Message
+            </button>
+            <button
+              onClick={() => setMode('template')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                mode === 'template'
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-gray-100 text-gray-700'
+              }`}
+            >
+              Template Message
+            </button>
           </div>
 
-          {mode === 'text' && (
+          <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Message
+                Recipient phone (country code, digits only)
               </label>
-              <textarea
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                rows={5}
-                placeholder="Hi! Just wanted to follow up…"
+              <input
+                type="text"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="919876543210"
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
-          )}
 
-          {mode === 'template' && (
-            <>
+            {mode === 'text' && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Template name
+                  Message
                 </label>
-                <input
-                  type="text"
+                <textarea
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  rows={5}
+                  placeholder="Hi! Just wanted to follow up..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+            )}
+
+            {mode === 'template' && (
+              <>
+                <div className="flex items-center justify-between">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Template
+                  </label>
+                  <button
+                    onClick={() => void loadTemplates()}
+                    className="text-xs text-emerald-600 hover:text-emerald-700"
+                  >
+                    Refresh templates
+                  </button>
+                </div>
+
+                {templatesError && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
+                    {templatesError}
+                  </div>
+                )}
+                {templatesNotice && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-800">
+                    {templatesNotice}
+                  </div>
+                )}
+
+                <select
                   value={templateName}
                   onChange={(e) => setTemplateName(e.target.value)}
-                  placeholder="hello_world"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Template parameters (comma-separated, in order)
-                </label>
-                <input
-                  type="text"
-                  value={templateParams}
-                  onChange={(e) => setTemplateParams(e.target.value)}
-                  placeholder="John, 12 May, ₹2500"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-            </>
-          )}
+                  disabled={integrationStatus === 'bridge_only'}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                >
+                  <option value="">
+                    {templatesLoading
+                      ? 'Loading templates...'
+                      : integrationStatus === 'bridge_only'
+                      ? 'Template sync unavailable in bridge mode'
+                      : approvedTemplates.length
+                      ? 'Select approved template'
+                      : 'No approved templates found'}
+                  </option>
+                  {approvedTemplates.map((t) => (
+                    <option key={`${t.name}-${t.language}`} value={t.name}>
+                      {t.name} ({t.language})
+                    </option>
+                  ))}
+                </select>
 
-          <button
-            onClick={handleSend}
-            disabled={sending}
-            className="w-full px-4 py-2.5 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
-          >
-            {sending ? 'Sending…' : 'Send Message'}
-          </button>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Template parameters (comma-separated, in order)
+                  </label>
+                  <input
+                    type="text"
+                    value={templateParams}
+                    onChange={(e) => setTemplateParams(e.target.value)}
+                    placeholder="John, 12 May, 2500"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+              </>
+            )}
+
+            <button
+              onClick={handleSend}
+              disabled={sending || (mode === 'template' && !templateName)}
+              className="w-full px-4 py-2.5 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+            >
+              {sending ? 'Sending...' : 'Send Message'}
+            </button>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-lg border border-gray-200 p-6 h-fit">
+          <h3 className="text-sm font-semibold text-gray-900 mb-3">Delivery Readiness</h3>
+          <div className="space-y-2 text-sm">
+            <p className="text-gray-700">
+              Integration:{' '}
+              <span
+                className={`font-medium ${
+                  integrationStatus === 'connected'
+                    ? 'text-emerald-700'
+                    : integrationStatus === 'bridge_only'
+                    ? 'text-blue-700'
+                    : integrationStatus === 'disconnected'
+                    ? 'text-rose-700'
+                    : 'text-gray-700'
+                }`}
+              >
+                {integrationStatus}
+              </span>
+            </p>
+            <p className="text-gray-700">
+              Approved templates: <span className="font-medium">{approvedTemplates.length}</span>
+            </p>
+            <p className="text-xs text-gray-500 pt-2">
+              {integrationStatus === 'bridge_only'
+                ? 'Live chat works in bridge mode. Cloud API templates become available after Meta app/token setup.'
+                : 'If template mode is empty, check Meta token/app and template approvals in Meta Business Manager.'}
+            </p>
+          </div>
         </div>
       </div>
     </div>
@@ -544,24 +870,45 @@ function TemplatesTab({
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [integrationStatus, setIntegrationStatus] = useState<
+    'connected' | 'disconnected' | 'unknown' | 'bridge_only'
+  >('unknown');
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setNotice(null);
     try {
-      const res = await fetch('/api/whatsapp/templates');
+      const res = await fetch('/api/whatsapp/templates', { cache: 'no-store' });
       const data = await res.json();
       if (data.error) setError(data.error);
+      if (data.notice) setNotice(data.notice);
+      if (
+        data.integrationStatus === 'connected' ||
+        data.integrationStatus === 'disconnected' ||
+        data.integrationStatus === 'bridge_only'
+      ) {
+        setIntegrationStatus(data.integrationStatus);
+      } else {
+        setIntegrationStatus('unknown');
+      }
       setTemplates(data.templates || []);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
+      setNotice(null);
+      setIntegrationStatus('unknown');
+      setTemplates([]);
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    load();
+    const t = setTimeout(() => {
+      void load();
+    }, 0);
+    return () => clearTimeout(t);
   }, [load]);
 
   return (
@@ -573,7 +920,7 @@ function TemplatesTab({
               Approved Templates
             </h2>
             <p className="text-sm text-gray-500">
-              Templates approved by Meta. Use these for marketing & utility
+              Templates approved by Meta. Use these for marketing and utility
               messages outside the 24-hour window.
             </p>
           </div>
@@ -585,9 +932,31 @@ function TemplatesTab({
           </button>
         </div>
 
+        <div className="bg-white border border-gray-200 rounded-lg p-3 mb-4 text-xs text-gray-600 flex items-center justify-between">
+          <span>
+            Integration:{' '}
+            <strong
+              className={
+                integrationStatus === 'connected'
+                  ? 'text-emerald-700'
+                  : integrationStatus === 'bridge_only'
+                  ? 'text-blue-700'
+                  : integrationStatus === 'disconnected'
+                  ? 'text-rose-700'
+                  : 'text-gray-700'
+              }
+            >
+              {integrationStatus}
+            </strong>
+          </span>
+          <span>
+            Total templates: <strong>{templates.length}</strong>
+          </span>
+        </div>
+
         {loading && (
           <div className="text-center py-12 text-sm text-gray-400">
-            Loading templates…
+            Loading templates...
           </div>
         )}
 
@@ -596,17 +965,24 @@ function TemplatesTab({
             <strong>Note:</strong> {error}
           </div>
         )}
+        {notice && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800 mb-4">
+            <strong>Info:</strong> {notice}
+          </div>
+        )}
 
         {!loading && templates.length === 0 && !error && (
           <div className="text-center py-12 text-sm text-gray-400">
-            No templates found. Create them in Meta Business Manager →
-            WhatsApp → Message Templates.
+            No templates found. Create them in Meta Business Manager {'->'}
+            {' '}WhatsApp {'->'} Message Templates.
           </div>
         )}
 
         <div className="grid gap-3">
           {templates.map((t) => {
-            const body = t.components?.find((c) => c.type === 'BODY');
+            const body = t.components?.find(
+              (c) => (c.type || '').toUpperCase() === 'BODY'
+            );
             return (
               <div
                 key={`${t.name}-${t.language}`}
@@ -660,7 +1036,25 @@ function TemplatesTab({
 }
 
 // ---------- SETUP TAB ----------
-function SetupTab() {
+function SetupTab({
+  showToast,
+}: {
+  showToast: (m: string, t?: 'success' | 'error') => void;
+}) {
+  const [bridgeState, setBridgeState] = useState<{
+    status: 'starting' | 'connected' | 'disconnected' | 'qr_required' | 'error';
+    qrText: string | null;
+    reason: string | null;
+    linkedPhone: string | null;
+    heartbeatAt: string | null;
+    updatedAt: string | null;
+  } | null>(null);
+  const [bridgeLoading, setBridgeLoading] = useState(true);
+  const [bridgeActionLoading, setBridgeActionLoading] = useState<
+    null | 'restart' | 'relink'
+  >(null);
+  const [clockMs, setClockMs] = useState(0);
+
   const webhookUrl =
     typeof window !== 'undefined'
       ? `${window.location.origin}/api/whatsapp/webhook`
@@ -669,9 +1063,197 @@ function SetupTab() {
 
   const copy = (text: string) => navigator.clipboard.writeText(text);
 
+  const loadBridgeState = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `/api/wa-bridge/state?teamId=${encodeURIComponent(TEAM_ID)}`,
+        { cache: 'no-store' }
+      );
+      const data = await res.json();
+      if (res.ok) {
+        setBridgeState(data);
+      }
+    } catch {
+      // Keep last known state; transient network errors are expected.
+    } finally {
+      setBridgeLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const run = () => {
+      void loadBridgeState();
+    };
+    const initial = setTimeout(run, 0);
+    const t = setInterval(run, 5000);
+    return () => {
+      clearTimeout(initial);
+      clearInterval(t);
+    };
+  }, [loadBridgeState]);
+
+  useEffect(() => {
+    const tick = () => {
+      setClockMs(new Date().getTime());
+    };
+    tick();
+    const t = setInterval(tick, 5000);
+    return () => clearInterval(t);
+  }, []);
+
+  const statusLabel =
+    bridgeState?.status === 'connected'
+      ? 'Connected'
+      : bridgeState?.status === 'qr_required'
+      ? 'QR Required'
+      : bridgeState?.status === 'disconnected'
+      ? 'Disconnected'
+      : bridgeState?.status === 'error'
+      ? 'Error'
+      : 'Starting';
+
+  const heartbeatAgeMs = bridgeState?.heartbeatAt
+    ? clockMs - new Date(bridgeState.heartbeatAt).getTime()
+    : null;
+  const bridgeOffline =
+    !bridgeLoading &&
+    typeof heartbeatAgeMs === 'number' &&
+    heartbeatAgeMs > 60_000;
+  const heartbeatAgeLabel =
+    typeof heartbeatAgeMs === 'number'
+      ? `${Math.max(0, Math.floor(heartbeatAgeMs / 1000))}s ago`
+      : null;
+
+  const statusStyles =
+    bridgeOffline
+      ? 'bg-rose-100 text-rose-700'
+      : bridgeState?.status === 'connected'
+      ? 'bg-emerald-100 text-emerald-700'
+      : bridgeState?.status === 'qr_required'
+      ? 'bg-amber-100 text-amber-700'
+      : bridgeState?.status === 'error'
+      ? 'bg-rose-100 text-rose-700'
+      : 'bg-gray-100 text-gray-700';
+
+  const qrPreviewUrl =
+    bridgeState?.qrText && bridgeState.status === 'qr_required'
+      ? `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(
+          bridgeState.qrText
+        )}`
+      : null;
+
+  const sendBridgeAction = async (action: 'restart' | 'relink') => {
+    setBridgeActionLoading(action);
+    try {
+      const res = await fetch('/api/wa-bridge/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ teamId: TEAM_ID, action }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || 'Failed to send bridge action');
+      }
+      showToast(
+        action === 'relink'
+          ? 'Relink requested. QR should appear shortly.'
+          : 'Restart requested. Bridge will reconnect shortly.',
+        'success'
+      );
+      setTimeout(() => {
+        void loadBridgeState();
+      }, 1200);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to send bridge action';
+      showToast(message, 'error');
+    } finally {
+      setBridgeActionLoading(null);
+    }
+  };
+
   return (
     <div className="h-full overflow-y-auto p-6">
       <div className="max-w-3xl mx-auto space-y-4">
+        <div className="bg-white border border-gray-200 rounded-lg p-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-bold text-gray-900">Bridge Link Status</h2>
+            <span className={`text-xs px-2 py-1 rounded-full font-medium ${statusStyles}`}>
+              {bridgeLoading ? 'Checking…' : statusLabel}
+            </span>
+          </div>
+          <p className="text-sm text-gray-500 mt-1">
+            This status comes from the always-on Oracle bridge. If device gets unlinked, scan the QR below to relink.
+          </p>
+          {bridgeOffline && (
+            <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2">
+              <p className="text-xs text-rose-700">
+                Bridge appears offline. Last heartbeat was{' '}
+                {heartbeatAgeLabel || 'unknown'}. Start/restart the bridge process to resume updates.
+              </p>
+            </div>
+          )}
+
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-[240px_1fr] gap-4 items-start">
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 flex items-center justify-center min-h-[240px]">
+              {qrPreviewUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={qrPreviewUrl}
+                  alt="WhatsApp relink QR"
+                  className="w-[220px] h-[220px] rounded bg-white p-1"
+                />
+              ) : (
+                <p className="text-xs text-gray-500 text-center px-3">
+                  QR will appear here automatically when relink is required.
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2 text-sm text-gray-700">
+              <p>
+                <span className="font-medium">Status:</span>{' '}
+                {bridgeLoading ? 'Checking…' : statusLabel}
+              </p>
+              {bridgeState?.reason && (
+                <p>
+                  <span className="font-medium">Reason:</span> {bridgeState.reason}
+                </p>
+              )}
+              {bridgeState?.heartbeatAt && (
+                <p>
+                  <span className="font-medium">Last heartbeat:</span>{' '}
+                  {new Date(bridgeState.heartbeatAt).toLocaleString()}
+                  {heartbeatAgeLabel ? ` (${heartbeatAgeLabel})` : ''}
+                </p>
+              )}
+              <p className="text-xs text-gray-500 pt-2">
+                Open WhatsApp on the linked phone → Linked Devices → Link a Device → scan QR.
+              </p>
+              <div className="pt-2 flex flex-wrap gap-2">
+                <button
+                  onClick={() => sendBridgeAction('restart')}
+                  disabled={Boolean(bridgeActionLoading)}
+                  className="px-3 py-1.5 text-xs font-medium rounded-lg border border-emerald-200 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {bridgeActionLoading === 'restart'
+                    ? 'Restarting...'
+                    : 'Restart Bridge'}
+                </button>
+                <button
+                  onClick={() => sendBridgeAction('relink')}
+                  disabled={Boolean(bridgeActionLoading)}
+                  className="px-3 py-1.5 text-xs font-medium rounded-lg border border-amber-200 text-amber-700 hover:bg-amber-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {bridgeActionLoading === 'relink'
+                    ? 'Requesting QR...'
+                    : 'Force Re-link (New QR)'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div className="bg-white border border-gray-200 rounded-lg p-6">
           <h2 className="text-lg font-bold text-gray-900 mb-1">
             WhatsApp Webhook Configuration
