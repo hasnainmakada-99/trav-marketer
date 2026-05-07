@@ -184,7 +184,7 @@ async function buildReply(params: {
   const packageIntent = isPackageIntent(params.userMessage, params.intent);
   const websiteKnowledge = knowledge.websiteSnippets.length
     ? knowledge.websiteSnippets.map((item, i) => `${i + 1}. ${item}`).join('\n')
-    : `1. Traventions Home — ${WEBSITE_FALLBACK_URL}`;
+    : `1. Traventions Home - ${WEBSITE_FALLBACK_URL}`;
 
   const systemPrompt =
     `${businessConfig?.openaiSystemPrompt || ''}\n\n` +
