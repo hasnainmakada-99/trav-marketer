@@ -1,12 +1,10 @@
 import { Query } from 'node-appwrite';
-import {
-  APPWRITE_DATABASE_ID,
-  getDatabaseClient,
-  listDocuments,
-} from '@/lib/appwrite';
+import { APPWRITE_DATABASE_ID, getDatabaseClient } from '@/lib/appwrite';
 
 const WEBSITE_BASE_URL =
   process.env.TRAVENTIONS_WEBSITE_URL || 'https://traventions-ai.vercel.app';
+
+const SECONDARY_DEFAULT_DATABASE_ID = '696e96950008a6b5cddd';
 
 const PACKAGE_TERMS_REGEX =
   /\b(package|packages|itinerary|trip|tour|price|pricing|budget|offer|day|days|night|nights|inclusions|exclusions)\b/i;
@@ -45,7 +43,6 @@ const STOPWORDS = new Set([
   'can',
   'will',
   'into',
-  'have',
   'has',
   'had',
   'was',
@@ -78,7 +75,18 @@ const PRIORITY_COLLECTIONS = [
   'gbp_posts',
   'gbp_reviews',
   'leads',
+  'trips',
+  'featured_itineraries',
+  'destinations',
+  'bookings',
+  'promotions',
+  'chat_response_templates',
+  'hotel_options',
+  'flight_options',
 ];
+
+const KNOWLEDGE_COLLECTION_NAME_HINT =
+  /(package|trip|itiner|destin|tour|holiday|booking|flight|hotel|promo|travel|visa|insurance|chat_response|support)/i;
 
 type CacheEntry<T> = {
   value: T;
@@ -97,6 +105,11 @@ type ScoredText = {
   hasPackageSignal: boolean;
 };
 
+type CollectionRef = {
+  databaseId: string;
+  collectionId: string;
+};
+
 type TravelKnowledge = {
   databaseSnippets: string[];
   hasPackageData: boolean;
@@ -110,7 +123,7 @@ type TravelKnowledge = {
   };
 };
 
-let collectionCache: CacheEntry<string[]> | null = null;
+let collectionCache: CacheEntry<CollectionRef[]> | null = null;
 let siteCache: CacheEntry<WebsitePage[]> | null = null;
 
 function now() {
@@ -146,6 +159,23 @@ function scoreByKeywords(text: string, keywords: string[]) {
     if (lower.includes(kw)) score += 1;
   }
   return score;
+}
+
+function resolveKnowledgeDatabaseIds() {
+  const envDatabaseIds = (process.env.WA_KNOWLEDGE_DATABASE_IDS || '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+
+  return Array.from(
+    new Set([APPWRITE_DATABASE_ID, SECONDARY_DEFAULT_DATABASE_ID, ...envDatabaseIds])
+  );
+}
+
+function shouldIncludeCollection(collectionId: string) {
+  if (EXCLUDED_COLLECTIONS.has(collectionId)) return false;
+  if (PRIORITY_COLLECTIONS.includes(collectionId)) return true;
+  return KNOWLEDGE_COLLECTION_NAME_HINT.test(collectionId);
 }
 
 function normalizeUrl(url: string): string | null {
@@ -250,31 +280,45 @@ async function crawlWebsitePages(): Promise<WebsitePage[]> {
   return pages;
 }
 
-async function resolveKnowledgeCollections(): Promise<string[]> {
+async function resolveKnowledgeCollections(): Promise<CollectionRef[]> {
   const cached = fromCache(collectionCache);
   if (cached) return cached;
 
   const db = getDatabaseClient();
-  const response = await db.listCollections(APPWRITE_DATABASE_ID);
   const envCollections = (process.env.WA_KNOWLEDGE_COLLECTIONS || '')
     .split(',')
     .map((v) => v.trim())
     .filter(Boolean);
+  const refs: CollectionRef[] = [];
 
-  const discovered = response.collections
-    .map((c) => c.$id)
-    .filter((id) => !EXCLUDED_COLLECTIONS.has(id));
+  for (const databaseId of resolveKnowledgeDatabaseIds()) {
+    try {
+      const response = await db.listCollections(databaseId);
+      const discovered = response.collections
+        .map((c) => c.$id)
+        .filter((id) => shouldIncludeCollection(id));
 
-  const merged = Array.from(
-    new Set([
-      ...envCollections,
-      ...PRIORITY_COLLECTIONS.filter((c) => discovered.includes(c)),
-      ...discovered,
-    ])
+      const mergedForDb = Array.from(
+        new Set([
+          ...envCollections.filter((c) => discovered.includes(c)),
+          ...PRIORITY_COLLECTIONS.filter((c) => discovered.includes(c)),
+          ...discovered,
+        ])
+      );
+
+      for (const collectionId of mergedForDb) {
+        refs.push({ databaseId, collectionId });
+      }
+    } catch {
+      // Skip inaccessible DB and continue.
+    }
+  }
+
+  const deduped = Array.from(
+    new Map(refs.map((r) => [`${r.databaseId}:${r.collectionId}`, r])).values()
   );
-
-  collectionCache = toCache(merged, 5 * 60 * 1000);
-  return merged;
+  collectionCache = toCache(deduped, 5 * 60 * 1000);
+  return deduped;
 }
 
 function stringifyValue(value: unknown): string {
@@ -294,7 +338,7 @@ function stringifyValue(value: unknown): string {
   return '';
 }
 
-function docToSearchText(collectionId: string, doc: Record<string, unknown>) {
+function docToSearchText(databaseId: string, collectionId: string, doc: Record<string, unknown>) {
   const preferredKeys = [
     'title',
     'name',
@@ -352,31 +396,31 @@ function docToSearchText(collectionId: string, doc: Record<string, unknown>) {
   }
 
   if (!chunks.length) return '';
-  return `[${collectionId}] ${chunks.join(' | ')}`.slice(0, 900);
+  return `[${databaseId}.${collectionId}] ${chunks.join(' | ')}`.slice(0, 1000);
 }
 
-async function fetchCollectionDocs(collectionId: string, teamId: string) {
+async function fetchCollectionDocs(databaseId: string, collectionId: string, teamId: string) {
   const baseLimit = Number(process.env.WA_DB_DOC_LIMIT || '80');
   const limit = Number.isFinite(baseLimit) && baseLimit > 0 ? baseLimit : 80;
+  const db = getDatabaseClient();
 
   try {
-    const result = await listDocuments(collectionId, [
+    const result = await db.listDocuments(databaseId, collectionId, [
       Query.equal('teamId', teamId),
       Query.orderDesc('$createdAt'),
       Query.limit(limit),
     ]);
     return result.documents as Array<Record<string, unknown>>;
   } catch {
-    // Collection may not have teamId attribute. Retry without team filter.
     try {
-      const result = await listDocuments(collectionId, [
+      const result = await db.listDocuments(databaseId, collectionId, [
         Query.orderDesc('$createdAt'),
         Query.limit(limit),
       ]);
       return result.documents as Array<Record<string, unknown>>;
     } catch {
       try {
-        const result = await listDocuments(collectionId, [Query.limit(limit)]);
+        const result = await db.listDocuments(databaseId, collectionId, [Query.limit(limit)]);
         return result.documents as Array<Record<string, unknown>>;
       } catch {
         return [];
@@ -449,11 +493,12 @@ export async function loadTravelKnowledge(
   const collectionDocCounts: Record<string, number> = {};
   const scoredDb: ScoredText[] = [];
 
-  for (const collectionId of collections) {
-    const docs = await fetchCollectionDocs(collectionId, teamId);
-    collectionDocCounts[collectionId] = docs.length;
+  for (const ref of collections) {
+    const key = `${ref.databaseId}.${ref.collectionId}`;
+    const docs = await fetchCollectionDocs(ref.databaseId, ref.collectionId, teamId);
+    collectionDocCounts[key] = docs.length;
     for (const doc of docs) {
-      const text = docToSearchText(collectionId, doc);
+      const text = docToSearchText(ref.databaseId, ref.collectionId, doc);
       if (!text) continue;
       const score = scoreByKeywords(text, keywords);
       const hasPackageSignal = PACKAGE_TERMS_REGEX.test(text);
@@ -469,10 +514,7 @@ export async function loadTravelKnowledge(
     return b.score - a.score;
   });
 
-  const uniqueDb = Array.from(
-    new Map(scoredDb.map((item) => [item.text, item])).values()
-  );
-
+  const uniqueDb = Array.from(new Map(scoredDb.map((item) => [item.text, item])).values());
   const dbTop = uniqueDb.slice(0, 12);
   const hasPackageData = dbTop.some((item) => item.hasPackageSignal);
 
@@ -493,7 +535,10 @@ export async function loadTravelKnowledge(
   const topWebsite = scoredPages
     .filter((entry) => entry.score > 0)
     .slice(0, 5)
-    .map((entry) => `${entry.page.title} — ${entry.page.url} — ${entry.page.snippet.slice(0, 180)}`);
+    .map(
+      (entry) =>
+        `${entry.page.title} - ${entry.page.url} - ${entry.page.snippet.slice(0, 180)}`
+    );
 
   return {
     databaseSnippets: dbTop.map((item) => item.text),
@@ -502,7 +547,7 @@ export async function loadTravelKnowledge(
     bestWebsiteTitle: best.title,
     websiteSnippets: topWebsite,
     diagnostics: {
-      collectionsScanned: collections,
+      collectionsScanned: collections.map((c) => `${c.databaseId}.${c.collectionId}`),
       collectionDocCounts,
       crawledPages: websitePages.length,
     },
