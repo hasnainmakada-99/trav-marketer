@@ -5,6 +5,7 @@ import pino from 'pino';
 import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
+  proto,
   useMultiFileAuthState,
 } from '@whiskeysockets/baileys';
 import fs from 'node:fs';
@@ -173,6 +174,19 @@ function getTextFromMessage(message) {
     const title = String(message.listResponseMessage?.title || '').trim();
     return title ? `${title} (${rowId})` : rowId;
   }
+  const nativeParams = message.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson;
+  if (typeof nativeParams === 'string' && nativeParams.trim()) {
+    try {
+      const parsed = JSON.parse(nativeParams);
+      const title = String(parsed?.title || parsed?.display_text || '').trim();
+      const id = String(parsed?.id || parsed?.row_id || '').trim();
+      if (title && id) return `${title} (${id})`;
+      if (title) return title;
+      if (id) return id;
+    } catch {
+      return nativeParams.trim();
+    }
+  }
   return '';
 }
 
@@ -233,9 +247,50 @@ async function sendSupportButtons(sock, jid, headerText, options) {
   const selected = options.slice(0, maxButtons);
 
   // Strategy:
-  // 1) Try template quick-reply buttons (best visual parity with "tap buttons")
-  // 2) Fallback to legacy buttons payload
-  // 3) Fallback to list picker (still interactive, not poll)
+  // 1) Try native-flow quick reply buttons (newer clients)
+  // 2) Try template quick-reply buttons (older clients)
+  // 3) Fallback to legacy buttons payload
+  // 4) Fallback to list picker (still interactive, not poll)
+  try {
+    const quickReplyButtons = selected.slice(0, 3).map((label, index) => ({
+      name: 'quick_reply',
+      buttonParamsJson: JSON.stringify({
+        display_text: label,
+        id: `svc_${index + 1}`,
+      }),
+    }));
+
+    const sentNative = await sock.sendMessage(jid, {
+      viewOnceMessage: {
+        message: {
+          messageContextInfo: {
+            deviceListMetadata: {},
+            deviceListMetadataVersion: 2,
+          },
+          interactiveMessage: proto.Message.InteractiveMessage.create({
+            body: proto.Message.InteractiveMessage.Body.create({
+              text: headerText,
+            }),
+            footer: proto.Message.InteractiveMessage.Footer.create({
+              text: 'Traventions Customer Support',
+            }),
+            nativeFlowMessage:
+              proto.Message.InteractiveMessage.NativeFlowMessage.create({
+                buttons: quickReplyButtons,
+              }),
+          }),
+        },
+      },
+    });
+    rememberBotMessageId(sentNative);
+    console.log(`Sent support menu as native quick-reply buttons to ${jid}`);
+    return sentNative;
+  } catch (nativeError) {
+    console.warn(
+      `Native-flow buttons unavailable for ${jid}: ${nativeError?.message || String(nativeError)}`
+    );
+  }
+
   const templateButtons = selected.slice(0, 3).map((label, index) => ({
     index: index + 1,
     quickReplyButton: {
@@ -251,6 +306,7 @@ async function sendSupportButtons(sock, jid, headerText, options) {
       templateButtons,
     });
     rememberBotMessageId(sentTemplate);
+    console.log(`Sent support menu as template quick-reply buttons to ${jid}`);
     return sentTemplate;
   } catch (templateError) {
     console.warn(
@@ -272,6 +328,7 @@ async function sendSupportButtons(sock, jid, headerText, options) {
       headerType: 1,
     });
     rememberBotMessageId(sentLegacy);
+    console.log(`Sent support menu as legacy buttons to ${jid}`);
     return sentLegacy;
   } catch (legacyError) {
     console.warn(
@@ -292,6 +349,7 @@ async function sendSupportButtons(sock, jid, headerText, options) {
     sections: [{ title: 'Support options', rows }],
   });
   rememberBotMessageId(sentList);
+  console.log(`Sent support menu as list picker to ${jid}`);
   return sentList;
 }
 
