@@ -7,6 +7,7 @@ import { normalizeToWhatsAppMarkdown } from '@/lib/whatsapp-format';
 const BRIDGE_SHARED_SECRET = process.env.BRIDGE_SHARED_SECRET || '';
 const WEBSITE_FALLBACK_URL =
   process.env.TRAVENTIONS_WEBSITE_URL || 'https://traventions-ai.vercel.app';
+const HUMAN_HANDOVER_MINUTES = Number(process.env.WA_HUMAN_HANDOVER_MINUTES || '15');
 
 interface BridgeIncomingBody {
   from?: string;
@@ -117,9 +118,18 @@ async function hasHumanTakeover(teamId: string, phone: string) {
     }
   }
 
-  // Human takeover is active only when latest staff message is newer than latest AI message.
-  // This avoids permanently blocking AI due to old historical staff replies.
-  return latestStaffTs > 0 && latestStaffTs > latestAiTs;
+  // Human takeover is active only when latest staff message is newer than latest AI message
+  // and still within a short active window. This prevents permanent AI suppression.
+  if (!(latestStaffTs > 0 && latestStaffTs > latestAiTs)) {
+    return false;
+  }
+
+  const safeMinutes =
+    Number.isFinite(HUMAN_HANDOVER_MINUTES) && HUMAN_HANDOVER_MINUTES > 0
+      ? HUMAN_HANDOVER_MINUTES
+      : 45;
+  const handoverWindowMs = safeMinutes * 60 * 1000;
+  return Date.now() - latestStaffTs <= handoverWindowMs;
 }
 
 async function loadKnowledgeContext(teamId: string, userMessage: string) {

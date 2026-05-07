@@ -15,6 +15,7 @@ import { normalizeToWhatsAppMarkdown } from '@/lib/whatsapp-format';
 const WEBHOOK_VERIFY_TOKEN = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || 'travai_secure_token_2024';
 const WEBSITE_FALLBACK_URL =
   process.env.TRAVENTIONS_WEBSITE_URL || 'https://traventions-ai.vercel.app';
+const HUMAN_HANDOVER_MINUTES = Number(process.env.WA_HUMAN_HANDOVER_MINUTES || '15');
 
 function isPackageIntent(message: string, intent: string) {
   if (intent === 'booking' || intent === 'inquiry') return true;
@@ -57,7 +58,16 @@ async function hasHumanTakeover(teamId: string, phone: string) {
     }
   }
 
-  return latestStaffTs > 0 && latestStaffTs > latestAiTs;
+  if (!(latestStaffTs > 0 && latestStaffTs > latestAiTs)) {
+    return false;
+  }
+
+  const safeMinutes =
+    Number.isFinite(HUMAN_HANDOVER_MINUTES) && HUMAN_HANDOVER_MINUTES > 0
+      ? HUMAN_HANDOVER_MINUTES
+      : 45;
+  const handoverWindowMs = safeMinutes * 60 * 1000;
+  return Date.now() - latestStaffTs <= handoverWindowMs;
 }
 
 async function buildDatabaseKnowledge(teamId: string, userMessage: string) {
