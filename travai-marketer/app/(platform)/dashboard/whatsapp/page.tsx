@@ -36,6 +36,17 @@ interface Template {
   components?: Array<{ type: string; text?: string; format?: string }>;
 }
 
+interface LocalTemplate {
+  id: string;
+  teamId: string;
+  name: string;
+  body: string;
+  buttons: string[];
+  isActive: boolean;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
 function renderInlineMarkdown(text: string): ReactNode[] {
   const parts: ReactNode[] = [];
   const pattern = /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*\n]+\*|_[^_\n]+_|~[^~\n]+~|https?:\/\/[^\s]+)/g;
@@ -591,16 +602,42 @@ function SendTab({
   const [templateName, setTemplateName] = useState('');
   const [templateParams, setTemplateParams] = useState('');
   const [mode, setMode] = useState<'text' | 'template'>('text');
+  const [templateSource, setTemplateSource] = useState<'local' | 'meta'>('local');
+  const [localTemplateId, setLocalTemplateId] = useState('');
   const [sending, setSending] = useState(false);
   const [templates, setTemplates] = useState<Template[]>([]);
+  const [localTemplates, setLocalTemplates] = useState<LocalTemplate[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [localTemplatesLoading, setLocalTemplatesLoading] = useState(false);
   const [templatesError, setTemplatesError] = useState<string | null>(null);
+  const [localTemplatesError, setLocalTemplatesError] = useState<string | null>(null);
   const [templatesNotice, setTemplatesNotice] = useState<string | null>(null);
   const [integrationStatus, setIntegrationStatus] = useState<
     'connected' | 'disconnected' | 'unknown' | 'bridge_only'
   >('unknown');
 
   const approvedTemplates = templates.filter((t) => t.status === 'APPROVED');
+
+  const loadLocalTemplates = useCallback(async () => {
+    setLocalTemplatesLoading(true);
+    setLocalTemplatesError(null);
+    try {
+      const res = await fetch(
+        `/api/wa-templates/local?teamId=${encodeURIComponent(TEAM_ID)}`,
+        { cache: 'no-store' }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to load local templates');
+      setLocalTemplates(Array.isArray(data.templates) ? data.templates : []);
+    } catch (error) {
+      setLocalTemplatesError(
+        error instanceof Error ? error.message : 'Failed to load local templates'
+      );
+      setLocalTemplates([]);
+    } finally {
+      setLocalTemplatesLoading(false);
+    }
+  }, []);
 
   const loadTemplates = useCallback(async () => {
     setTemplatesLoading(true);
@@ -636,9 +673,15 @@ function SendTab({
   useEffect(() => {
     const t = setTimeout(() => {
       void loadTemplates();
+      void loadLocalTemplates();
     }, 0);
     return () => clearTimeout(t);
-  }, [loadTemplates]);
+  }, [loadTemplates, loadLocalTemplates]);
+
+  useEffect(() => {
+    if (integrationStatus === 'connected') return;
+    setTemplateSource('local');
+  }, [integrationStatus]);
 
   const handleSend = async () => {
     const normalizedPhone = phone.replace(/[^\d]/g, '');
@@ -654,9 +697,15 @@ function SendTab({
       showToast('Message required', 'error');
       return;
     }
-    if (mode === 'template' && !templateName.trim()) {
-      showToast('Template name required', 'error');
-      return;
+    if (mode === 'template') {
+      if (templateSource === 'local' && !localTemplateId.trim()) {
+        showToast('Select a local template', 'error');
+        return;
+      }
+      if (templateSource === 'meta' && !templateName.trim()) {
+        showToast('Template name required', 'error');
+        return;
+      }
     }
 
     setSending(true);
@@ -669,11 +718,16 @@ function SendTab({
       if (mode === 'text') {
         body.message = message.trim();
       } else {
-        body.templateName = templateName.trim();
-        body.templateParams = templateParams
+        const params = templateParams
           .split(',')
           .map((p) => p.trim())
           .filter(Boolean);
+        body.templateParams = params;
+        if (templateSource === 'local') {
+          body.localTemplateId = localTemplateId.trim();
+        } else {
+          body.templateName = templateName.trim();
+        }
       }
 
       const res = await fetch('/api/whatsapp/send', {
@@ -687,6 +741,9 @@ function SendTab({
       showToast('Message sent successfully', 'success');
       setMessage('');
       setTemplateParams('');
+      if (templateSource === 'meta') {
+        setTemplateName('');
+      }
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Failed', 'error');
     } finally {
@@ -761,11 +818,45 @@ function SendTab({
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Template
                   </label>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => void loadLocalTemplates()}
+                      className="text-xs text-emerald-600 hover:text-emerald-700"
+                    >
+                      Refresh local
+                    </button>
+                    <button
+                      onClick={() => void loadTemplates()}
+                      className="text-xs text-emerald-600 hover:text-emerald-700"
+                    >
+                      Refresh Meta
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
                   <button
-                    onClick={() => void loadTemplates()}
-                    className="text-xs text-emerald-600 hover:text-emerald-700"
+                    type="button"
+                    onClick={() => setTemplateSource('local')}
+                    className={`px-3 py-2 rounded-lg text-sm font-medium ${
+                      templateSource === 'local'
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-gray-100 text-gray-700'
+                    }`}
                   >
-                    Refresh templates
+                    Local Templates
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTemplateSource('meta')}
+                    disabled={integrationStatus !== 'connected'}
+                    className={`px-3 py-2 rounded-lg text-sm font-medium ${
+                      templateSource === 'meta'
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-gray-100 text-gray-700'
+                    } disabled:opacity-50`}
+                  >
+                    Meta Templates
                   </button>
                 </div>
 
@@ -774,37 +865,64 @@ function SendTab({
                     {templatesError}
                   </div>
                 )}
+                {localTemplatesError && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
+                    {localTemplatesError}
+                  </div>
+                )}
                 {templatesNotice && (
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-800">
                     {templatesNotice}
                   </div>
                 )}
 
-                <select
-                  value={templateName}
-                  onChange={(e) => setTemplateName(e.target.value)}
-                  disabled={integrationStatus === 'bridge_only'}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                >
-                  <option value="">
-                    {templatesLoading
-                      ? 'Loading templates...'
-                      : integrationStatus === 'bridge_only'
-                      ? 'Template sync unavailable in bridge mode'
-                      : approvedTemplates.length
-                      ? 'Select approved template'
-                      : 'No approved templates found'}
-                  </option>
-                  {approvedTemplates.map((t) => (
-                    <option key={`${t.name}-${t.language}`} value={t.name}>
-                      {t.name} ({t.language})
+                {templateSource === 'local' ? (
+                  <select
+                    value={localTemplateId}
+                    onChange={(e) => setLocalTemplateId(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    <option value="">
+                      {localTemplatesLoading
+                        ? 'Loading local templates...'
+                        : localTemplates.length
+                        ? 'Select local template'
+                        : 'No local template found. Create in Templates tab.'}
                     </option>
-                  ))}
-                </select>
+                    {localTemplates.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                        {t.buttons.length ? ` (${t.buttons.length} button${t.buttons.length > 1 ? 's' : ''})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <select
+                    value={templateName}
+                    onChange={(e) => setTemplateName(e.target.value)}
+                    disabled={integrationStatus !== 'connected'}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    <option value="">
+                      {templatesLoading
+                        ? 'Loading templates...'
+                        : integrationStatus !== 'connected'
+                        ? 'Meta templates unavailable'
+                        : approvedTemplates.length
+                        ? 'Select approved template'
+                        : 'No approved templates found'}
+                    </option>
+                    {approvedTemplates.map((t) => (
+                      <option key={`${t.name}-${t.language}`} value={t.name}>
+                        {t.name} ({t.language})
+                      </option>
+                    ))}
+                  </select>
+                )}
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Template parameters (comma-separated, in order)
+                    Template parameters (comma-separated, in order for {'{{1}}, {{2}} ...'})
                   </label>
                   <input
                     type="text"
@@ -819,7 +937,12 @@ function SendTab({
 
             <button
               onClick={handleSend}
-              disabled={sending || (mode === 'template' && !templateName)}
+              disabled={
+                sending ||
+                (mode === 'template' &&
+                  ((templateSource === 'local' && !localTemplateId) ||
+                    (templateSource === 'meta' && !templateName)))
+              }
               className="w-full px-4 py-2.5 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
             >
               {sending ? 'Sending...' : 'Send Message'}
@@ -849,10 +972,13 @@ function SendTab({
             <p className="text-gray-700">
               Approved templates: <span className="font-medium">{approvedTemplates.length}</span>
             </p>
+            <p className="text-gray-700">
+              Local templates: <span className="font-medium">{localTemplates.length}</span>
+            </p>
             <p className="text-xs text-gray-500 pt-2">
               {integrationStatus === 'bridge_only'
-                ? 'Live chat works in bridge mode. Cloud API templates become available after Meta app/token setup.'
-                : 'If template mode is empty, check Meta token/app and template approvals in Meta Business Manager.'}
+                ? 'Bridge mode active. Use Local Templates with optional button labels; Meta templates require Cloud API connection.'
+                : 'If Meta template mode is empty, check Meta token/app and template approvals in Meta Business Manager.'}
             </p>
           </div>
         </div>
@@ -868,12 +994,38 @@ function TemplatesTab({
   showToast: (m: string, t?: 'success' | 'error') => void;
 }) {
   const [templates, setTemplates] = useState<Template[]>([]);
+  const [localTemplates, setLocalTemplates] = useState<LocalTemplate[]>([]);
   const [loading, setLoading] = useState(true);
+  const [localLoading, setLocalLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [localError, setLocalError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [localName, setLocalName] = useState('');
+  const [localBody, setLocalBody] = useState('');
+  const [localButtons, setLocalButtons] = useState('');
+  const [savingLocal, setSavingLocal] = useState(false);
   const [integrationStatus, setIntegrationStatus] = useState<
     'connected' | 'disconnected' | 'unknown' | 'bridge_only'
   >('unknown');
+
+  const loadLocal = useCallback(async () => {
+    setLocalLoading(true);
+    setLocalError(null);
+    try {
+      const res = await fetch(
+        `/api/wa-templates/local?teamId=${encodeURIComponent(TEAM_ID)}`,
+        { cache: 'no-store' }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed');
+      setLocalTemplates(Array.isArray(data.templates) ? data.templates : []);
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : 'Failed');
+      setLocalTemplates([]);
+    } finally {
+      setLocalLoading(false);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -907,128 +1059,298 @@ function TemplatesTab({
   useEffect(() => {
     const t = setTimeout(() => {
       void load();
+      void loadLocal();
     }, 0);
     return () => clearTimeout(t);
-  }, [load]);
+  }, [load, loadLocal]);
+
+  const saveLocalTemplate = async () => {
+    const name = localName.trim();
+    const body = localBody.trim();
+    const buttons = localButtons
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean)
+      .slice(0, 3);
+
+    if (!name || !body) {
+      showToast('Template name and body are required', 'error');
+      return;
+    }
+
+    setSavingLocal(true);
+    try {
+      const res = await fetch('/api/wa-templates/local', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teamId: TEAM_ID,
+          name,
+          body,
+          buttons,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to save');
+
+      showToast('Local template saved', 'success');
+      setLocalName('');
+      setLocalBody('');
+      setLocalButtons('');
+      await loadLocal();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed to save template', 'error');
+    } finally {
+      setSavingLocal(false);
+    }
+  };
+
+  const deleteLocalTemplate = async (id: string) => {
+    try {
+      const res = await fetch(`/api/wa-templates/local?id=${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to delete');
+      showToast('Local template deleted', 'success');
+      await loadLocal();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed to delete template', 'error');
+    }
+  };
 
   return (
     <div className="h-full overflow-y-auto p-6">
-      <div className="max-w-4xl mx-auto">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="text-lg font-bold text-gray-900">
-              Approved Templates
-            </h2>
-            <p className="text-sm text-gray-500">
-              Templates approved by Meta. Use these for marketing and utility
-              messages outside the 24-hour window.
-            </p>
-          </div>
-          <button
-            onClick={load}
-            className="px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-50 rounded-lg"
-          >
-            Refresh
-          </button>
-        </div>
-
-        <div className="bg-white border border-gray-200 rounded-lg p-3 mb-4 text-xs text-gray-600 flex items-center justify-between">
-          <span>
-            Integration:{' '}
-            <strong
-              className={
-                integrationStatus === 'connected'
-                  ? 'text-emerald-700'
-                  : integrationStatus === 'bridge_only'
-                  ? 'text-blue-700'
-                  : integrationStatus === 'disconnected'
-                  ? 'text-rose-700'
-                  : 'text-gray-700'
-              }
+      <div className="max-w-5xl mx-auto space-y-6">
+        <div className="bg-white border border-gray-200 rounded-lg p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">Local Bridge Templates</h2>
+              <p className="text-sm text-gray-500">
+                Create your own templates with optional quick buttons (up to 3) for bridge mode.
+              </p>
+            </div>
+            <button
+              onClick={() => void loadLocal()}
+              className="px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-50 rounded-lg"
             >
-              {integrationStatus}
-            </strong>
-          </span>
-          <span>
-            Total templates: <strong>{templates.length}</strong>
-          </span>
+              Refresh local
+            </button>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Template name</label>
+                <input
+                  value={localName}
+                  onChange={(e) => setLocalName(e.target.value)}
+                  placeholder="welcome_support_menu"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Message body</label>
+                <textarea
+                  value={localBody}
+                  onChange={(e) => setLocalBody(e.target.value)}
+                  rows={7}
+                  placeholder={"Welcome to Traventions, {{1}}!\nPlease choose a service."}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Button labels (comma-separated, max 3)
+                </label>
+                <input
+                  value={localButtons}
+                  onChange={(e) => setLocalButtons(e.target.value)}
+                  placeholder="Hotel, Holiday Package, Flights"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+              <button
+                onClick={() => void saveLocalTemplate()}
+                disabled={savingLocal}
+                className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {savingLocal ? 'Saving...' : 'Save Local Template'}
+              </button>
+              {localError && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
+                  {localError}
+                </div>
+              )}
+            </div>
+
+            <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
+              <p className="text-xs font-semibold text-gray-500 mb-2">Live Preview</p>
+              <div className="bg-white border border-gray-200 rounded-lg p-3 text-sm text-gray-800 space-y-3">
+                <div className="whitespace-pre-wrap">
+                  {localBody.trim() || 'Template body preview appears here...'}
+                </div>
+                <div className="space-y-2">
+                  {(localButtons
+                    .split(',')
+                    .map((v) => v.trim())
+                    .filter(Boolean)
+                    .slice(0, 3)).map((btn, idx) => (
+                    <div
+                      key={`${btn}-${idx}`}
+                      className="rounded-md border border-emerald-200 bg-emerald-50 text-emerald-700 px-3 py-2 text-xs font-medium"
+                    >
+                      {btn}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-5">
+            <h3 className="text-sm font-semibold text-gray-900 mb-2">
+              Saved Local Templates ({localTemplates.length})
+            </h3>
+            {localLoading ? (
+              <p className="text-sm text-gray-400">Loading local templates...</p>
+            ) : localTemplates.length === 0 ? (
+              <p className="text-sm text-gray-400">No local templates yet.</p>
+            ) : (
+              <div className="grid gap-3">
+                {localTemplates.map((t) => (
+                  <div
+                    key={t.id}
+                    className="border border-gray-200 rounded-lg p-3 bg-white"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-900">{t.name}</h4>
+                        <p className="text-xs text-gray-500 mt-1">
+                          Buttons: {t.buttons.length ? t.buttons.join(', ') : 'none'}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => void deleteLocalTemplate(t.id)}
+                        className="text-xs text-rose-600 hover:text-rose-700"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                    <p className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">{t.body}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
-        {loading && (
-          <div className="text-center py-12 text-sm text-gray-400">
-            Loading templates...
+        <div className="bg-white border border-gray-200 rounded-lg p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">Meta Approved Templates</h2>
+              <p className="text-sm text-gray-500">
+                Cloud API templates approved by Meta.
+              </p>
+            </div>
+            <button
+              onClick={load}
+              className="px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-50 rounded-lg"
+            >
+              Refresh Meta
+            </button>
           </div>
-        )}
 
-        {error && (
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800 mb-4">
-            <strong>Note:</strong> {error}
-          </div>
-        )}
-        {notice && (
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800 mb-4">
-            <strong>Info:</strong> {notice}
-          </div>
-        )}
-
-        {!loading && templates.length === 0 && !error && (
-          <div className="text-center py-12 text-sm text-gray-400">
-            No templates found. Create them in Meta Business Manager {'->'}
-            {' '}WhatsApp {'->'} Message Templates.
-          </div>
-        )}
-
-        <div className="grid gap-3">
-          {templates.map((t) => {
-            const body = t.components?.find(
-              (c) => (c.type || '').toUpperCase() === 'BODY'
-            );
-            return (
-              <div
-                key={`${t.name}-${t.language}`}
-                className="bg-white border border-gray-200 rounded-lg p-4"
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 mb-4 text-xs text-gray-600 flex items-center justify-between">
+            <span>
+              Integration:{' '}
+              <strong
+                className={
+                  integrationStatus === 'connected'
+                    ? 'text-emerald-700'
+                    : integrationStatus === 'bridge_only'
+                    ? 'text-blue-700'
+                    : integrationStatus === 'disconnected'
+                    ? 'text-rose-700'
+                    : 'text-gray-700'
+                }
               >
-                <div className="flex items-start justify-between mb-2">
-                  <div>
-                    <h3 className="font-semibold text-gray-900 text-sm">
-                      {t.name}
-                    </h3>
-                    <div className="flex gap-2 mt-1">
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
-                        {t.language}
-                      </span>
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
-                        {t.category}
-                      </span>
-                      <span
-                        className={`text-xs px-2 py-0.5 rounded-full ${
-                          t.status === 'APPROVED'
-                            ? 'bg-emerald-100 text-emerald-700'
-                            : 'bg-amber-100 text-amber-700'
-                        }`}
-                      >
-                        {t.status}
-                      </span>
+                {integrationStatus}
+              </strong>
+            </span>
+            <span>
+              Total Meta templates: <strong>{templates.length}</strong>
+            </span>
+          </div>
+
+          {loading && <div className="text-center py-6 text-sm text-gray-400">Loading templates...</div>}
+          {error && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800 mb-4">
+              <strong>Note:</strong> {error}
+            </div>
+          )}
+          {notice && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800 mb-4">
+              <strong>Info:</strong> {notice}
+            </div>
+          )}
+
+          {!loading && templates.length === 0 && !error && (
+            <div className="text-center py-8 text-sm text-gray-400">
+              No Meta templates found. Create them in Meta Business Manager {'->'} WhatsApp {'->'} Message Templates.
+            </div>
+          )}
+
+          <div className="grid gap-3">
+            {templates.map((t) => {
+              const body = t.components?.find(
+                (c) => (c.type || '').toUpperCase() === 'BODY'
+              );
+              return (
+                <div
+                  key={`${t.name}-${t.language}`}
+                  className="border border-gray-200 rounded-lg p-4"
+                >
+                  <div className="flex items-start justify-between mb-2">
+                    <div>
+                      <h3 className="font-semibold text-gray-900 text-sm">{t.name}</h3>
+                      <div className="flex gap-2 mt-1">
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
+                          {t.language}
+                        </span>
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                          {t.category}
+                        </span>
+                        <span
+                          className={`text-xs px-2 py-0.5 rounded-full ${
+                            t.status === 'APPROVED'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-amber-100 text-amber-700'
+                          }`}
+                        >
+                          {t.status}
+                        </span>
+                      </div>
                     </div>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(t.name);
+                        showToast(`Copied: ${t.name}`, 'success');
+                      }}
+                      className="text-xs text-emerald-600 hover:text-emerald-700"
+                    >
+                      Copy name
+                    </button>
                   </div>
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(t.name);
-                      showToast(`Copied: ${t.name}`, 'success');
-                    }}
-                    className="text-xs text-emerald-600 hover:text-emerald-700"
-                  >
-                    Copy name
-                  </button>
+                  {body?.text && (
+                    <p className="text-sm text-gray-700 bg-gray-50 rounded p-2 mt-2 whitespace-pre-wrap">
+                      {body.text}
+                    </p>
+                  )}
                 </div>
-                {body?.text && (
-                  <p className="text-sm text-gray-700 bg-gray-50 rounded p-2 mt-2 whitespace-pre-wrap">
-                    {body.text}
-                  </p>
-                )}
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>

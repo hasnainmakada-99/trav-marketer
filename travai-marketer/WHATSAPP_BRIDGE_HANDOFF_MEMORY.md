@@ -1,6 +1,6 @@
 ﻿# WhatsApp Bridge Handoff Memory
 
-Last updated: 2026-05-07 (buttons compatibility update)
+Last updated: 2026-05-07 (local template + INR pricing update)
 
 ## 0) Latest Hotfix Notes (2026-05-07)
 
@@ -20,6 +20,14 @@ Last updated: 2026-05-07 (buttons compatibility update)
    - `templateButtonReplyMessage`
    - `listResponseMessage`
    - `interactiveResponseMessage.nativeFlowResponseMessage.paramsJson`
+7. Added local template system for bridge mode:
+   - API: `GET/POST/PUT/DELETE /api/wa-templates/local`
+   - Backed by Appwrite collection `wa_local_templates` (auto-created)
+   - Supports message body + up to 3 button labels + preview in dashboard
+   - Send flow can use `localTemplateId` and bridge action `send_template`
+8. Added INR pricing enforcement in WA bridge AI route:
+   - Prompt now requires INR-only currency and DB-grounded pricing
+   - USD/$ outputs are normalized to INR in post-processing safeguard
 
 ## 1) Current Goal and Product Behavior
 

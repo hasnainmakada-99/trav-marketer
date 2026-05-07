@@ -556,6 +556,51 @@ async function pollControlCommands() {
       return;
     }
 
+    if (action === 'send_template') {
+      const payload = command.payload || {};
+      const phone = String(payload.phone || '').replace(/[^\d]/g, '');
+      const message = String(payload.message || '').trim();
+      const buttonLabels = Array.isArray(payload.buttons)
+        ? payload.buttons
+            .map((v) => String(v || '').trim())
+            .filter(Boolean)
+            .slice(0, 3)
+        : [];
+
+      if (!phone || !message) {
+        await ackCommand(command.id, 'failed', 'send_template missing phone/message');
+        return;
+      }
+      if (!activeSock || latestBridgeStatus !== 'connected') {
+        await ackCommand(command.id, 'failed', 'Bridge is not connected');
+        return;
+      }
+
+      const jid = toDirectJid(phone);
+      try {
+        await sendTypingAndText(activeSock, jid, message);
+        if (buttonLabels.length > 0) {
+          await sendSupportButtons(
+            activeSock,
+            jid,
+            'Please tap one option below to continue:',
+            buttonLabels
+          );
+        }
+        await ackCommand(command.id, 'completed', `Sent template to ${phone}`);
+        console.log(
+          `Bridge sent template message to ${phone}: ${message.slice(0, 80)} (buttons=${buttonLabels.length})`
+        );
+      } catch (sendError) {
+        await ackCommand(
+          command.id,
+          'failed',
+          sendError?.message || 'Failed to send template'
+        );
+      }
+      return;
+    }
+
     await ackCommand(command.id, 'failed', `Unsupported action: ${action}`);
   } catch (error) {
     const msg = error?.response?.data

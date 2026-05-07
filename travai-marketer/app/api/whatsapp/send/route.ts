@@ -25,6 +25,37 @@ async function waitForBridgeCommandResult(commandId: string, timeoutMs = 6000) {
   return { status: 'pending', message: null };
 }
 
+function parseButtons(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((v) => String(v || '').trim())
+      .filter(Boolean)
+      .slice(0, 3);
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      return parseButtons(parsed);
+    } catch {
+      return raw
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean)
+        .slice(0, 3);
+    }
+  }
+  return [];
+}
+
+function applyTemplateParams(text: string, params: string[]) {
+  if (!text) return '';
+  return text.replace(/\{\{\s*(\d+)\s*\}\}/g, (_, indexText: string) => {
+    const index = Number(indexText) - 1;
+    if (!Number.isFinite(index) || index < 0) return '';
+    return params[index] || '';
+  });
+}
+
 /**
  * POST /api/whatsapp/send
  * Send a WhatsApp message to a customer
@@ -38,12 +69,13 @@ export async function POST(request: NextRequest) {
       message,
       templateName,
       templateParams,
+      localTemplateId,
     } = body;
 
     // Validate required fields
-    if (!phone || (!message && !templateName)) {
+    if (!phone || (!message && !templateName && !localTemplateId)) {
       return NextResponse.json(
-        { error: 'Missing required fields: phone and message/templateName' },
+        { error: 'Missing required fields: phone and message/templateName/localTemplateId' },
         { status: 400 }
       );
     }
@@ -51,7 +83,116 @@ export async function POST(request: NextRequest) {
     const bridgeModeEnabled = Boolean(process.env.BRIDGE_SHARED_SECRET);
     const normalizedPhone = String(phone || '').replace(/[^\d]/g, '');
     const normalizedMessage = String(message || '').trim();
+    const normalizedParams = Array.isArray(templateParams)
+      ? templateParams.map((p: unknown) => String(p || '').trim()).filter(Boolean)
+      : [];
     const teamId = body.teamId || 'system';
+
+    if (localTemplateId && bridgeModeEnabled) {
+      const localTemplate = (await getDocument(
+        'wa_local_templates',
+        String(localTemplateId)
+      )) as {
+        teamId?: string;
+        name?: string;
+        body?: string;
+        buttons?: string | null;
+      };
+
+      if (!localTemplate?.body) {
+        return NextResponse.json({ error: 'Local template not found' }, { status: 404 });
+      }
+      if (localTemplate.teamId && localTemplate.teamId !== teamId) {
+        return NextResponse.json(
+          { error: 'Local template team mismatch' },
+          { status: 403 }
+        );
+      }
+
+      const renderedBody = applyTemplateParams(
+        String(localTemplate.body || ''),
+        normalizedParams
+      ).trim();
+      const buttonLabels = parseButtons(localTemplate.buttons || null)
+        .map((btn) => applyTemplateParams(btn, normalizedParams).trim())
+        .filter(Boolean)
+        .slice(0, 3);
+
+      if (!renderedBody) {
+        return NextResponse.json(
+          { error: 'Rendered local template body is empty' },
+          { status: 400 }
+        );
+      }
+
+      const controlUrl = new URL('/api/wa-bridge/control', request.url);
+      const controlRes = await fetch(controlUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teamId,
+          action: 'send_template',
+          payload: {
+            phone: normalizedPhone,
+            message: renderedBody,
+            buttons: buttonLabels,
+            customerId: customerId || 'manual',
+          },
+        }),
+      });
+      const controlData = await controlRes.json();
+      if (!controlRes.ok) {
+        return NextResponse.json(
+          { error: controlData?.error || 'Failed to queue local template send' },
+          { status: 400 }
+        );
+      }
+      const commandId = String(controlData?.commandId || '');
+      const commandResult = commandId
+        ? await waitForBridgeCommandResult(commandId, 7000)
+        : { status: 'pending', message: null };
+      if (commandResult.status === 'failed') {
+        return NextResponse.json(
+          {
+            error:
+              commandResult.message ||
+              'Bridge failed to send local template. Restart bridge and try again.',
+          },
+          { status: 400 }
+        );
+      }
+
+      try {
+        await createDocument('conversations', {
+          teamId,
+          customerId: customerId || 'manual',
+          phone: normalizedPhone,
+          role: 'assistant',
+          message: renderedBody,
+          messageType: 'template',
+          sentBy: 'staff',
+          metaMessageId: commandId || null,
+          deliveryStatus:
+            commandResult.status === 'completed' ? 'bridged' : 'queued',
+          createdAt: new Date().toISOString(),
+        });
+      } catch (dbError) {
+        console.error('Failed to save local template message to database:', dbError);
+      }
+
+      return NextResponse.json(
+        {
+          success: true,
+          mode: 'bridge_local_template',
+          queued: commandResult.status !== 'completed',
+          commandId: commandId || null,
+          phone: normalizedPhone,
+          status: commandResult.status,
+          timestamp: new Date().toISOString(),
+        },
+        { status: 200 }
+      );
+    }
 
     // Bridge mode for text sends (dashboard/live chat) so it works with WA Web linked number.
     if (!templateName && bridgeModeEnabled) {

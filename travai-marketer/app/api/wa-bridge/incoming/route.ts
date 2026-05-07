@@ -41,7 +41,7 @@ function mapQuickMenuSelectionToIntentText(text: string) {
   const normalized = text.trim().toLowerCase();
   const compact = normalized.replace(/\s+/g, ' ');
   if (compact === '1' || compact.includes('svc_1') || compact.includes('hotel')) {
-    return 'Customer selected Hotel. Provide concise hotel assistance options, price ranges, and next steps.';
+    return 'Customer selected Hotel. Ask destination and budget in INR. Use exact database pricing only; if missing, ask clarifying questions instead of inventing ranges.';
   }
   if (
     compact === '2' ||
@@ -61,6 +61,14 @@ function mapQuickMenuSelectionToIntentText(text: string) {
     return 'Customer selected Booking Status. Ask for booking reference and registered phone/email.';
   }
   return null;
+}
+
+function enforceInrReply(text: string) {
+  let out = text;
+  out = out.replace(/\bUSD\b/gi, 'INR');
+  out = out.replace(/\$(\s?\d)/g, 'INR $1');
+  out = out.replace(/₹\s*/g, 'INR ');
+  return out;
 }
 
 function resolveTeamId(preferred?: string) {
@@ -199,6 +207,11 @@ If user asks for packages/itineraries/pricing:
 - First use database knowledge below.
 - If DB package data is missing, still provide a practical sample itinerary based on user budget/days/destination.
 - After answering, include the most relevant page link from the website index.
+Currency and pricing rules:
+- Currency must be INR only.
+- Do not mention USD or dollar symbols.
+- Use exact numeric pricing from database snippets when available.
+- If exact DB pricing is not found, explicitly say pricing is on request and ask follow-up questions.
 Keep tone warm, concise, and practical.
 Use only WhatsApp-supported formatting:
 - Bold: *text*
@@ -251,20 +264,21 @@ ${websiteKnowledge}`.trim();
   const quickSelectionPrompt = mapQuickMenuSelectionToIntentText(params.userMessage);
   const effectiveUserMessage = quickSelectionPrompt || params.userMessage;
   const response = await getChatResponse(effectiveUserMessage, systemPrompt, history);
+  const inrSafeResponse = enforceInrReply(response);
   if (packageIntent) {
     const preferredUrl = knowledge.bestWebsiteUrl || WEBSITE_FALLBACK_URL;
-    const alreadyHasUrl = response.includes(preferredUrl);
+    const alreadyHasUrl = inrSafeResponse.includes(preferredUrl);
     if (!alreadyHasUrl) {
       return {
         reply: normalizeToWhatsAppMarkdown(
-          `${response}\n\nFor latest live packages and booking, visit ${preferredUrl}.`
+          `${inrSafeResponse}\n\nFor latest live packages and booking, visit ${preferredUrl}.`
         ),
         quickMenu: false,
       };
     }
   }
   return {
-    reply: normalizeToWhatsAppMarkdown(response),
+    reply: normalizeToWhatsAppMarkdown(inrSafeResponse),
     quickMenu: false,
   };
 }

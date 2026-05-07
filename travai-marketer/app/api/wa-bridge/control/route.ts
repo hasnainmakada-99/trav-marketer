@@ -10,7 +10,7 @@ import {
 
 const BRIDGE_SHARED_SECRET = process.env.BRIDGE_SHARED_SECRET || '';
 const BRIDGE_COMMANDS_COLLECTION = 'bridge_commands';
-const VALID_ACTIONS = new Set(['restart', 'relink', 'send_text']);
+const VALID_ACTIONS = new Set(['restart', 'relink', 'send_text', 'send_template']);
 const VALID_STATUSES = new Set(['pending', 'executing', 'completed', 'failed']);
 
 interface CreateCommandBody {
@@ -20,6 +20,7 @@ interface CreateCommandBody {
     phone?: string;
     message?: string;
     customerId?: string;
+    buttons?: string[];
   } | null;
 }
 
@@ -301,14 +302,21 @@ export async function POST(request: NextRequest) {
     const now = new Date().toISOString();
     const payloadObj = body.payload || null;
 
-    if (action === 'send_text') {
+    if (action === 'send_text' || action === 'send_template') {
       const phone = payloadObj?.phone?.trim() || '';
       const text = payloadObj?.message?.trim() || '';
       if (!phone || !text) {
-        return NextResponse.json(
-          { error: 'send_text requires payload.phone and payload.message' },
-          { status: 400 }
-        );
+        return NextResponse.json({
+          error: `${action} requires payload.phone and payload.message`,
+        }, { status: 400 });
+      }
+      if (action === 'send_template' && Array.isArray(payloadObj?.buttons)) {
+        const valid = payloadObj.buttons.every((btn) => String(btn || '').trim().length > 0);
+        if (!valid || payloadObj.buttons.length > 3) {
+          return NextResponse.json({
+            error: 'send_template payload.buttons must be 1-3 non-empty labels',
+          }, { status: 400 });
+        }
       }
     }
 
