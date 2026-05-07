@@ -1,6 +1,25 @@
-# WhatsApp Bridge Handoff Memory
+﻿# WhatsApp Bridge Handoff Memory
 
-Last updated: 2026-05-07
+Last updated: 2026-05-07 (buttons compatibility update)
+
+## 0) Latest Hotfix Notes (2026-05-07)
+
+1. Poll menu was removed from bridge quick-menu flow.
+2. Quick-menu send now prioritizes low-level hydrated template quick-reply buttons via `relayMessage`.
+3. Quick menu in button mode is capped to 3 tap options:
+   - `1. Hotel`
+   - `2. Holiday Package`
+   - `3. Flights`
+4. Additional services are still supported by typed intent:
+   - `Airport Transfer`
+   - `Booking Status`
+5. Bridge fallback chain:
+   - Hydrated template buttons -> native flow buttons -> template buttons -> legacy buttons -> numbered text.
+6. Incoming parser now supports:
+   - `buttonsResponseMessage`
+   - `templateButtonReplyMessage`
+   - `listResponseMessage`
+   - `interactiveResponseMessage.nativeFlowResponseMessage.paramsJson`
 
 ## 1) Current Goal and Product Behavior
 
@@ -52,7 +71,8 @@ Expected flow:
 2. Auto-expiry:
    - Handover suppression expires after `WA_HUMAN_HANDOVER_MINUTES`.
 3. Greeting behavior:
-   - Greeting returns Traventions welcome + quick service menu.
+   - Greeting returns Traventions welcome + 3-button quick service menu.
+   - Non-button services are collected via typed text.
 4. Website + DB fallback:
    - AI uses Appwrite-derived knowledge first; if missing, routes user to best matching website page.
 5. WhatsApp markdown normalization:
@@ -68,12 +88,9 @@ Already on `main`:
 4. `42b850a` - multi-Appwrite DB knowledge read.
 5. `35c7882` - support menu, typing indicator, manual handover capture.
 6. `371bed3` - support menu fallback text cleanup.
-
-Current working changes (not yet committed when this file was written):
-
-1. Bridge quick menu switched to **interactive buttons** (not poll).
-2. Incoming parser now supports button/list reply payloads.
-3. API quick-menu mapping expanded to handle button IDs (`svc_1..svc_5`).
+7. `a675c8d` - button mapping + handoff memory file.
+8. `b034b7a` - interactive button-first quick menu delivery.
+9. `acafeac` - improved cross-client quick-reply button delivery.
 
 ## 5) Files You Will Touch Most
 
@@ -167,10 +184,11 @@ Templates tab:
 
 ## 9) Current Known Limitations / Notes
 
-1. WhatsApp interactive buttons in Web-automation libraries can vary by client/version.
-2. Template cards/buttons shown in screenshots from Meta-managed flows are not identical to Baileys-level structures.
-3. “Send buttons” APIs in the ecosystem are partially deprecated/unstable; plain text fallback is still required for reliability.
-4. Bridge and Next app clocks/timezone differences can affect “recent handover” windows if system time drifts.
+1. WhatsApp interactive button rendering varies by client/version/account type.
+2. Cloud API button UI and WhatsApp Web-automation UI are not always identical.
+3. Reliable quick-reply button count is typically max 3 in this route.
+4. Text fallback remains mandatory for reliability.
+5. Bridge and Next app clock drift can affect recent handover windows.
 
 ## 10) Troubleshooting Matrix
 
@@ -220,9 +238,8 @@ Templates tab:
 ## 12) Quick Continuation Checklist
 
 1. Pull latest `main`.
-2. Confirm this branch includes button-mode commit.
+2. Confirm branch includes latest button compatibility commits.
 3. Run local build.
 4. Push + deploy Vercel.
 5. Sync bridge to Oracle + restart PM2.
 6. Test with two phones (customer and linked business account).
-

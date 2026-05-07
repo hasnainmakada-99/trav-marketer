@@ -5,6 +5,7 @@ import pino from 'pino';
 import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
+  generateWAMessageFromContent,
   proto,
   useMultiFileAuthState,
 } from '@whiskeysockets/baileys';
@@ -217,6 +218,11 @@ function sleep(ms) {
 function rememberBotMessageId(response) {
   const id = response?.key?.id;
   if (!id) return;
+  rememberBotMessageIdById(id);
+}
+
+function rememberBotMessageIdById(id) {
+  if (!id) return;
   botSentMessageIds.add(id);
   if (botSentMessageIds.size > 2000) {
     const [first] = botSentMessageIds;
@@ -243,14 +249,45 @@ async function sendTypingAndText(sock, jid, text) {
 }
 
 async function sendSupportButtons(sock, jid, headerText, options) {
-  const maxButtons = Math.min(5, Math.max(1, options.length));
+  const maxButtons = Math.min(3, Math.max(1, options.length));
   const selected = options.slice(0, maxButtons);
 
   // Strategy:
-  // 1) Try native-flow quick reply buttons (newer clients)
-  // 2) Try template quick-reply buttons (older clients)
-  // 3) Fallback to legacy buttons payload
-  // 4) Fallback to list picker (still interactive, not poll)
+  // 1) Try hydrated template quick-reply buttons via relayMessage (most reliable for this style)
+  // 2) Try native-flow quick reply buttons
+  // 3) Try template quick-reply buttons
+  // 4) Fallback to numbered text prompt
+  try {
+    const hydratedButtons = selected.map((label, index) => ({
+      index: index + 1,
+      quickReplyButton: {
+        displayText: label,
+        id: `svc_${index + 1}`,
+      },
+    }));
+
+    const content = proto.Message.fromObject({
+      templateMessage: {
+        hydratedTemplate: {
+          hydratedContentText: headerText,
+          hydratedFooterText: 'Traventions Customer Support',
+          hydratedButtons,
+        },
+      },
+    });
+    const waMsg = generateWAMessageFromContent(jid, content, {
+      userJid: sock.user?.id || '',
+    });
+    await sock.relayMessage(jid, waMsg.message, { messageId: waMsg.key.id });
+    rememberBotMessageIdById(waMsg.key.id);
+    console.log(`Sent support menu as hydrated template buttons to ${jid}`);
+    return { key: { id: waMsg.key.id } };
+  } catch (hydratedError) {
+    console.warn(
+      `Hydrated template buttons unavailable for ${jid}: ${hydratedError?.message || String(hydratedError)}`
+    );
+  }
+
   try {
     const quickReplyButtons = selected.slice(0, 3).map((label, index) => ({
       name: 'quick_reply',
@@ -291,7 +328,7 @@ async function sendSupportButtons(sock, jid, headerText, options) {
     );
   }
 
-  const templateButtons = selected.slice(0, 3).map((label, index) => ({
+  const templateButtons = selected.map((label, index) => ({
     index: index + 1,
     quickReplyButton: {
       displayText: label,
@@ -336,21 +373,13 @@ async function sendSupportButtons(sock, jid, headerText, options) {
     );
   }
 
-  const rows = selected.map((label, index) => ({
-    title: label,
-    rowId: `svc_${index + 1}`,
-    description: `Select ${label}`,
-  }));
-  const sentList = await sock.sendMessage(jid, {
-    text: headerText,
-    footer: 'Traventions Customer Support',
-    title: 'Choose a service',
-    buttonText: 'Select service',
-    sections: [{ title: 'Support options', rows }],
+  const fallback = selected.map((label, idx) => `${idx + 1}. ${label}`).join('\n');
+  const sentText = await sock.sendMessage(jid, {
+    text: `${headerText}\n\n${fallback}\n\nReply with 1/2/3`,
   });
-  rememberBotMessageId(sentList);
-  console.log(`Sent support menu as list picker to ${jid}`);
-  return sentList;
+  rememberBotMessageId(sentText);
+  console.log(`Sent support menu as numbered text fallback to ${jid}`);
+  return sentText;
 }
 
 async function askAiForReply(payload) {
@@ -728,7 +757,7 @@ async function startBridge() {
             await sendTypingAndText(
               sock,
               jid,
-              'If buttons are not visible on your phone, reply with 1/2/3/4/5.'
+              'If buttons are not visible on your phone, reply with 1/2/3 or type your service (Airport Transfer / Booking Status).'
             );
           } catch (pollError) {
             console.warn(

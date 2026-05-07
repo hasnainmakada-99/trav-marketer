@@ -28,8 +28,6 @@ const SUPPORT_MENU_OPTIONS = [
   'Hotel',
   'Holiday Package',
   'Flights',
-  'Airport Transfer',
-  'Booking Status',
 ] as const;
 
 function isGreetingMessage(text: string) {
@@ -241,7 +239,7 @@ ${websiteKnowledge}`.trim();
   if (isGreetingMessage(params.userMessage)) {
     const namePart = params.customerName ? ` ${params.customerName}` : '';
     const quickMenuReply = normalizeToWhatsAppMarkdown(
-      `Welcome to Traventions!${namePart}\n\nI'm your travel support assistant.\nPlease choose a service:\n1. Hotel\n2. Holiday Package\n3. Flights\n4. Airport Transfer\n5. Booking Status`
+      `Welcome to Traventions!${namePart}\n\nI'm your travel support assistant.\nPlease choose a service:\n1. Hotel\n2. Holiday Package\n3. Flights\n\nFor Airport Transfer or Booking Status, just type it directly.`
     );
     return {
       reply: quickMenuReply,
