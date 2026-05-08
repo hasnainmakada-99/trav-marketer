@@ -790,26 +790,9 @@ async function startBridge() {
           continue;
         }
 
+        // Text-only mode: avoid interactive/template payloads that can appear as
+        // "Waiting for this message" on some WhatsApp clients.
         await sendTypingAndText(sock, jid, ai.reply.trim());
-        if (ai.quickMenu && Array.isArray(ai.quickMenuOptions) && ai.quickMenuOptions.length) {
-          try {
-            await sendSupportButtons(
-              sock,
-              jid,
-              'Please tap one option below to continue:',
-              ai.quickMenuOptions
-            );
-            await sendTypingAndText(
-              sock,
-              jid,
-              'If buttons are not visible on your phone, reply with 1/2/3 or type your service (Airport Transfer / Booking Status).'
-            );
-          } catch (pollError) {
-            console.warn(
-              `Failed to send quick-menu buttons to ${phone}: ${pollError?.message || String(pollError)}`
-            );
-          }
-        }
         console.log(`Replied to ${phone}: ${ai.reply.slice(0, 80)}`);
       } catch (error) {
         const msgText =
