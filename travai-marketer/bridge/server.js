@@ -18,8 +18,6 @@ dotenv.config();
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 const BRIDGE_SHARED_SECRET = process.env.BRIDGE_SHARED_SECRET;
-const BRIDGE_INSTANCE_KEY =
-  (process.env.BRIDGE_INSTANCE_KEY || 'oracle-bridge-lock-v1').trim();
 const NEXT_APP_BASE_URL = (process.env.NEXT_APP_BASE_URL || '').trim().replace(/\/$/, '');
 const NEXT_APP_BRIDGE_URL =
   process.env.NEXT_APP_BRIDGE_URL ||
@@ -113,35 +111,13 @@ function normalizePhoneFromJid(jid) {
 function isDirectUserJid(jid) {
   return (
     typeof jid === 'string' &&
-    (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us') || jid.endsWith('@lid'))
+    (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us'))
   );
 }
 
 function toDirectJid(phone) {
   const digits = String(phone || '').replace(/[^\d]/g, '');
   return digits ? `${digits}@s.whatsapp.net` : '';
-}
-
-function resolveIncomingAddress(message) {
-  const key = message?.key || {};
-  const remoteJid = typeof key.remoteJid === 'string' ? key.remoteJid : '';
-  const remoteJidAlt = typeof key.remoteJidAlt === 'string' ? key.remoteJidAlt : '';
-  const primaryJid = remoteJid || remoteJidAlt;
-  const skip =
-    !primaryJid ||
-    primaryJid === 'status@broadcast' ||
-    primaryJid.endsWith('@g.us') ||
-    primaryJid.endsWith('@broadcast') ||
-    primaryJid.endsWith('@newsletter');
-  if (skip) {
-    return { valid: false, jid: '', phone: '' };
-  }
-
-  const pnLikeAlt =
-    remoteJidAlt &&
-    (remoteJidAlt.endsWith('@s.whatsapp.net') || remoteJidAlt.endsWith('@c.us'));
-  const phone = normalizePhoneFromJid(pnLikeAlt ? remoteJidAlt : primaryJid);
-  return { valid: true, jid: primaryJid, phone };
 }
 
 // ─── Message utils ────────────────────────────────────────────────────────────
@@ -160,11 +136,7 @@ function getTextFromBaileysMessage(message) {
     normalized.extendedTextMessage?.text ||
     normalized.imageMessage?.caption ||
     normalized.videoMessage?.caption ||
-    // Quick-reply button click (YCloud interactive message reply)
     normalized.buttonsResponseMessage?.selectedDisplayText ||
-    normalized.buttonsResponseMessage?.selectedButtonId ||
-    // Interactive reply (WhatsApp Business API button tap)
-    normalized.interactiveResponseMessage?.body ||
     normalized.listResponseMessage?.title ||
     normalized.templateButtonReplyMessage?.selectedDisplayText ||
     ''
@@ -215,14 +187,7 @@ async function reportBridgeState({ status, qrText = undefined, reason = null, li
     await axios.post(
       NEXT_APP_BRIDGE_STATE_URL,
       { teamId: TEAM_ID, status, qrText: outgoingQrText, reason, linkedPhone, heartbeatAt: new Date().toISOString() },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'x-bridge-secret': BRIDGE_SHARED_SECRET,
-          'x-bridge-instance-key': BRIDGE_INSTANCE_KEY,
-        },
-        timeout: HTTP_TIMEOUT_MS,
-      }
+      { headers: { 'Content-Type': 'application/json', 'x-bridge-secret': BRIDGE_SHARED_SECRET }, timeout: HTTP_TIMEOUT_MS }
     );
   } catch (err) {
     console.error(`Failed to report bridge state (${status}):`, err?.message);
@@ -252,11 +217,7 @@ async function sendTypingAndText(sock, jid, text) {
 
 async function askAiForReply(payload) {
   const response = await axios.post(NEXT_APP_BRIDGE_URL, payload, {
-    headers: {
-      'Content-Type': 'application/json',
-      'x-bridge-secret': BRIDGE_SHARED_SECRET,
-      'x-bridge-instance-key': BRIDGE_INSTANCE_KEY,
-    },
+    headers: { 'Content-Type': 'application/json', 'x-bridge-secret': BRIDGE_SHARED_SECRET },
     timeout: Math.max(HTTP_TIMEOUT_MS, 30000),
   });
   return response.data;
@@ -301,14 +262,7 @@ async function ackCommand(commandId, status, message = null) {
     await axios.post(
       NEXT_APP_BRIDGE_CONTROL_URL,
       { commandId, status, message },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'x-bridge-secret': BRIDGE_SHARED_SECRET,
-          'x-bridge-instance-key': BRIDGE_INSTANCE_KEY,
-        },
-        timeout: HTTP_TIMEOUT_MS,
-      }
+      { headers: { 'Content-Type': 'application/json', 'x-bridge-secret': BRIDGE_SHARED_SECRET }, timeout: HTTP_TIMEOUT_MS }
     );
   } catch (err) {
     console.error(`Failed to ack command ${commandId}:`, err?.message);
@@ -320,10 +274,7 @@ async function pollControlCommands() {
   controlPollInFlight = true;
   try {
     const response = await axios.get(NEXT_APP_BRIDGE_CONTROL_URL, {
-      headers: {
-        'x-bridge-secret': BRIDGE_SHARED_SECRET,
-        'x-bridge-instance-key': BRIDGE_INSTANCE_KEY,
-      },
+      headers: { 'x-bridge-secret': BRIDGE_SHARED_SECRET },
       params: { teamId: TEAM_ID },
       timeout: HTTP_TIMEOUT_MS,
     });
@@ -405,8 +356,6 @@ function scheduleReconnect(delayMs = 1500) {
   if (isShuttingDown || reconnectInProgress || reconnectTimer) return;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
-    // If socket recovered on its own before timer fired, avoid unnecessary restart churn.
-    if (activeClient && clientReady) return;
     reconnectInProgress = true;
     startBridge()
       .catch((err) => console.error('Failed to restart bridge:', err))
@@ -505,10 +454,6 @@ async function startBridge() {
     }
 
     if (connection === 'open') {
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
       clearTimeout(initWatchdog);
       clearReadyStateWatchdog();
       clientReady = true;
@@ -547,23 +492,22 @@ async function startBridge() {
   // ─── Incoming messages ───────────────────────────────────────────────────
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    // Replay missed messages up to 30 min old (covers brief outages; anything older is stale history)
-    const thirtyMinutesAgo = Math.floor(Date.now() / 1000) - 1800;
+    const fiveMinutesAgo = Math.floor(Date.now() / 1000) - 300;
 
     for (const message of messages) {
+      // Process real-time messages (notify) OR recent history on reconnect (append within 5 min)
       if (type !== 'notify') {
         const ts = Number(message.messageTimestamp || 0);
-        if (ts < thirtyMinutesAgo) continue;
+        if (ts < fiveMinutesAgo) continue;
       }
-      const resolved  = resolveIncomingAddress(message);
-      const jid       = resolved.jid;
+      const jid       = message.key.remoteJid || '';
       const isFromMe  = Boolean(message.key.fromMe);
       const messageId = message.key.id || 'unknown';
 
-      if (!resolved.valid || !isDirectUserJid(jid)) continue;
+      if (!isDirectUserJid(jid) || jid === 'status@broadcast') continue;
 
       const text     = getTextFromBaileysMessage(message);
-      const phone    = resolved.phone || normalizePhoneFromJid(jid);
+      const phone    = normalizePhoneFromJid(jid);
       const pushName = message.pushName || null;
 
       if (isFromMe) {
