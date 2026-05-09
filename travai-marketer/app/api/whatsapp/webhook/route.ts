@@ -4,7 +4,6 @@ import {
   extractMessage,
   extractStatus,
   parseWhatsAppWebhook,
-  sendWhatsAppMessage,
   verifyWebhookToken,
 } from '@/lib/whatsapp';
 import { getChatResponse, classifyIntent, extractCustomerInfo } from '@/lib/openai';
@@ -21,8 +20,12 @@ const WEBHOOK_VERIFY_TOKEN = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || 'trava
 const WEBSITE_FALLBACK_URL =
   process.env.TRAVENTIONS_WEBSITE_URL || 'https://traventions-ai.vercel.app';
 const HUMAN_HANDOVER_MINUTES = Number(process.env.WA_HUMAN_HANDOVER_MINUTES || '15');
+const DISABLE_HUMAN_HANDOVER = process.env.WA_DISABLE_HUMAN_HANDOVER === 'true';
 
 async function hasHumanTakeover(teamId: string, phone: string) {
+  if (DISABLE_HUMAN_HANDOVER) {
+    return false;
+  }
   const rows = await listDocuments('conversations', [
     Query.equal('teamId', teamId),
     Query.equal('phone', phone),
@@ -59,6 +62,38 @@ async function hasHumanTakeover(teamId: string, phone: string) {
       : 45;
   const handoverWindowMs = safeMinutes * 60 * 1000;
   return Date.now() - latestStaffTs <= handoverWindowMs;
+}
+
+async function queueBridgeReply(params: {
+  requestUrl: string;
+  teamId: string;
+  customerId: string;
+  phone: string;
+  message: string;
+}) {
+  const controlUrl = new URL('/api/wa-bridge/control', params.requestUrl);
+  const controlRes = await fetch(controlUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      teamId: params.teamId,
+      action: 'send_text',
+      payload: {
+        phone: params.phone,
+        message: params.message,
+        customerId: params.customerId,
+      },
+    }),
+  });
+  const controlData = await controlRes.json().catch(() => ({}));
+  if (!controlRes.ok) {
+    throw new Error(controlData?.error || 'Failed to queue bridge reply');
+  }
+  return {
+    success: true,
+    mode: 'bridge',
+    messageId: controlData?.commandId || null,
+  };
 }
 
 /**
@@ -121,7 +156,7 @@ export async function POST(request: NextRequest) {
     // Process incoming messages
     if (messages && messages.length > 0) {
       for (const msg of messages) {
-        await processIncomingMessage(msg, phoneNumberId || '');
+        await processIncomingMessage(msg, phoneNumberId || '', request.url);
       }
     }
 
@@ -147,7 +182,8 @@ export async function POST(request: NextRequest) {
  */
 async function processIncomingMessage(
   message: Parameters<typeof extractMessage>[0],
-  webhookPhoneNumberId: string
+  webhookPhoneNumberId: string,
+  requestUrl: string
 ) {
   try {
     const incoming = extractMessage(message);
@@ -162,7 +198,7 @@ async function processIncomingMessage(
     const messageId = incoming.messageId || null;
     const teamId = await resolveTeamIdByPhoneNumberId(webhookPhoneNumberId);
 
-    console.log(`📨 Incoming ${type} message from ${phone}:`, text || messageId);
+    console.log(`[Incoming] Incoming ${type} message from ${phone}:`, text || messageId);
 
     // Find or create customer record
     let customer = await findOrCreateCustomer(phone, teamId);
@@ -218,7 +254,8 @@ async function processIncomingMessage(
         phone,
         intent,
         webhookPhoneNumberId,
-        teamId
+        teamId,
+        requestUrl
       );
     } else if (intent === 'complaint') {
       // Route complaints to staff
@@ -255,7 +292,7 @@ async function processMessageStatus(
     const { phone, messageId, status: msgStatus } = parsed;
     const teamId = await resolveTeamIdByPhoneNumberId(webhookPhoneNumberId);
 
-    console.log(`📦 Message ${messageId} from ${phone}: ${msgStatus}`);
+    console.log(`[Status] Message ${messageId} from ${phone}: ${msgStatus}`);
 
     // Find the conversation with this messageId
     const conversations = await listDocuments('conversations', [
@@ -313,7 +350,8 @@ async function generateAndSendResponse(
   phone: string,
   intent: string,
   webhookPhoneNumberId: string,
-  teamId: string
+  teamId: string,
+  requestUrl: string
 ) {
   try {
     const resolvedTeamId =
@@ -374,7 +412,7 @@ Best website page: ${knowledge.bestWebsiteTitle} (${knowledge.bestWebsiteUrl})
 DATABASE KNOWLEDGE:
 ${knowledge.databaseSnippets.length ? knowledge.databaseSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : 'No relevant snippets found.'}
 WEBSITE PAGE INDEX:
-${knowledge.websiteSnippets.length ? knowledge.websiteSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : `1. Traventions — ${WEBSITE_FALLBACK_URL}`}`.trim();
+${knowledge.websiteSnippets.length ? knowledge.websiteSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : `1. Traventions - ${WEBSITE_FALLBACK_URL}`}`.trim();
 
     const response = process.env.OPENAI_API_KEY
       ? await getChatResponse(userMessage, systemPrompt, history)
@@ -388,19 +426,12 @@ ${knowledge.websiteSnippets.length ? knowledge.websiteSnippets.map((v, i) => `${
         : response;
     const waFormattedResponse = normalizeToWhatsAppMarkdown(responseWithFallback);
 
-    // Send via WhatsApp Cloud API (Meta)
-    const phoneNumberId = webhookPhoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID || '';
-    const whatsappToken = process.env.WHATSAPP_TOKEN || '';
-
-    if (!phoneNumberId || !whatsappToken) {
-      throw new Error('Missing WHATSAPP_PHONE_NUMBER_ID or WHATSAPP_TOKEN');
-    }
-
-    const sendResult = await sendWhatsAppMessage({
-      phoneNumberId,
-      recipientPhone: phone,
+    const sendResult = await queueBridgeReply({
+      requestUrl,
+      teamId: resolvedTeamId,
+      customerId: customer.$id,
+      phone,
       message: waFormattedResponse,
-      whatsappToken,
     });
 
     // Save the outgoing message with the actual Meta message ID
@@ -413,14 +444,14 @@ ${knowledge.websiteSnippets.length ? knowledge.websiteSnippets.map((v, i) => `${
       messageType: 'text',
       sentBy: 'ai',
       metaMessageId: sendResult.messageId || null,
-      deliveryStatus: sendResult.success ? 'sent' : 'failed',
+      deliveryStatus: sendResult.success ? 'bridged' : 'failed',
       createdAt: new Date().toISOString(),
     });
 
     if (sendResult.success) {
-      console.log(`✅ AI response sent to ${phone}`);
+      console.log(`[OK] AI response sent to ${phone}`);
     } else {
-      console.error(`❌ Failed to send AI response:`, sendResult.error);
+      console.error('Failed to send AI response: bridge queue failed');
     }
   } catch (error) {
     console.error('[WhatsApp] Error generating/sending response:', error);
@@ -446,3 +477,4 @@ async function resolveTeamIdByPhoneNumberId(phoneNumberId: string): Promise<stri
 
   return process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'system';
 }
+
