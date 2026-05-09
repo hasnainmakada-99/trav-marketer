@@ -1,0 +1,19 @@
+# SSH keys - NEVER commit
+*.key
+*.key.pub
+*.pem
+
+# IDE / editor
+.vscode/
+.idea/
+
+# Claude Code memory
+.claude/
+
+# Node (root-level)
+node_modules/
+package-lock.json
+
+# Environment files
+.env
+.env.*
