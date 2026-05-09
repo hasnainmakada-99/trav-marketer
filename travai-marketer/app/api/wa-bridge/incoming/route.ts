@@ -373,7 +373,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (process.env.OPENAI_API_KEY) {
-      const extractedInfo = await extractCustomerInfo(text).catch(() => ({}));
+      const extractedInfo = await extractCustomerInfo(text).catch(() => ({} as { name?: string; email?: string }));
       if (extractedInfo.name && !customer.name) {
         const validEmail = isValidEmail(extractedInfo.email)
           ? extractedInfo.email
