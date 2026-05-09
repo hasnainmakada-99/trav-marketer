@@ -16,6 +16,11 @@ const WEBSITE_FALLBACK_URL =
   process.env.TRAVENTIONS_WEBSITE_URL || 'https://traventions-ai.vercel.app';
 const HUMAN_HANDOVER_MINUTES = Number(process.env.WA_HUMAN_HANDOVER_MINUTES || '15');
 
+const YCLOUD_API_KEY = process.env.YCLOUD_API_KEY || '';
+const YCLOUD_FROM_NUMBER = process.env.YCLOUD_FROM_NUMBER || '919428122003';
+const YCLOUD_GREETING_IMAGE_URL =
+  process.env.YCLOUD_GREETING_IMAGE_URL || 'https://trav-marketer.vercel.app/sini.jpg';
+
 interface BridgeIncomingBody {
   from?: string;
   name?: string;
@@ -42,24 +47,25 @@ function isGreetingMessage(text: string) {
 function mapQuickMenuSelectionToIntentText(text: string) {
   const normalized = text.trim().toLowerCase();
   const compact = normalized.replace(/\s+/g, ' ');
-  if (compact === '1' || compact.includes('svc_1') || compact.includes('hotel')) {
+  if (compact === '1' || compact.includes('svc_1') || compact.includes('svc_hotel') || compact.includes('hotel')) {
     return 'Customer selected Hotel. Ask destination and budget in INR. Use exact database pricing only; if missing, ask clarifying questions instead of inventing ranges.';
   }
   if (
     compact === '2' ||
     compact.includes('svc_2') ||
+    compact.includes('svc_holiday') ||
     compact.includes('holiday') ||
     compact.includes('package')
   ) {
     return 'Customer selected Holiday Package. Ask destination + budget + days and suggest best matching packages/itinerary.';
   }
-  if (compact === '3' || compact.includes('svc_3') || compact.includes('flight')) {
+  if (compact === '3' || compact.includes('svc_3') || compact.includes('svc_flights') || compact.includes('flight')) {
     return 'Customer selected Flights. Ask origin, destination, dates, travellers and share flight-planning guidance.';
   }
-  if (compact === '4' || compact.includes('svc_4') || compact.includes('transfer')) {
+  if (compact === '4' || compact.includes('svc_4') || compact.includes('svc_transfer') || compact.includes('transfer')) {
     return 'Customer selected Airport Transfer. Ask route, date/time, passengers, and luggage details.';
   }
-  if (compact === '5' || compact.includes('svc_5') || compact.includes('status')) {
+  if (compact === '5' || compact.includes('svc_5') || compact.includes('svc_status') || compact.includes('status')) {
     return 'Customer selected Booking Status. Ask for booking reference and registered phone/email.';
   }
   return null;
@@ -76,6 +82,54 @@ function enforceInrReply(text: string) {
 function isValidEmail(value?: string | null): boolean {
   if (!value) return false;
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+async function sendYCloudGreeting(toPhone: string, customerName?: string): Promise<boolean> {
+  if (!YCLOUD_API_KEY) return false;
+
+  const to = toPhone.startsWith('+') ? toPhone : `+${toPhone}`;
+  const from = YCLOUD_FROM_NUMBER.startsWith('+') ? YCLOUD_FROM_NUMBER : `+${YCLOUD_FROM_NUMBER}`;
+  const name = customerName ? customerName.split(' ')[0] : null;
+  const bodyText = name
+    ? `Hey ${name}, thank you for reaching out Traventions...!!!\n\nI'm Sini, your Trav-Ai Buddy 😊\n\nPlease select the below service to assist you better`
+    : `Hey, thank you for reaching out Traventions...!!!\n\nI'm Sini, your Trav-Ai Buddy 😊\n\nPlease select the below service to assist you better`;
+
+  try {
+    const res = await fetch('https://api.ycloud.com/v2/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': YCLOUD_API_KEY },
+      body: JSON.stringify({
+        from,
+        to,
+        type: 'whatsapp',
+        whatsapp: {
+          type: 'interactive',
+          interactive: {
+            type: 'button',
+            header: { type: 'image', image: { link: YCLOUD_GREETING_IMAGE_URL } },
+            body: { text: bodyText },
+            action: {
+              buttons: [
+                { type: 'reply', reply: { id: 'svc_hotel',   title: 'Hotel 🏨' } },
+                { type: 'reply', reply: { id: 'svc_holiday', title: 'Holiday Package' } },
+                { type: 'reply', reply: { id: 'svc_flights', title: 'Flights ✈️' } },
+              ],
+            },
+          },
+        },
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      console.error('[YCloud] Greeting failed:', res.status, body);
+      return false;
+    }
+    console.log('[YCloud] Greeting sent to', to);
+    return true;
+  } catch (err) {
+    console.error('[YCloud] Greeting error:', err);
+    return false;
+  }
 }
 
 function resolveTeamId(preferred?: string) {
@@ -396,11 +450,39 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Fast path: greeting messages never need AI classification or website crawl.
+    // Fast path: greeting messages — send YCloud interactive template (image + buttons).
     if (isGreetingMessage(text)) {
-      const namePart = customer.name || body.name ? ` ${customer.name || body.name}` : '';
+      const customerName = customer.name || body.name || undefined;
+      const ycloudSent = await sendYCloudGreeting(from, customerName);
+
+      if (ycloudSent) {
+        // YCloud sent the rich greeting; tell bridge not to send its own text reply.
+        createDocument('conversations', {
+          teamId,
+          customerId: customer.$id,
+          phone: from,
+          role: 'assistant',
+          message: 'Sini greeting template sent via YCloud',
+          messageType: 'interactive',
+          sentBy: 'ai',
+          metaMessageId: null,
+          deliveryStatus: 'ycloud',
+          createdAt: new Date().toISOString(),
+        }).catch(() => {});
+        return NextResponse.json({
+          success: true,
+          teamId,
+          customerId: customer.$id,
+          intent: 'greeting',
+          shouldReply: false,
+          suppressed: 'ycloud_template_sent',
+        });
+      }
+
+      // YCloud unavailable — fall back to plain-text quick menu.
+      const namePart = customerName ? ` ${customerName.split(' ')[0]}` : '';
       const greetingReply = normalizeToWhatsAppMarkdown(
-        `Welcome to Traventions!${namePart}\n\nI'm your travel support assistant.\nPlease choose a service:\n1. Hotel\n2. Holiday Package\n3. Flights\n\nFor Airport Transfer or Booking Status, just type it directly.`
+        `Hey${namePart}, thank you for reaching out Traventions!\n\nI'm Sini, your Trav-Ai Buddy 😊\nPlease choose a service:\n1. Hotel\n2. Holiday Package\n3. Flights\n\nFor Airport Transfer or Booking Status, just type it directly.`
       );
       createDocument('conversations', {
         teamId,

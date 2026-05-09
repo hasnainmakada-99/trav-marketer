@@ -136,7 +136,11 @@ function getTextFromBaileysMessage(message) {
     normalized.extendedTextMessage?.text ||
     normalized.imageMessage?.caption ||
     normalized.videoMessage?.caption ||
+    // Quick-reply button click (YCloud interactive message reply)
     normalized.buttonsResponseMessage?.selectedDisplayText ||
+    normalized.buttonsResponseMessage?.selectedButtonId ||
+    // Interactive reply (WhatsApp Business API button tap)
+    normalized.interactiveResponseMessage?.body ||
     normalized.listResponseMessage?.title ||
     normalized.templateButtonReplyMessage?.selectedDisplayText ||
     ''
