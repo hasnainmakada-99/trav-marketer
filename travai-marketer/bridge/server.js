@@ -496,13 +496,13 @@ async function startBridge() {
   // ─── Incoming messages ───────────────────────────────────────────────────
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    const fiveMinutesAgo = Math.floor(Date.now() / 1000) - 300;
+    // Replay missed messages up to 30 min old (covers brief outages; anything older is stale history)
+    const thirtyMinutesAgo = Math.floor(Date.now() / 1000) - 1800;
 
     for (const message of messages) {
-      // Process real-time messages (notify) OR recent history on reconnect (append within 5 min)
       if (type !== 'notify') {
         const ts = Number(message.messageTimestamp || 0);
-        if (ts < fiveMinutesAgo) continue;
+        if (ts < thirtyMinutesAgo) continue;
       }
       const jid       = message.key.remoteJid || '';
       const isFromMe  = Boolean(message.key.fromMe);
