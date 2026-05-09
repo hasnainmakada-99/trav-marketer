@@ -27,7 +27,7 @@ export async function getChatResponse(
   userMessage: string,
   systemPrompt: string,
   conversationHistory: Message[] = [],
-  model: string = 'gpt-4o-mini'
+  model: string = 'gpt-4o'
 ): Promise<string> {
   try {
     const messages: Message[] = [

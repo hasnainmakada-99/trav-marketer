@@ -183,14 +183,16 @@ async function reportBridgeState({ status, qrText = undefined, reason = null, li
   }
   const outgoingQrText = qrText === undefined ? latestBridgeQrText : qrText;
   setBridgeSnapshot(status, reason, linkedPhone);
-  try {
-    await axios.post(
-      NEXT_APP_BRIDGE_STATE_URL,
-      { teamId: TEAM_ID, status, qrText: outgoingQrText, reason, linkedPhone, heartbeatAt: new Date().toISOString() },
-      { headers: { 'Content-Type': 'application/json', 'x-bridge-secret': BRIDGE_SHARED_SECRET }, timeout: HTTP_TIMEOUT_MS }
-    );
-  } catch (err) {
-    console.error(`Failed to report bridge state (${status}):`, err?.message);
+  const payload = { teamId: TEAM_ID, status, qrText: outgoingQrText, reason, linkedPhone, heartbeatAt: new Date().toISOString() };
+  const headers = { 'Content-Type': 'application/json', 'x-bridge-secret': BRIDGE_SHARED_SECRET };
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await axios.post(NEXT_APP_BRIDGE_STATE_URL, payload, { headers, timeout: HTTP_TIMEOUT_MS });
+      return;
+    } catch (err) {
+      if (attempt === 3) console.error(`Failed to report bridge state (${status}) after 3 attempts:`, err?.message);
+      else await new Promise((r) => setTimeout(r, 1000 * attempt));
+    }
   }
 }
 
@@ -415,9 +417,11 @@ async function startBridge() {
     printQRInTerminal: false,
     generateHighQualityLinkPreview: false,
     browser: ['TravAI Bridge', 'Chrome', '1.0.0'],
-    connectTimeoutMs: 60_000,
+    connectTimeoutMs: 30_000,
     defaultQueryTimeoutMs: 30_000,
     retryRequestDelayMs: 2_000,
+    keepAliveIntervalMs: 15_000,
+    markOnlineOnConnect: false,
   });
 
   activeClient = sock;
@@ -427,8 +431,8 @@ async function startBridge() {
   // 90-second watchdog for initial connection (QR or session restore)
   const initWatchdog = setTimeout(() => {
     if (isShuttingDown || clientReady || activeClient !== sock) return;
-    console.warn('Bridge init timeout (no QR/ready in 90s). Forcing re-link.');
-    void requestBridgeReconnect('Bridge initialization timeout', true);
+    console.warn('Bridge init timeout (90s). Reconnecting without clearing auth.');
+    void requestBridgeReconnect('Bridge initialization timeout', false);
   }, 90_000);
 
   sock.ev.on('connection.update', async (update) => {
@@ -444,12 +448,12 @@ async function startBridge() {
         reason: 'QR generated. Scan to link WhatsApp device.',
       });
 
-      // 5-minute watchdog after QR shown
+      // 5-minute watchdog after QR shown — regenerate without clearing auth
       clearReadyStateWatchdog();
       readyStateWatchdog = setTimeout(() => {
         if (isShuttingDown || clientReady || activeClient !== sock) return;
         console.warn('QR not scanned in 5 min. Regenerating QR.');
-        void requestBridgeReconnect('QR scan timeout', true);
+        void requestBridgeReconnect('QR scan timeout', false);
       }, 300_000);
     }
 
