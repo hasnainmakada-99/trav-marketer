@@ -9,6 +9,7 @@ import {
 } from '@/lib/appwrite';
 
 const BRIDGE_SHARED_SECRET = process.env.BRIDGE_SHARED_SECRET || '';
+const BRIDGE_INSTANCE_KEY = (process.env.BRIDGE_INSTANCE_KEY || '').trim();
 const BRIDGE_STATE_COLLECTION = 'bridge_state';
 
 type BridgeStatus = 'starting' | 'connected' | 'disconnected' | 'qr_required' | 'error';
@@ -284,6 +285,12 @@ export async function POST(request: NextRequest) {
     const providedSecret = request.headers.get('x-bridge-secret');
     if (providedSecret !== BRIDGE_SHARED_SECRET) {
       return unauthorized();
+    }
+    if (BRIDGE_INSTANCE_KEY) {
+      const providedInstanceKey = request.headers.get('x-bridge-instance-key') || '';
+      if (providedInstanceKey !== BRIDGE_INSTANCE_KEY) {
+        return unauthorized();
+      }
     }
 
     const body = (await request.json()) as BridgeStatePayload;

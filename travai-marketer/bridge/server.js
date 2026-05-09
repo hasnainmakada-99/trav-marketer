@@ -440,11 +440,19 @@ async function pollControlCommands() {
     console.log(`Bridge command: ${action} (${command.id})`);
 
     if (action === 'restart') {
+      if (latestBridgeStatus === 'connected') {
+        await ackCommand(command.id, 'completed', 'Restart skipped: bridge already connected.');
+        return;
+      }
       await ackCommand(command.id, 'completed', 'Restart accepted.');
       await requestBridgeReconnect('Restart requested from dashboard', false);
       return;
     }
     if (action === 'relink') {
+      if (latestBridgeStatus === 'connected') {
+        await ackCommand(command.id, 'failed', 'Relink blocked: bridge is already connected.');
+        return;
+      }
       await ackCommand(command.id, 'completed', 'Relink accepted. New QR will appear.');
       await requestBridgeReconnect('Relink requested from dashboard', true);
       return;

@@ -9,6 +9,7 @@ import {
 } from '@/lib/appwrite';
 
 const BRIDGE_SHARED_SECRET = process.env.BRIDGE_SHARED_SECRET || '';
+const BRIDGE_INSTANCE_KEY = (process.env.BRIDGE_INSTANCE_KEY || '').trim();
 const BRIDGE_COMMANDS_COLLECTION = 'bridge_commands';
 const VALID_ACTIONS = new Set(['restart', 'relink', 'send_text', 'send_template']);
 const VALID_STATUSES = new Set(['pending', 'executing', 'completed', 'failed']);
@@ -48,6 +49,17 @@ function isAlreadyExistsError(error: unknown) {
 
 function unauthorized() {
   return NextResponse.json({ error: 'Unauthorized bridge request' }, { status: 401 });
+}
+
+function hasValidBridgeSecret(request: NextRequest) {
+  if (!BRIDGE_SHARED_SECRET) return false;
+  const providedSecret = request.headers.get('x-bridge-secret');
+  if (providedSecret !== BRIDGE_SHARED_SECRET) return false;
+  if (BRIDGE_INSTANCE_KEY) {
+    const providedInstanceKey = request.headers.get('x-bridge-instance-key') || '';
+    if (providedInstanceKey !== BRIDGE_INSTANCE_KEY) return false;
+  }
+  return true;
 }
 
 async function ensureCommandsCollection() {
@@ -225,8 +237,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const providedSecret = request.headers.get('x-bridge-secret');
-    if (providedSecret !== BRIDGE_SHARED_SECRET) {
+    if (!hasValidBridgeSecret(request)) {
       return unauthorized();
     }
 
@@ -280,8 +291,7 @@ export async function POST(request: NextRequest) {
   try {
     await ensureCommandsCollection();
     const body = (await request.json()) as CreateCommandBody & AckCommandBody;
-    const providedSecret = request.headers.get('x-bridge-secret');
-    const isBridge = BRIDGE_SHARED_SECRET && providedSecret === BRIDGE_SHARED_SECRET;
+    const isBridge = hasValidBridgeSecret(request);
 
     if (isBridge && body.commandId && body.status) {
       const status = body.status.trim().toLowerCase();
