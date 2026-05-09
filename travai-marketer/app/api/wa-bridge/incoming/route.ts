@@ -19,7 +19,7 @@ const HUMAN_HANDOVER_MINUTES = Number(process.env.WA_HUMAN_HANDOVER_MINUTES || '
 const YCLOUD_API_KEY = process.env.YCLOUD_API_KEY || '';
 const YCLOUD_FROM_NUMBER = process.env.YCLOUD_FROM_NUMBER || '919428122003';
 const YCLOUD_GREETING_IMAGE_URL =
-  process.env.YCLOUD_GREETING_IMAGE_URL || 'https://trav-marketer.vercel.app/sini.jpg';
+  process.env.YCLOUD_GREETING_IMAGE_URL || 'https://trav-marketer.vercel.app/sini.png';
 
 interface BridgeIncomingBody {
   from?: string;
