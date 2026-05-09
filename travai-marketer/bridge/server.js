@@ -220,27 +220,26 @@ function getTextFromMessage(message) {
 }
 
 async function sendTypingAndText(client, chatId, text) {
-  let chat = null;
-  try {
-    chat = await client.getChatById(chatId);
-    await chat.sendStateTyping();
-  } catch {
-    // best-effort presence
-  }
-  const dynamicDelay = Math.max(
-    800,
-    Math.min(2500, Math.floor((text?.length || 0) * 15))
-  );
-  await sleep(dynamicDelay);
+  // Show typing indicator in background — never block the message send on this
+  (async () => {
+    try {
+      const chat = await client.getChatById(chatId);
+      await chat.sendStateTyping();
+    } catch { /* best-effort */ }
+  })();
+
+  await sleep(900);
   const sent = await client.sendMessage(chatId, text);
   rememberBotMessageId(sent);
-  try {
-    if (chat) {
+
+  // Clear typing state in background
+  (async () => {
+    try {
+      const chat = await client.getChatById(chatId);
       await chat.clearState();
-    }
-  } catch {
-    // best-effort presence
-  }
+    } catch { /* best-effort */ }
+  })();
+
   return sent;
 }
 
