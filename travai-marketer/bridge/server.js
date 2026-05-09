@@ -27,6 +27,8 @@ const NEXT_APP_BRIDGE_CONTROL_URL =
     ? `${NEXT_APP_BASE_URL}/api/wa-bridge/control`
     : NEXT_APP_BRIDGE_URL?.replace(/\/incoming\/?$/, '/control'));
 const TEAM_ID = process.env.TEAM_ID || 'system';
+const HTTP_TIMEOUT_MS = Number(process.env.BRIDGE_HTTP_TIMEOUT_MS || 30000);
+const WA_WEB_VERSION = (process.env.WA_WEB_VERSION || '').trim();
 const lockFilePath = path.resolve(process.cwd(), '.bridge.lock');
 const authStatePath = path.resolve(process.cwd(), '.wwebjs_auth');
 let reconnectTimer = null;
@@ -34,6 +36,7 @@ let reconnectInProgress = false;
 let activeClient = null;
 let isShuttingDown = false;
 let heartbeatTimer = null;
+let heartbeatInFlight = false;
 let controlPollTimer = null;
 let controlPollInFlight = false;
 let latestBridgeStatus = 'starting';
@@ -253,7 +256,7 @@ async function askAiForReply(payload) {
       'Content-Type': 'application/json',
       'x-bridge-secret': BRIDGE_SHARED_SECRET,
     },
-    timeout: 30000,
+    timeout: Math.max(HTTP_TIMEOUT_MS, 30000),
   });
   return response.data;
 }
@@ -290,7 +293,7 @@ async function reportBridgeState({
           'Content-Type': 'application/json',
           'x-bridge-secret': BRIDGE_SHARED_SECRET,
         },
-        timeout: 10000,
+        timeout: HTTP_TIMEOUT_MS,
       }
     );
   } catch (error) {
@@ -301,15 +304,55 @@ async function reportBridgeState({
   }
 }
 
+async function syncStatusFromClientState() {
+  if (!activeClient || typeof activeClient.getState !== 'function') return;
+  try {
+    const rawState = await activeClient.getState();
+    const state = String(rawState || '').toUpperCase();
+
+    if (state === 'CONNECTED') {
+      const linkedPhone = resolveLinkedPhone(activeClient?.info?.wid?._serialized || '');
+      if (latestBridgeStatus !== 'connected') {
+        await reportBridgeState({
+          status: 'connected',
+          qrText: null,
+          reason: null,
+          linkedPhone: linkedPhone || latestLinkedPhone,
+        });
+      }
+      return;
+    }
+
+    if (state === 'UNPAIRED' || state === 'UNPAIRED_IDLE') {
+      if (latestBridgeStatus !== 'qr_required') {
+        await reportBridgeState({
+          status: 'qr_required',
+          reason: 'Session unpaired. Scan QR to relink WhatsApp device.',
+          linkedPhone: latestLinkedPhone,
+        });
+      }
+    }
+  } catch {
+    // best-effort state probe
+  }
+}
+
 function startHeartbeatLoop() {
   if (heartbeatTimer) return;
-  heartbeatTimer = setInterval(() => {
+  heartbeatTimer = setInterval(async () => {
     if (isShuttingDown) return;
-    reportBridgeState({
-      status: latestBridgeStatus,
-      reason: latestBridgeReason,
-      linkedPhone: latestLinkedPhone,
-    });
+    if (heartbeatInFlight) return;
+    heartbeatInFlight = true;
+    try {
+      await syncStatusFromClientState();
+      await reportBridgeState({
+        status: latestBridgeStatus,
+        reason: latestBridgeReason,
+        linkedPhone: latestLinkedPhone,
+      });
+    } finally {
+      heartbeatInFlight = false;
+    }
   }, 30000);
 }
 
@@ -329,7 +372,7 @@ async function ackCommand(commandId, status, message = null) {
           'Content-Type': 'application/json',
           'x-bridge-secret': BRIDGE_SHARED_SECRET,
         },
-        timeout: 10000,
+        timeout: HTTP_TIMEOUT_MS,
       }
     );
   } catch (error) {
@@ -376,7 +419,7 @@ async function pollControlCommands() {
         'x-bridge-secret': BRIDGE_SHARED_SECRET,
       },
       params: { teamId: TEAM_ID },
-      timeout: 10000,
+      timeout: HTTP_TIMEOUT_MS,
     });
     const command = response?.data?.command;
     if (!command || !command.id || !command.action) {
@@ -539,6 +582,10 @@ async function startBridge() {
 
   const client = new Client({
     authStrategy: new LocalAuth({ dataPath: authStatePath }),
+    ...(WA_WEB_VERSION ? { webVersion: WA_WEB_VERSION } : {}),
+    webVersionCache: {
+      type: 'none',
+    },
     puppeteer: {
       headless: true,
       args: [
@@ -546,6 +593,8 @@ async function startBridge() {
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-extensions',
+        '--no-zygote',
+        '--single-process',
       ],
     },
   });
