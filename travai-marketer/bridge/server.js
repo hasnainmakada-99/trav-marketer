@@ -10,6 +10,7 @@ import {
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
+  normalizeMessageContent,
 } from '@whiskeysockets/baileys';
 
 dotenv.config();
@@ -128,13 +129,16 @@ function sleep(ms) {
 function getTextFromBaileysMessage(message) {
   const msg = message?.message;
   if (!msg) return '';
+  // normalizeMessageContent unwraps v7-rc10 wrapper variants (viewOnceMessage, ephemeralMessage, etc.)
+  const normalized = normalizeMessageContent(msg) || msg;
   return (
-    msg.conversation ||
-    msg.extendedTextMessage?.text ||
-    msg.imageMessage?.caption ||
-    msg.videoMessage?.caption ||
-    msg.buttonsResponseMessage?.selectedDisplayText ||
-    msg.listResponseMessage?.title ||
+    normalized.conversation ||
+    normalized.extendedTextMessage?.text ||
+    normalized.imageMessage?.caption ||
+    normalized.videoMessage?.caption ||
+    normalized.buttonsResponseMessage?.selectedDisplayText ||
+    normalized.listResponseMessage?.title ||
+    normalized.templateButtonReplyMessage?.selectedDisplayText ||
     ''
   ).trim();
 }
@@ -488,9 +492,14 @@ async function startBridge() {
   // ─── Incoming messages ───────────────────────────────────────────────────
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
+    const fiveMinutesAgo = Math.floor(Date.now() / 1000) - 300;
 
     for (const message of messages) {
+      // Process real-time messages (notify) OR recent history on reconnect (append within 5 min)
+      if (type !== 'notify') {
+        const ts = Number(message.messageTimestamp || 0);
+        if (ts < fiveMinutesAgo) continue;
+      }
       const jid       = message.key.remoteJid || '';
       const isFromMe  = Boolean(message.key.fromMe);
       const messageId = message.key.id || 'unknown';
