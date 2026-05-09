@@ -76,6 +76,7 @@ let latestBridgeQrText   = null;
 const botSentMessageIds    = new Set();
 const seenIncomingMessageIds = new Set();
 const missingNodeFallbackByPhone = new Map();
+const lidToPnJid = new Map();
 const auth401Events = [];
 
 function shouldResetAuthOnLoggedOut() {
@@ -165,13 +166,28 @@ function resolveIncomingAddress(message) {
     return { valid: false, jid: '', outboundJid: '', phone: '' };
   }
 
+  if (remoteJid.endsWith('@lid') && senderPn.endsWith('@s.whatsapp.net')) {
+    lidToPnJid.set(remoteJid, senderPn);
+    if (lidToPnJid.size > 5000) {
+      const first = lidToPnJid.keys().next().value;
+      if (first) lidToPnJid.delete(first);
+    }
+  }
+
   const pnLikeSender =
     senderPn &&
     (senderPn.endsWith('@s.whatsapp.net') || senderPn.endsWith('@c.us'));
   const pnLikeAlt =
     remoteJidAlt &&
     (remoteJidAlt.endsWith('@s.whatsapp.net') || remoteJidAlt.endsWith('@c.us'));
-  const outboundJid = pnLikeSender ? senderPn : pnLikeAlt ? remoteJidAlt : primaryJid;
+  const mappedPn = remoteJid.endsWith('@lid') ? lidToPnJid.get(remoteJid) || '' : '';
+  const outboundJid = pnLikeSender
+    ? senderPn
+    : pnLikeAlt
+    ? remoteJidAlt
+    : mappedPn
+    ? mappedPn
+    : primaryJid;
   const phone = normalizePhoneFromJid(outboundJid || primaryJid);
   return { valid: true, jid: primaryJid, outboundJid, phone };
 }
@@ -350,7 +366,8 @@ async function sendTypingAndText(sock, jid, text) {
 
   await sleep(900);
 
-  const sent = await sock.sendMessage(jid, { text });
+  // Avoid stale device cache for LID/PN mixed threads to reduce "Waiting for this message".
+  const sent = await sock.sendMessage(jid, { text }, { useUserDevicesCache: false });
   if (sent?.key?.id) rememberBotMessageIdById(sent.key.id);
 
   (async () => {
