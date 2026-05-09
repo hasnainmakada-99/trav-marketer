@@ -207,6 +207,7 @@ async function findBridgeState(teamId: string) {
   try {
     const byTeam = await listDocuments(BRIDGE_STATE_COLLECTION, [
       Query.equal('teamId', teamId),
+      Query.orderDesc('$updatedAt'),
       Query.limit(1),
     ]);
     if (byTeam.documents.length > 0) {
@@ -218,7 +219,10 @@ async function findBridgeState(teamId: string) {
     console.warn(error);
   }
 
-  const scan = await listDocuments(BRIDGE_STATE_COLLECTION, [Query.limit(100)]);
+  const scan = await listDocuments(BRIDGE_STATE_COLLECTION, [
+    Query.orderDesc('$updatedAt'),
+    Query.limit(100),
+  ]);
   const row = scan.documents.find(
     (doc) => (doc as { teamId?: string }).teamId === teamId
   );
