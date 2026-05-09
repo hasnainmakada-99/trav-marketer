@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
+
+export const maxDuration = 60;
 import { classifyIntent, extractCustomerInfo, getChatResponse } from '@/lib/openai';
 import { createDocument, listDocuments, updateDocument } from '@/lib/appwrite';
 import { normalizeToWhatsAppMarkdown } from '@/lib/whatsapp-format';
@@ -71,6 +73,11 @@ function enforceInrReply(text: string) {
   return out;
 }
 
+function isValidEmail(value?: string | null): boolean {
+  if (!value) return false;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
 function resolveTeamId(preferred?: string) {
   if (preferred && preferred.trim().length > 0) {
     return preferred.trim();
@@ -83,44 +90,48 @@ function unauthorized() {
 }
 
 async function hasHumanTakeover(teamId: string, phone: string) {
-  const rows = await listDocuments('conversations', [
-    Query.equal('teamId', teamId),
-    Query.equal('phone', phone),
-    Query.orderDesc('$createdAt'),
-    Query.limit(100),
-  ]);
+  try {
+    const rows = await listDocuments('conversations', [
+      Query.equal('teamId', teamId),
+      Query.equal('phone', phone),
+      Query.orderDesc('$createdAt'),
+      Query.limit(100),
+    ]);
 
-  let latestStaffTs = 0;
-  let latestAiTs = 0;
+    let latestStaffTs = 0;
+    let latestAiTs = 0;
 
-  for (const doc of rows.documents as Array<{
-    sentBy?: string;
-    createdAt?: string;
-    $createdAt?: string;
-  }>) {
-    const ts = new Date(doc.createdAt || doc.$createdAt || 0).getTime();
-    if (!Number.isFinite(ts) || ts <= 0) continue;
+    for (const doc of rows.documents as Array<{
+      sentBy?: string;
+      createdAt?: string;
+      $createdAt?: string;
+    }>) {
+      const ts = new Date(doc.createdAt || doc.$createdAt || 0).getTime();
+      if (!Number.isFinite(ts) || ts <= 0) continue;
 
-    if (doc.sentBy === 'staff' && ts > latestStaffTs) {
-      latestStaffTs = ts;
+      if (doc.sentBy === 'staff' && ts > latestStaffTs) {
+        latestStaffTs = ts;
+      }
+      if (doc.sentBy === 'ai' && ts > latestAiTs) {
+        latestAiTs = ts;
+      }
     }
-    if (doc.sentBy === 'ai' && ts > latestAiTs) {
-      latestAiTs = ts;
-    }
-  }
 
-  // Human takeover is active only when latest staff message is newer than latest AI message
-  // and still within a short active window. This prevents permanent AI suppression.
-  if (!(latestStaffTs > 0 && latestStaffTs > latestAiTs)) {
+    // Human takeover is active only when latest staff message is newer than latest AI message
+    // and still within a short active window. This prevents permanent AI suppression.
+    if (!(latestStaffTs > 0 && latestStaffTs > latestAiTs)) {
+      return false;
+    }
+
+    const safeMinutes =
+      Number.isFinite(HUMAN_HANDOVER_MINUTES) && HUMAN_HANDOVER_MINUTES > 0
+        ? HUMAN_HANDOVER_MINUTES
+        : 45;
+    const handoverWindowMs = safeMinutes * 60 * 1000;
+    return Date.now() - latestStaffTs <= handoverWindowMs;
+  } catch {
     return false;
   }
-
-  const safeMinutes =
-    Number.isFinite(HUMAN_HANDOVER_MINUTES) && HUMAN_HANDOVER_MINUTES > 0
-      ? HUMAN_HANDOVER_MINUTES
-      : 45;
-  const handoverWindowMs = safeMinutes * 60 * 1000;
-  return Date.now() - latestStaffTs <= handoverWindowMs;
 }
 
 async function findOrCreateCustomer(phone: string, teamId: string, name?: string) {
@@ -164,8 +175,15 @@ async function buildReply(params: {
       Query.equal('customerId', params.customerId),
       Query.orderDesc('$createdAt'),
       Query.limit(20),
-    ]),
-    loadTravelKnowledge(params.teamId, params.userMessage),
+    ]).catch(() => ({ documents: [] })),
+    loadTravelKnowledge(params.teamId, params.userMessage).catch(() => ({
+      databaseSnippets: [] as string[],
+      hasPackageData: false,
+      bestWebsiteUrl: WEBSITE_FALLBACK_URL,
+      bestWebsiteTitle: 'Traventions',
+      websiteSnippets: [] as string[],
+      diagnostics: { collectionsScanned: [], collectionDocCounts: {}, crawledPages: 0 },
+    })),
     listDocuments('business_configs', [Query.equal('teamId', params.teamId), Query.limit(1)]).catch(
       () => ({ documents: [] })
     ),
@@ -355,13 +373,16 @@ export async function POST(request: NextRequest) {
     }
 
     if (process.env.OPENAI_API_KEY) {
-      const extractedInfo = await extractCustomerInfo(text);
+      const extractedInfo = await extractCustomerInfo(text).catch(() => ({}));
       if (extractedInfo.name && !customer.name) {
+        const validEmail = isValidEmail(extractedInfo.email)
+          ? extractedInfo.email
+          : customer.email || null;
         customer = (await updateDocument('customers', customer.$id, {
           name: extractedInfo.name,
-          email: extractedInfo.email || customer.email || null,
+          email: validEmail,
           updatedAt: new Date().toISOString(),
-        })) as {
+        }).catch(() => customer)) as {
           $id: string;
           name?: string;
           email?: string;
@@ -404,20 +425,27 @@ export async function POST(request: NextRequest) {
       userMessage: text,
       intent,
       customerName: customer.name || body.name || undefined,
-    });
+    }).catch(() => ({
+      reply: 'Welcome to Traventions! Our team will get back to you shortly.',
+      quickMenu: false,
+      quickMenuOptions: null as string[] | null,
+    }));
     const reply = built.reply;
 
-    await createDocument('conversations', {
+    // Fire-and-forget: never let a DB write failure block the reply to the customer.
+    createDocument('conversations', {
       teamId,
       customerId: customer.$id,
       phone: from,
       role: 'assistant',
-      message: reply,
+      message: reply.slice(0, 2000),
       messageType: 'text',
       sentBy: 'ai',
       metaMessageId: null,
       deliveryStatus: 'bridged',
       createdAt: new Date().toISOString(),
+    }).catch((err: unknown) => {
+      console.error('[WA Bridge Incoming] Failed to save AI reply to DB:', err);
     });
 
     return NextResponse.json({

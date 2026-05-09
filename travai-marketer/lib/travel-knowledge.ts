@@ -222,7 +222,7 @@ function extractLinks(html: string): string[] {
 
 async function fetchPage(url: string) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  const timeout = setTimeout(() => controller.abort(), 3000);
   try {
     const res = await fetch(url, {
       signal: controller.signal,
@@ -252,9 +252,11 @@ async function crawlWebsitePages(): Promise<WebsitePage[]> {
   const queue = [start, `${start.replace(/\/$/, '')}/sitemap`];
   const visited = new Set<string>();
   const pages: WebsitePage[] = [];
-  const maxPages = 32;
+  const maxPages = 8;
 
-  while (queue.length > 0 && pages.length < maxPages) {
+  const crawlDeadline = Date.now() + 12000;
+
+  while (queue.length > 0 && pages.length < maxPages && Date.now() < crawlDeadline) {
     const current = queue.shift();
     if (!current || visited.has(current)) continue;
     visited.add(current);
@@ -518,7 +520,7 @@ export async function loadTravelKnowledge(
   const dbTop = uniqueDb.slice(0, 12);
   const hasPackageData = dbTop.some((item) => item.hasPackageSignal);
 
-  const websitePages = await crawlWebsitePages();
+  const websitePages = await crawlWebsitePages().catch(() => [] as WebsitePage[]);
   const scoredPages = websitePages
     .map((page) => ({
       page,

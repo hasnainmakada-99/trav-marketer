@@ -593,8 +593,8 @@ async function startBridge() {
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-extensions',
-        '--no-zygote',
-        '--single-process',
+        '--disable-gpu',
+        '--disable-software-rasterizer',
       ],
     },
   });
@@ -635,7 +635,7 @@ async function startBridge() {
           true
         );
       })();
-    }, 30000);
+    }, 300000);
   });
 
   client.on('ready', async () => {
@@ -751,7 +751,7 @@ async function startBridge() {
     try {
       const payload = {
         from: phone,
-        name: null,
+        name: message?.notifyName || message?._data?.notifyName || null,
         message: text,
         messageId,
         timestamp: message?.timestamp ? String(message.timestamp) : null,
@@ -792,7 +792,7 @@ async function startBridge() {
       });
       await requestBridgeReconnect('Bridge initialization timeout', true);
     })();
-  }, 45000);
+  }, 90000);
 
   try {
     await client.initialize();
