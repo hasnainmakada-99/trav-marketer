@@ -228,8 +228,8 @@ async function sendTypingAndText(client, chatId, text) {
     // best-effort presence
   }
   const dynamicDelay = Math.max(
-    1200,
-    Math.min(7000, Math.floor((text?.length || 0) * 45))
+    800,
+    Math.min(2500, Math.floor((text?.length || 0) * 15))
   );
   await sleep(dynamicDelay);
   const sent = await client.sendMessage(chatId, text);

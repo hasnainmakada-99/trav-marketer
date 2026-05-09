@@ -372,25 +372,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (process.env.OPENAI_API_KEY) {
-      const extractedInfo = await extractCustomerInfo(text).catch(() => ({} as { name?: string; email?: string }));
-      if (extractedInfo.name && !customer.name) {
-        const validEmail = isValidEmail(extractedInfo.email)
-          ? extractedInfo.email
-          : customer.email || null;
-        customer = (await updateDocument('customers', customer.$id, {
-          name: extractedInfo.name,
-          email: validEmail,
-          updatedAt: new Date().toISOString(),
-        }).catch(() => customer)) as {
-          $id: string;
-          name?: string;
-          email?: string;
-          teamId?: string;
-        };
-      }
-    }
-
     await createDocument('conversations', {
       teamId,
       customerId: customer.$id,
@@ -413,6 +394,54 @@ export async function POST(request: NextRequest) {
         shouldReply: false,
         suppressed: 'human_handover',
       });
+    }
+
+    // Fast path: greeting messages never need AI classification or website crawl.
+    if (isGreetingMessage(text)) {
+      const namePart = customer.name || body.name ? ` ${customer.name || body.name}` : '';
+      const greetingReply = normalizeToWhatsAppMarkdown(
+        `Welcome to Traventions!${namePart}\n\nI'm your travel support assistant.\nPlease choose a service:\n1. Hotel\n2. Holiday Package\n3. Flights\n\nFor Airport Transfer or Booking Status, just type it directly.`
+      );
+      createDocument('conversations', {
+        teamId,
+        customerId: customer.$id,
+        phone: from,
+        role: 'assistant',
+        message: greetingReply.slice(0, 2000),
+        messageType: 'text',
+        sentBy: 'ai',
+        metaMessageId: null,
+        deliveryStatus: 'bridged',
+        createdAt: new Date().toISOString(),
+      }).catch(() => {});
+      return NextResponse.json({
+        success: true,
+        teamId,
+        customerId: customer.$id,
+        intent: 'greeting',
+        shouldReply: true,
+        reply: greetingReply,
+        quickMenu: true,
+        quickMenuOptions: [...SUPPORT_MENU_OPTIONS],
+      });
+    }
+
+    // Non-critical: extract name/email in background — never block the reply path.
+    if (process.env.OPENAI_API_KEY) {
+      extractCustomerInfo(text)
+        .then(async (extractedInfo) => {
+          if (extractedInfo?.name && !customer.name) {
+            const validEmail = isValidEmail(extractedInfo.email)
+              ? extractedInfo.email
+              : customer.email || null;
+            await updateDocument('customers', customer.$id, {
+              name: extractedInfo.name,
+              email: validEmail,
+              updatedAt: new Date().toISOString(),
+            }).catch(() => {});
+          }
+        })
+        .catch(() => {});
     }
 
     const intent = process.env.OPENAI_API_KEY
