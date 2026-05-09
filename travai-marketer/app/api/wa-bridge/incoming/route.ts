@@ -33,17 +33,9 @@ interface BridgeIncomingBody {
   eventType?: 'incoming_message' | 'staff_outgoing';
 }
 
-const SUPPORT_MENU_OPTIONS = [
-  'Hotel',
-  'Holiday Package',
-  'Flights',
-] as const;
-
 function isGreetingMessage(text: string) {
   const normalized = text.trim().toLowerCase();
-  return /^(hi|hello|hey|hlo|helo|namaste|yo|good morning|good afternoon|good evening)$/.test(
-    normalized
-  );
+  return /^hi[.!?\s]*$/.test(normalized);
 }
 
 function mapQuickMenuSelectionToIntentText(text: string) {
@@ -331,18 +323,6 @@ ${websiteKnowledge}`.trim();
     };
   }
 
-  if (isGreetingMessage(params.userMessage)) {
-    const namePart = params.customerName ? ` ${params.customerName}` : '';
-    const quickMenuReply = normalizeToWhatsAppMarkdown(
-      `Welcome to Traventions!${namePart}\n\nI'm your travel support assistant.\nPlease choose a service:\n1. Hotel\n2. Holiday Package\n3. Flights\n\nFor Airport Transfer or Booking Status, just type it directly.`
-    );
-    return {
-      reply: quickMenuReply,
-      quickMenu: true,
-      quickMenuOptions: [...SUPPORT_MENU_OPTIONS],
-    };
-  }
-
   const quickSelectionPrompt = mapQuickMenuSelectionToIntentText(params.userMessage);
   const effectiveUserMessage = quickSelectionPrompt || params.userMessage;
   const response = await getChatResponse(effectiveUserMessage, systemPrompt, history);
@@ -487,33 +467,14 @@ export async function POST(request: NextRequest) {
           suppressed: 'ycloud_template_sent',
         });
       }
-
-      // YCloud unavailable — fall back to plain-text quick menu.
-      const namePart = customerName ? ` ${customerName.split(' ')[0]}` : '';
-      const greetingReply = normalizeToWhatsAppMarkdown(
-        `Hey${namePart}, thank you for reaching out Traventions!\n\nI'm Sini, your Trav-Ai Buddy 😊\nPlease choose a service:\n1. Hotel\n2. Holiday Package\n3. Flights\n\nFor Airport Transfer or Booking Status, just type it directly.`
-      );
-      createDocument('conversations', {
-        teamId,
-        customerId: customer.$id,
-        phone: from,
-        role: 'assistant',
-        message: greetingReply.slice(0, 2000),
-        messageType: 'text',
-        sentBy: 'ai',
-        metaMessageId: null,
-        deliveryStatus: 'bridged',
-        createdAt: new Date().toISOString(),
-      }).catch(() => {});
+      // Strict mode: greeting should be sent only as YCloud interactive template.
       return NextResponse.json({
         success: true,
         teamId,
         customerId: customer.$id,
         intent: 'greeting',
-        shouldReply: true,
-        reply: greetingReply,
-        quickMenu: true,
-        quickMenuOptions: [...SUPPORT_MENU_OPTIONS],
+        shouldReply: false,
+        suppressed: 'ycloud_template_failed',
       });
     }
 
