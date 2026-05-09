@@ -9,7 +9,9 @@ import {
 } from '@/lib/appwrite';
 
 const BRIDGE_SHARED_SECRET = process.env.BRIDGE_SHARED_SECRET || '';
-const BRIDGE_INSTANCE_KEY = (process.env.BRIDGE_INSTANCE_KEY || '').trim();
+const BRIDGE_INSTANCE_KEY = (
+  process.env.BRIDGE_INSTANCE_KEY || 'oracle-bridge-primary-2026'
+).trim();
 const BRIDGE_COMMANDS_COLLECTION = 'bridge_commands';
 const VALID_ACTIONS = new Set(['restart', 'relink', 'send_text', 'send_template']);
 const VALID_STATUSES = new Set(['pending', 'executing', 'completed', 'failed']);
