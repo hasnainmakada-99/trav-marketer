@@ -31,6 +31,9 @@ const NEXT_APP_BRIDGE_CONTROL_URL =
   (NEXT_APP_BASE_URL ? `${NEXT_APP_BASE_URL}/api/wa-bridge/control` : undefined);
 const TEAM_ID = process.env.TEAM_ID || 'system';
 const HTTP_TIMEOUT_MS = Number(process.env.BRIDGE_HTTP_TIMEOUT_MS || 30000);
+const BRIDGE_AUTH_AUTO_RESET = String(process.env.BRIDGE_AUTH_AUTO_RESET || 'false') === 'true';
+const BRIDGE_AUTH_RESET_401_THRESHOLD = Number(process.env.BRIDGE_AUTH_RESET_401_THRESHOLD || 5);
+const BRIDGE_AUTH_RESET_WINDOW_MS = Number(process.env.BRIDGE_AUTH_RESET_WINDOW_MS || 300000);
 
 const lockFilePath   = path.resolve(process.cwd(), '.bridge.lock');
 const authStatePath  = path.resolve(process.cwd(), '.baileys_auth');
@@ -72,6 +75,17 @@ let latestBridgeQrText   = null;
 
 const botSentMessageIds    = new Set();
 const seenIncomingMessageIds = new Set();
+const auth401Events = [];
+
+function shouldResetAuthOnLoggedOut() {
+  if (!BRIDGE_AUTH_AUTO_RESET) return false;
+  const now = Date.now();
+  while (auth401Events.length && now - auth401Events[0] > BRIDGE_AUTH_RESET_WINDOW_MS) {
+    auth401Events.shift();
+  }
+  auth401Events.push(now);
+  return auth401Events.length >= BRIDGE_AUTH_RESET_401_THRESHOLD;
+}
 
 // ─── Process lock ─────────────────────────────────────────────────────────────
 
@@ -594,7 +608,18 @@ async function startBridge() {
         linkedPhone: latestLinkedPhone,
       });
 
-      if (loggedOut) clearAuthState();
+      if (loggedOut) {
+        if (shouldResetAuthOnLoggedOut()) {
+          console.warn(
+            `Auth reset threshold reached (${BRIDGE_AUTH_RESET_401_THRESHOLD} within ${BRIDGE_AUTH_RESET_WINDOW_MS}ms). Clearing auth state.`
+          );
+          clearAuthState();
+        } else {
+          console.warn(
+            'Logged out signal received, but auth auto-reset is disabled or threshold not reached. Keeping auth state and retrying reconnect.'
+          );
+        }
+      }
 
       if (!isShuttingDown && activeClient === sock) {
         scheduleReconnect(loggedOut ? 900 : 1500);
