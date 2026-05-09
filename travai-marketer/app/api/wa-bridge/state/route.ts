@@ -9,6 +9,8 @@ import {
 } from '@/lib/appwrite';
 
 const BRIDGE_SHARED_SECRET = process.env.BRIDGE_SHARED_SECRET || '';
+const BRIDGE_INSTANCE_KEY =
+  (process.env.BRIDGE_INSTANCE_KEY || 'oracle-bridge-lock-v1').trim();
 const BRIDGE_STATE_COLLECTION = 'bridge_state';
 
 type BridgeStatus = 'starting' | 'connected' | 'disconnected' | 'qr_required' | 'error';
@@ -67,6 +69,14 @@ function resolveTeamId(preferred?: string) {
 
 function unauthorized() {
   return NextResponse.json({ error: 'Unauthorized bridge request' }, { status: 401 });
+}
+
+function isAuthorizedBridgeRequest(request: NextRequest) {
+  const providedSecret = request.headers.get('x-bridge-secret');
+  if (providedSecret !== BRIDGE_SHARED_SECRET) return false;
+  const providedInstanceKey = request.headers.get('x-bridge-instance-key') || '';
+  if (BRIDGE_INSTANCE_KEY && providedInstanceKey !== BRIDGE_INSTANCE_KEY) return false;
+  return true;
 }
 
 async function ensureBridgeStateCollection() {
@@ -277,8 +287,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const providedSecret = request.headers.get('x-bridge-secret');
-    if (providedSecret !== BRIDGE_SHARED_SECRET) {
+    if (!isAuthorizedBridgeRequest(request)) {
       return unauthorized();
     }
 

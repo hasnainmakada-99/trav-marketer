@@ -12,6 +12,8 @@ import {
 } from '@/lib/travel-knowledge';
 
 const BRIDGE_SHARED_SECRET = process.env.BRIDGE_SHARED_SECRET || '';
+const BRIDGE_INSTANCE_KEY =
+  (process.env.BRIDGE_INSTANCE_KEY || 'oracle-bridge-lock-v1').trim();
 const WEBSITE_FALLBACK_URL =
   process.env.TRAVENTIONS_WEBSITE_URL || 'https://traventions-ai.vercel.app';
 const HUMAN_HANDOVER_MINUTES = Number(process.env.WA_HUMAN_HANDOVER_MINUTES || '15');
@@ -141,6 +143,14 @@ function resolveTeamId(preferred?: string) {
 
 function unauthorized() {
   return NextResponse.json({ error: 'Unauthorized bridge request' }, { status: 401 });
+}
+
+function isAuthorizedBridgeRequest(request: NextRequest) {
+  const providedSecret = request.headers.get('x-bridge-secret');
+  if (providedSecret !== BRIDGE_SHARED_SECRET) return false;
+  const providedInstanceKey = request.headers.get('x-bridge-instance-key') || '';
+  if (BRIDGE_INSTANCE_KEY && providedInstanceKey !== BRIDGE_INSTANCE_KEY) return false;
+  return true;
 }
 
 async function hasHumanTakeover(teamId: string, phone: string) {
@@ -369,8 +379,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const providedSecret = request.headers.get('x-bridge-secret');
-    if (providedSecret !== BRIDGE_SHARED_SECRET) {
+    if (!isAuthorizedBridgeRequest(request)) {
       return unauthorized();
     }
 
@@ -387,7 +396,7 @@ export async function POST(request: NextRequest) {
     }
 
     const teamId = resolveTeamId(body.teamId);
-    let customer = (await findOrCreateCustomer(from, teamId, body.name)) as {
+    const customer = (await findOrCreateCustomer(from, teamId, body.name)) as {
       $id: string;
       name?: string;
       email?: string;
