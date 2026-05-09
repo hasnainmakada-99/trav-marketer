@@ -18,6 +18,7 @@ dotenv.config();
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 const BRIDGE_SHARED_SECRET = process.env.BRIDGE_SHARED_SECRET;
+const BRIDGE_INSTANCE_KEY = (process.env.BRIDGE_INSTANCE_KEY || '').trim();
 const NEXT_APP_BASE_URL = (process.env.NEXT_APP_BASE_URL || '').trim().replace(/\/$/, '');
 const NEXT_APP_BRIDGE_URL =
   process.env.NEXT_APP_BRIDGE_URL ||
@@ -37,6 +38,19 @@ const authStatePath  = path.resolve(process.cwd(), '.baileys_auth');
 if (!BRIDGE_SHARED_SECRET || !NEXT_APP_BRIDGE_URL || !NEXT_APP_BRIDGE_STATE_URL || !NEXT_APP_BRIDGE_CONTROL_URL) {
   console.error('Missing BRIDGE_SHARED_SECRET or bridge URLs. Check bridge/.env');
   process.exit(1);
+}
+
+function bridgeHeaders(contentType = true) {
+  const headers = {
+    'x-bridge-secret': BRIDGE_SHARED_SECRET,
+  };
+  if (contentType) {
+    headers['Content-Type'] = 'application/json';
+  }
+  if (BRIDGE_INSTANCE_KEY) {
+    headers['x-bridge-instance-key'] = BRIDGE_INSTANCE_KEY;
+  }
+  return headers;
 }
 
 // ─── Runtime state ────────────────────────────────────────────────────────────
@@ -111,13 +125,35 @@ function normalizePhoneFromJid(jid) {
 function isDirectUserJid(jid) {
   return (
     typeof jid === 'string' &&
-    (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us'))
+    (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us') || jid.endsWith('@lid'))
   );
 }
 
 function toDirectJid(phone) {
   const digits = String(phone || '').replace(/[^\d]/g, '');
   return digits ? `${digits}@s.whatsapp.net` : '';
+}
+
+function resolveIncomingAddress(message) {
+  const key = message?.key || {};
+  const remoteJid = typeof key.remoteJid === 'string' ? key.remoteJid : '';
+  const remoteJidAlt = typeof key.remoteJidAlt === 'string' ? key.remoteJidAlt : '';
+  const primaryJid = remoteJid || remoteJidAlt;
+  const skip =
+    !primaryJid ||
+    primaryJid === 'status@broadcast' ||
+    primaryJid.endsWith('@g.us') ||
+    primaryJid.endsWith('@broadcast') ||
+    primaryJid.endsWith('@newsletter');
+  if (skip) {
+    return { valid: false, jid: '', phone: '' };
+  }
+
+  const pnLikeAlt =
+    remoteJidAlt &&
+    (remoteJidAlt.endsWith('@s.whatsapp.net') || remoteJidAlt.endsWith('@c.us'));
+  const phone = normalizePhoneFromJid(pnLikeAlt ? remoteJidAlt : primaryJid);
+  return { valid: true, jid: primaryJid, phone };
 }
 
 // ─── Message utils ────────────────────────────────────────────────────────────
@@ -128,19 +164,83 @@ function sleep(ms) {
 
 function getTextFromBaileysMessage(message) {
   const msg = message?.message;
-  if (!msg) return '';
-  // normalizeMessageContent unwraps v7-rc10 wrapper variants (viewOnceMessage, ephemeralMessage, etc.)
-  const normalized = normalizeMessageContent(msg) || msg;
-  return (
-    normalized.conversation ||
-    normalized.extendedTextMessage?.text ||
-    normalized.imageMessage?.caption ||
-    normalized.videoMessage?.caption ||
-    normalized.buttonsResponseMessage?.selectedDisplayText ||
-    normalized.listResponseMessage?.title ||
-    normalized.templateButtonReplyMessage?.selectedDisplayText ||
+  const normalized = msg ? normalizeMessageContent(msg) || msg : null;
+  const directText = (
+    normalized?.conversation ||
+    normalized?.extendedTextMessage?.text ||
+    normalized?.imageMessage?.caption ||
+    normalized?.videoMessage?.caption ||
+    normalized?.buttonsResponseMessage?.selectedDisplayText ||
+    normalized?.buttonsResponseMessage?.selectedButtonId ||
+    normalized?.interactiveResponseMessage?.body ||
+    normalized?.interactiveResponseMessage?.nativeFlowResponseMessage?.name ||
+    normalized?.listResponseMessage?.singleSelectReply?.selectedRowId ||
+    normalized?.listResponseMessage?.title ||
+    normalized?.templateButtonReplyMessage?.selectedId ||
+    normalized?.templateButtonReplyMessage?.selectedDisplayText ||
     ''
   ).trim();
+  if (directText) return directText;
+
+  const nativeFlowParams = normalized?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson;
+  if (typeof nativeFlowParams === 'string' && nativeFlowParams.trim()) {
+    try {
+      const parsed = JSON.parse(nativeFlowParams);
+      const parsedText =
+        parsed?.title ||
+        parsed?.id ||
+        parsed?.value ||
+        parsed?.text ||
+        parsed?.selection ||
+        '';
+      if (typeof parsedText === 'string' && parsedText.trim()) return parsedText.trim();
+    } catch {}
+    return nativeFlowParams.trim();
+  }
+
+  const queue = [normalized, message];
+  const seen = new Set();
+  const wantedKeys = new Set([
+    'text',
+    'conversation',
+    'caption',
+    'title',
+    'selectedDisplayText',
+    'selectedButtonId',
+    'selectedId',
+    'selectedRowId',
+    'body',
+    'description',
+    'contentText',
+  ]);
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || typeof current !== 'object' || seen.has(current)) continue;
+    seen.add(current);
+    for (const [key, value] of Object.entries(current)) {
+      if (typeof value === 'string') {
+        if (wantedKeys.has(key) && value.trim()) return value.trim();
+        continue;
+      }
+      if (value && typeof value === 'object') queue.push(value);
+    }
+  }
+
+  return '';
+}
+
+function isIgnorableSystemEvent(message) {
+  if (!message || typeof message !== 'object') return true;
+  const hasMessagePayload = Boolean(message.message) && Object.keys(message.message || {}).length > 0;
+  if (hasMessagePayload) return false;
+
+  const hasStubType = Number.isInteger(message?.messageStubType);
+  const hasStubParams =
+    Array.isArray(message?.messageStubParameters) &&
+    message.messageStubParameters.length > 0;
+  const isBroadcastFlag = Boolean(message?.broadcast);
+
+  return hasStubType || hasStubParams || isBroadcastFlag;
 }
 
 function rememberBotMessageIdById(id) {
@@ -185,7 +285,7 @@ async function reportBridgeState({ status, qrText = undefined, reason = null, li
   const outgoingQrText = qrText === undefined ? latestBridgeQrText : qrText;
   setBridgeSnapshot(status, reason, linkedPhone);
   const payload = { teamId: TEAM_ID, status, qrText: outgoingQrText, reason, linkedPhone, heartbeatAt: new Date().toISOString() };
-  const headers = { 'Content-Type': 'application/json', 'x-bridge-secret': BRIDGE_SHARED_SECRET };
+  const headers = bridgeHeaders(true);
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       await axios.post(NEXT_APP_BRIDGE_STATE_URL, payload, { headers, timeout: HTTP_TIMEOUT_MS });
@@ -219,11 +319,19 @@ async function sendTypingAndText(sock, jid, text) {
 // ─── AI call ──────────────────────────────────────────────────────────────────
 
 async function askAiForReply(payload) {
-  const response = await axios.post(NEXT_APP_BRIDGE_URL, payload, {
-    headers: { 'Content-Type': 'application/json', 'x-bridge-secret': BRIDGE_SHARED_SECRET },
-    timeout: Math.max(HTTP_TIMEOUT_MS, 30000),
-  });
-  return response.data;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const response = await axios.post(NEXT_APP_BRIDGE_URL, payload, {
+        headers: bridgeHeaders(true),
+        timeout: Math.max(HTTP_TIMEOUT_MS, 30000),
+      });
+      return response.data;
+    } catch (err) {
+      if (attempt === 3) throw err;
+      await sleep(600 * attempt);
+    }
+  }
+  return null;
 }
 
 // ─── Heartbeat ────────────────────────────────────────────────────────────────
@@ -265,7 +373,7 @@ async function ackCommand(commandId, status, message = null) {
     await axios.post(
       NEXT_APP_BRIDGE_CONTROL_URL,
       { commandId, status, message },
-      { headers: { 'Content-Type': 'application/json', 'x-bridge-secret': BRIDGE_SHARED_SECRET }, timeout: HTTP_TIMEOUT_MS }
+      { headers: bridgeHeaders(true), timeout: HTTP_TIMEOUT_MS }
     );
   } catch (err) {
     console.error(`Failed to ack command ${commandId}:`, err?.message);
@@ -277,7 +385,7 @@ async function pollControlCommands() {
   controlPollInFlight = true;
   try {
     const response = await axios.get(NEXT_APP_BRIDGE_CONTROL_URL, {
-      headers: { 'x-bridge-secret': BRIDGE_SHARED_SECRET },
+      headers: bridgeHeaders(false),
       params: { teamId: TEAM_ID },
       timeout: HTTP_TIMEOUT_MS,
     });
@@ -497,22 +605,23 @@ async function startBridge() {
   // ─── Incoming messages ───────────────────────────────────────────────────
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    const fiveMinutesAgo = Math.floor(Date.now() / 1000) - 300;
+    const thirtyMinutesAgo = Math.floor(Date.now() / 1000) - 1800;
 
     for (const message of messages) {
-      // Process real-time messages (notify) OR recent history on reconnect (append within 5 min)
+      // Process real-time messages (notify) OR recent history on reconnect.
       if (type !== 'notify') {
         const ts = Number(message.messageTimestamp || 0);
-        if (ts < fiveMinutesAgo) continue;
+        if (ts < thirtyMinutesAgo) continue;
       }
-      const jid       = message.key.remoteJid || '';
+      const resolved  = resolveIncomingAddress(message);
+      const jid       = resolved.jid;
       const isFromMe  = Boolean(message.key.fromMe);
       const messageId = message.key.id || 'unknown';
 
-      if (!isDirectUserJid(jid) || jid === 'status@broadcast') continue;
+      if (!resolved.valid || !isDirectUserJid(jid)) continue;
 
       const text     = getTextFromBaileysMessage(message);
-      const phone    = normalizePhoneFromJid(jid);
+      const phone    = resolved.phone || normalizePhoneFromJid(jid);
       const pushName = message.pushName || null;
 
       if (isFromMe) {
@@ -532,7 +641,13 @@ async function startBridge() {
 
       if (seenIncomingMessageIds.has(messageId)) continue;
       rememberIncomingId(messageId);
-      if (!text) { console.log(`Skipped non-text message id=${messageId}`); continue; }
+      if (!text) {
+        if (!isIgnorableSystemEvent(message)) {
+          const msgKeys = Object.keys(message?.message || {});
+          console.log(`Skipped non-text message id=${messageId} typeKeys=${msgKeys.join(',') || 'none'}`);
+        }
+        continue;
+      }
 
       try {
         const ai = await askAiForReply({

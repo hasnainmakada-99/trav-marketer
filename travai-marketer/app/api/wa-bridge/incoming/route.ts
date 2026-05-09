@@ -12,9 +12,9 @@ import {
 } from '@/lib/travel-knowledge';
 
 const BRIDGE_SHARED_SECRET = process.env.BRIDGE_SHARED_SECRET || '';
+const BRIDGE_INSTANCE_KEY = (process.env.BRIDGE_INSTANCE_KEY || '').trim();
 const WEBSITE_FALLBACK_URL =
   process.env.TRAVENTIONS_WEBSITE_URL || 'https://traventions-ai.vercel.app';
-const HUMAN_HANDOVER_MINUTES = Number(process.env.WA_HUMAN_HANDOVER_MINUTES || '15');
 
 interface BridgeIncomingBody {
   from?: string;
@@ -90,48 +90,11 @@ function unauthorized() {
 }
 
 async function hasHumanTakeover(teamId: string, phone: string) {
-  try {
-    const rows = await listDocuments('conversations', [
-      Query.equal('teamId', teamId),
-      Query.equal('phone', phone),
-      Query.orderDesc('$createdAt'),
-      Query.limit(100),
-    ]);
-
-    let latestStaffTs = 0;
-    let latestAiTs = 0;
-
-    for (const doc of rows.documents as Array<{
-      sentBy?: string;
-      createdAt?: string;
-      $createdAt?: string;
-    }>) {
-      const ts = new Date(doc.createdAt || doc.$createdAt || 0).getTime();
-      if (!Number.isFinite(ts) || ts <= 0) continue;
-
-      if (doc.sentBy === 'staff' && ts > latestStaffTs) {
-        latestStaffTs = ts;
-      }
-      if (doc.sentBy === 'ai' && ts > latestAiTs) {
-        latestAiTs = ts;
-      }
-    }
-
-    // Human takeover is active only when latest staff message is newer than latest AI message
-    // and still within a short active window. This prevents permanent AI suppression.
-    if (!(latestStaffTs > 0 && latestStaffTs > latestAiTs)) {
-      return false;
-    }
-
-    const safeMinutes =
-      Number.isFinite(HUMAN_HANDOVER_MINUTES) && HUMAN_HANDOVER_MINUTES > 0
-        ? HUMAN_HANDOVER_MINUTES
-        : 45;
-    const handoverWindowMs = safeMinutes * 60 * 1000;
-    return Date.now() - latestStaffTs <= handoverWindowMs;
-  } catch {
-    return false;
-  }
+  void teamId;
+  void phone;
+  // Bridge bot must keep responding continuously in production.
+  // Manual handover suppression can be reintroduced later behind explicit controls.
+  return false;
 }
 
 async function findOrCreateCustomer(phone: string, teamId: string, name?: string) {
@@ -318,6 +281,12 @@ export async function POST(request: NextRequest) {
     const providedSecret = request.headers.get('x-bridge-secret');
     if (providedSecret !== BRIDGE_SHARED_SECRET) {
       return unauthorized();
+    }
+    if (BRIDGE_INSTANCE_KEY) {
+      const providedInstanceKey = request.headers.get('x-bridge-instance-key') || '';
+      if (providedInstanceKey !== BRIDGE_INSTANCE_KEY) {
+        return unauthorized();
+      }
     }
 
     const body = (await request.json()) as BridgeIncomingBody;
