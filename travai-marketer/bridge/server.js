@@ -39,6 +39,8 @@ let controlPollInFlight = false;
 let latestBridgeStatus = 'starting';
 let latestBridgeReason = 'Initializing bridge session';
 let latestLinkedPhone = null;
+let latestBridgeQrText = null;
+let readyStateWatchdog = null;
 const botSentMessageIds = new Set();
 const seenIncomingMessageIds = new Set();
 
@@ -258,10 +260,19 @@ async function askAiForReply(payload) {
 
 async function reportBridgeState({
   status,
-  qrText = null,
+  qrText = undefined,
   reason = null,
   linkedPhone = null,
 }) {
+  if (status === 'connected') {
+    latestBridgeQrText = null;
+  } else if (qrText !== undefined) {
+    latestBridgeQrText = qrText;
+  }
+
+  const outgoingQrText =
+    qrText === undefined ? latestBridgeQrText : qrText;
+
   setBridgeSnapshot(status, reason, linkedPhone);
   try {
     await axios.post(
@@ -269,7 +280,7 @@ async function reportBridgeState({
       {
         teamId: TEAM_ID,
         status,
-        qrText,
+        qrText: outgoingQrText,
         reason,
         linkedPhone,
         heartbeatAt: new Date().toISOString(),
@@ -481,6 +492,12 @@ function stopControlPolling() {
   controlPollTimer = null;
 }
 
+function clearReadyStateWatchdog() {
+  if (!readyStateWatchdog) return;
+  clearTimeout(readyStateWatchdog);
+  readyStateWatchdog = null;
+}
+
 function scheduleReconnect(delayMs = 1500) {
   if (isShuttingDown) {
     return;
@@ -507,7 +524,7 @@ async function startBridge() {
   }
 
   await reportBridgeState({
-    status: 'starting',
+    status: latestBridgeStatus === 'qr_required' ? 'qr_required' : 'starting',
     reason: 'Initializing bridge session',
   });
 
@@ -533,6 +550,7 @@ async function startBridge() {
     },
   });
   activeClient = client;
+  let clientReady = false;
 
   client.on('qr', async (qrText) => {
     console.log('\nScan this QR in WhatsApp (Linked Devices):\n');
@@ -545,15 +563,35 @@ async function startBridge() {
   });
 
   client.on('authenticated', async () => {
+    clearReadyStateWatchdog();
     await reportBridgeState({
-      status: 'starting',
-      qrText: null,
+      status: latestBridgeStatus === 'qr_required' ? 'qr_required' : 'starting',
       reason: 'Authenticated. Waiting for ready state.',
       linkedPhone: latestLinkedPhone,
     });
+
+    readyStateWatchdog = setTimeout(() => {
+      if (isShuttingDown || clientReady || activeClient !== client) return;
+      console.warn(
+        'Authenticated but ready event did not arrive in time. Forcing re-link.'
+      );
+      void (async () => {
+        await reportBridgeState({
+          status: 'qr_required',
+          reason: 'Session stuck before ready. Regenerating QR.',
+          linkedPhone: latestLinkedPhone,
+        });
+        await requestBridgeReconnect(
+          'Ready timeout after authentication',
+          true
+        );
+      })();
+    }, 30000);
   });
 
   client.on('ready', async () => {
+    clientReady = true;
+    clearReadyStateWatchdog();
     const linkedPhone = resolveLinkedPhone(client?.info?.wid?._serialized || '');
     console.log(`whatsapp-web.js bridge connected and ready (${linkedPhone || 'unknown'}).`);
     await reportBridgeState({
@@ -565,6 +603,8 @@ async function startBridge() {
   });
 
   client.on('auth_failure', async (message) => {
+    clientReady = false;
+    clearReadyStateWatchdog();
     const reason = String(message || 'Authentication failed');
     console.error(`Auth failure: ${reason}`);
     await reportBridgeState({
@@ -576,8 +616,26 @@ async function startBridge() {
     scheduleReconnect(1800);
   });
 
+  client.on('change_state', async (state) => {
+    const next = String(state || '').toUpperCase();
+    console.log(`WA state changed: ${next || 'UNKNOWN'}`);
+    if (next === 'CONNECTED' && !clientReady) {
+      clientReady = true;
+      clearReadyStateWatchdog();
+      const linkedPhone = resolveLinkedPhone(client?.info?.wid?._serialized || '');
+      await reportBridgeState({
+        status: 'connected',
+        qrText: null,
+        reason: null,
+        linkedPhone: linkedPhone || latestLinkedPhone,
+      });
+    }
+  });
+
   client.on('disconnected', async (reason) => {
     if (isShuttingDown) return;
+    clientReady = false;
+    clearReadyStateWatchdog();
     const reasonText = String(reason || 'unknown');
     console.warn(`Bridge disconnected: ${reasonText}`);
     await reportBridgeState({
@@ -673,7 +731,25 @@ async function startBridge() {
     }
   });
 
-  await client.initialize();
+  const initializeWatchdog = setTimeout(() => {
+    if (isShuttingDown || clientReady || activeClient !== client) return;
+    console.warn(
+      'Bridge initialization timed out before QR/ready. Forcing clean re-link.'
+    );
+    void (async () => {
+      await reportBridgeState({
+        status: 'qr_required',
+        reason: 'Bridge initialization timeout. Regenerating QR.',
+      });
+      await requestBridgeReconnect('Bridge initialization timeout', true);
+    })();
+  }, 45000);
+
+  try {
+    await client.initialize();
+  } finally {
+    clearTimeout(initializeWatchdog);
+  }
 }
 
 acquireProcessLock();
@@ -681,15 +757,12 @@ startHeartbeatLoop();
 startControlPolling();
 startBridge().catch((error) => {
   console.error('Bridge failed to start:', error);
-  reportBridgeState({
+  void reportBridgeState({
     status: 'error',
     qrText: null,
     reason: error?.message || String(error),
   });
-  releaseProcessLock();
-  stopHeartbeatLoop();
-  stopControlPolling();
-  process.exit(1);
+  scheduleReconnect(4500);
 });
 
 process.on('SIGINT', () => {
