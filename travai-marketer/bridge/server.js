@@ -72,6 +72,7 @@ let latestBridgeStatus   = 'starting';
 let latestBridgeReason   = 'Initializing bridge session';
 let latestLinkedPhone    = null;
 let latestBridgeQrText   = null;
+let loggedOutReconnectDelayMs = 5000;
 
 const botSentMessageIds    = new Set();
 const seenIncomingMessageIds = new Set();
@@ -639,6 +640,7 @@ async function startBridge() {
       clearTimeout(initWatchdog);
       clearReadyStateWatchdog();
       clientReady = true;
+      loggedOutReconnectDelayMs = 5000;
       const linkedPhone = sock.user?.id
         ? normalizePhoneFromJid(sock.user.id)
         : latestLinkedPhone;
@@ -677,7 +679,14 @@ async function startBridge() {
       }
 
       if (!isShuttingDown && activeClient === sock) {
-        scheduleReconnect(loggedOut ? 900 : 1500);
+        let delay = 1500;
+        if (loggedOut) {
+          delay = loggedOutReconnectDelayMs;
+          loggedOutReconnectDelayMs = Math.min(loggedOutReconnectDelayMs * 2, 120000);
+        } else if (latestBridgeStatus === 'qr_required' || statusCode === DisconnectReason.timedOut) {
+          delay = 8000;
+        }
+        scheduleReconnect(delay);
       }
     }
   });
