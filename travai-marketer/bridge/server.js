@@ -170,6 +170,7 @@ function buildTemplateText(message, buttonLabels) {
 // ─── Bridge state reporting ───────────────────────────────────────────────────
 
 function setBridgeSnapshot(status, reason = null, linkedPhone = null) {
+  console.log(`[state] ${latestBridgeStatus} → ${status}`);
   latestBridgeStatus = status || latestBridgeStatus;
   latestBridgeReason = reason;
   if (linkedPhone !== undefined) latestLinkedPhone = linkedPhone;
