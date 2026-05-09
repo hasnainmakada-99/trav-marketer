@@ -75,6 +75,7 @@ let latestBridgeQrText   = null;
 
 const botSentMessageIds    = new Set();
 const seenIncomingMessageIds = new Set();
+const missingNodeFallbackByPhone = new Map();
 const auth401Events = [];
 
 function shouldResetAuthOnLoggedOut() {
@@ -152,6 +153,7 @@ function resolveIncomingAddress(message) {
   const key = message?.key || {};
   const remoteJid = typeof key.remoteJid === 'string' ? key.remoteJid : '';
   const remoteJidAlt = typeof key.remoteJidAlt === 'string' ? key.remoteJidAlt : '';
+  const senderPn = typeof key.senderPn === 'string' ? key.senderPn : '';
   const primaryJid = remoteJid || remoteJidAlt;
   const skip =
     !primaryJid ||
@@ -160,14 +162,18 @@ function resolveIncomingAddress(message) {
     primaryJid.endsWith('@broadcast') ||
     primaryJid.endsWith('@newsletter');
   if (skip) {
-    return { valid: false, jid: '', phone: '' };
+    return { valid: false, jid: '', outboundJid: '', phone: '' };
   }
 
+  const pnLikeSender =
+    senderPn &&
+    (senderPn.endsWith('@s.whatsapp.net') || senderPn.endsWith('@c.us'));
   const pnLikeAlt =
     remoteJidAlt &&
     (remoteJidAlt.endsWith('@s.whatsapp.net') || remoteJidAlt.endsWith('@c.us'));
-  const phone = normalizePhoneFromJid(pnLikeAlt ? remoteJidAlt : primaryJid);
-  return { valid: true, jid: primaryJid, phone };
+  const outboundJid = pnLikeSender ? senderPn : pnLikeAlt ? remoteJidAlt : primaryJid;
+  const phone = normalizePhoneFromJid(outboundJid || primaryJid);
+  return { valid: true, jid: primaryJid, outboundJid, phone };
 }
 
 // ─── Message utils ────────────────────────────────────────────────────────────
@@ -255,6 +261,30 @@ function isIgnorableSystemEvent(message) {
   const isBroadcastFlag = Boolean(message?.broadcast);
 
   return hasStubType || hasStubParams || isBroadcastFlag;
+}
+
+function isMessageAbsentFromNodeStub(message) {
+  if (!message || typeof message !== 'object') return false;
+  const stubType = Number(message?.messageStubType || 0);
+  if (stubType !== 2) return false;
+  const params = Array.isArray(message?.messageStubParameters)
+    ? message.messageStubParameters.map((v) => String(v || '').toLowerCase())
+    : [];
+  return params.some((v) => v.includes('message absent from node'));
+}
+
+function shouldSendMissingNodeFallback(phone) {
+  const key = String(phone || '').trim();
+  if (!key) return false;
+  const now = Date.now();
+  const last = missingNodeFallbackByPhone.get(key) || 0;
+  if (now - last < 120000) return false;
+  missingNodeFallbackByPhone.set(key, now);
+  if (missingNodeFallbackByPhone.size > 2000) {
+    const firstKey = missingNodeFallbackByPhone.keys().next().value;
+    if (firstKey) missingNodeFallbackByPhone.delete(firstKey);
+  }
+  return true;
 }
 
 function rememberBotMessageIdById(id) {
@@ -640,10 +670,11 @@ async function startBridge() {
       }
       const resolved  = resolveIncomingAddress(message);
       const jid       = resolved.jid;
+      const outboundJid = resolved.outboundJid || jid;
       const isFromMe  = Boolean(message.key.fromMe);
       const messageId = message.key.id || 'unknown';
 
-      if (!resolved.valid || !isDirectUserJid(jid)) continue;
+      if (!resolved.valid || !isDirectUserJid(outboundJid)) continue;
 
       const text     = getTextFromBaileysMessage(message);
       const phone    = resolved.phone || normalizePhoneFromJid(jid);
@@ -667,6 +698,26 @@ async function startBridge() {
       if (seenIncomingMessageIds.has(messageId)) continue;
       rememberIncomingId(messageId);
       if (!text) {
+        if (isMessageAbsentFromNodeStub(message) && shouldSendMissingNodeFallback(phone)) {
+          try {
+            const ai = await askAiForReply({
+              from: phone,
+              name: pushName,
+              message: 'hi',
+              messageId: `${messageId}:stub`,
+              teamId: TEAM_ID,
+              eventType: 'incoming_message',
+            });
+            if (ai?.shouldReply !== false && ai?.reply?.trim()) {
+              await sendTypingAndText(sock, outboundJid, ai.reply.trim());
+              console.log(`Fallback replied to ${phone} for message-absent stub ${messageId}`);
+            } else {
+              console.warn(`No fallback AI reply for stub id=${messageId}`);
+            }
+          } catch (err) {
+            console.error(`Fallback reply failed for stub id=${messageId}:`, err?.message);
+          }
+        }
         if (!isIgnorableSystemEvent(message)) {
           const msgKeys = Object.keys(message?.message || {});
           console.log(`Skipped non-text message id=${messageId} typeKeys=${msgKeys.join(',') || 'none'}`);
@@ -693,7 +744,7 @@ async function startBridge() {
           continue;
         }
 
-        await sendTypingAndText(sock, jid, ai.reply.trim());
+        await sendTypingAndText(sock, outboundJid, ai.reply.trim());
         console.log(`Replied to ${phone}: ${ai.reply.slice(0, 80)}`);
       } catch (err) {
         console.error(`Failed to process message ${messageId}:`, err?.message);
