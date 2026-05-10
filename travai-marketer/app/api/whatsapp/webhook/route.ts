@@ -370,11 +370,11 @@ async function processIncomingMessage(
     // Classify the intent only when OpenAI key exists, otherwise fall back.
     const businessContext = `Team: ${teamId}, channel: whatsapp`;
     const intent = process.env.OPENAI_API_KEY
-      ? await classifyIntent(text, businessContext)
+      ? await classifyIntent(text, businessContext).catch(() => 'other')
       : 'other';
 
-    // Generate an AI response for normal conversational intents.
-    if (['inquiry', 'booking', 'followup', 'other', 'greeting'].includes(intent)) {
+    // Generate AI response for all non-complaint intents.
+    if (intent !== 'complaint') {
       await generateAndSendResponse(
         customer,
         text,
@@ -384,7 +384,7 @@ async function processIncomingMessage(
         teamId,
         requestUrl
       );
-    } else if (intent === 'complaint') {
+    } else {
       // Route complaints to staff
       await createDocument('leads', {
         teamId,
