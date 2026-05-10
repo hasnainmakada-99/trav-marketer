@@ -7,7 +7,12 @@ import {
   sendWhatsAppMessage,
   verifyWebhookToken,
 } from '@/lib/whatsapp';
-import { sendYCloudTextMessage, showYCloudTypingIndicator } from '@/lib/whatsapp-ycloud';
+import {
+  sendYCloudTextMessage,
+  sendYCloudImageMessage,
+  sendYCloudReplyButtonsMessage,
+  showYCloudTypingIndicator,
+} from '@/lib/whatsapp-ycloud';
 import { getChatResponse, classifyIntent, extractCustomerInfo } from '@/lib/openai';
 import { createDocument, listDocuments, updateDocument } from '@/lib/appwrite';
 import { normalizeToWhatsAppMarkdown } from '@/lib/whatsapp-format';
@@ -31,12 +36,54 @@ const YCLOUD_ENFORCE_SIGNATURE = process.env.YCLOUD_ENFORCE_SIGNATURE === 'true'
 const RECENT_INBOUND_TTL_MS = 2 * 60 * 1000;
 const RECENT_AI_DUPLICATE_WINDOW_MS = 45 * 1000;
 const recentInboundKeys = new Map<string, number>();
+const GREETING_BUTTONS = [
+  { id: 'svc_leisure', title: 'Leisure' },
+  { id: 'svc_flights', title: 'Flights Tickets' },
+  { id: 'svc_hotels', title: 'Hotels' },
+] as const;
+const GREETING_MENU_TEXT = `Welcome to Traventions!\n\nI'm Sini, your Trav-AI Buddy.\nPlease select a service to assist you better.`;
 
 function isGreetingMessage(text: string) {
   const normalized = text.trim().toLowerCase();
   return /^(hi|hello|hey|hlo|helo|namaste|yo|good morning|good afternoon|good evening)$/.test(
     normalized
   );
+}
+
+function detectServiceSelection(text: string) {
+  const normalized = normalizeTextForDedupe(text);
+  if (
+    normalized === 'leisure' ||
+    normalized === 'holiday package' ||
+    normalized === 'holiday packages'
+  ) {
+    return 'leisure' as const;
+  }
+  if (
+    normalized === 'flights tickets' ||
+    normalized === 'flight tickets' ||
+    normalized === 'flights' ||
+    normalized === 'flight'
+  ) {
+    return 'flights' as const;
+  }
+  if (normalized === 'hotels' || normalized === 'hotel') {
+    return 'hotels' as const;
+  }
+  return null;
+}
+
+function getGreetingImageUrl(requestUrl: string) {
+  const configured = (process.env.WA_GREETING_IMAGE_URL || '').trim();
+  if (configured) {
+    return configured;
+  }
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || '').trim();
+  if (appUrl) {
+    return `${appUrl.replace(/\/+$/, '')}/sini.png`;
+  }
+  const fallbackOrigin = new URL(requestUrl).origin;
+  return `${fallbackOrigin}/sini.png`;
 }
 
 function resolveOutboundMode() {
@@ -177,6 +224,44 @@ async function sendViaYCloud(params: {
     success: true,
     mode: 'ycloud',
     messageId: result.messageId || null,
+  };
+}
+
+async function sendYCloudGreetingExperience(params: {
+  phone: string;
+  requestUrl: string;
+}) {
+  const apiKey = (process.env.YCLOUD_API_KEY || '').trim();
+  const fromPhone = (process.env.YCLOUD_WHATSAPP_FROM || '').trim();
+  if (!apiKey || !fromPhone) {
+    throw new Error('YCloud send is not configured. Set YCLOUD_API_KEY and YCLOUD_WHATSAPP_FROM.');
+  }
+
+  const imageUrl = getGreetingImageUrl(params.requestUrl);
+  const imageResult = await sendYCloudImageMessage({
+    apiKey,
+    fromPhoneE164: fromPhone,
+    toPhone: params.phone,
+    imageUrl,
+  });
+  if (!imageResult.success) {
+    throw new Error(imageResult.error || 'Failed to send greeting image via YCloud');
+  }
+
+  const menuResult = await sendYCloudReplyButtonsMessage({
+    apiKey,
+    fromPhoneE164: fromPhone,
+    toPhone: params.phone,
+    bodyText: GREETING_MENU_TEXT,
+    buttons: [...GREETING_BUTTONS],
+  });
+  if (!menuResult.success) {
+    throw new Error(menuResult.error || 'Failed to send greeting buttons via YCloud');
+  }
+
+  return {
+    imageMessageId: imageResult.messageId || null,
+    menuMessageId: menuResult.messageId || null,
   };
 }
 
@@ -464,11 +549,14 @@ async function processIncomingMessage(
       return;
     }
 
+    const greetingMessage = isGreetingMessage(text);
     // Classify the intent only when OpenAI key exists, otherwise fall back.
     const businessContext = `Team: ${teamId}, channel: whatsapp`;
-    const intent = process.env.OPENAI_API_KEY
-      ? await classifyIntent(text, businessContext).catch(() => 'other')
-      : 'other';
+    const intent = greetingMessage
+      ? 'greeting'
+      : process.env.OPENAI_API_KEY
+        ? await classifyIntent(text, businessContext).catch(() => 'other')
+        : 'other';
 
     // Generate AI response for all non-complaint intents.
     if (intent !== 'complaint') {
@@ -665,8 +753,42 @@ WEBSITE PAGE INDEX:
 ${knowledge.websiteSnippets.length ? knowledge.websiteSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : `1. Traventions - ${WEBSITE_FALLBACK_URL}`}`.trim();
 
     if (isGreetingMessage(userMessage)) {
+      const mode = resolveOutboundMode();
+      await sendTypingIndicatorForYCloud(inboundMessageId);
+
+      if (mode === 'ycloud') {
+        const priorGreeting = normalizeTextForDedupe(GREETING_MENU_TEXT);
+        if (
+          recentAiText === priorGreeting &&
+          Number.isFinite(recentAiTs) &&
+          Date.now() - recentAiTs <= RECENT_AI_DUPLICATE_WINDOW_MS
+        ) {
+          console.log('[WhatsApp] Skipping duplicate greeting auto-reply');
+          return;
+        }
+
+        const greetingSend = await sendYCloudGreetingExperience({
+          phone,
+          requestUrl,
+        });
+
+        await createDocument('conversations', {
+          teamId: resolvedTeamId,
+          customerId: customer.$id,
+          phone: phone,
+          role: 'assistant',
+          message: GREETING_MENU_TEXT,
+          messageType: 'interactive',
+          sentBy: 'ai',
+          metaMessageId: greetingSend.menuMessageId || greetingSend.imageMessageId || null,
+          deliveryStatus: 'sent',
+          createdAt: new Date().toISOString(),
+        });
+        return;
+      }
+
       const quickMenuReply = normalizeToWhatsAppMarkdown(
-        `Welcome to Traventions!\n\nI'm your travel support assistant.\nPlease choose a service:\n1. Hotel\n2. Holiday Package\n3. Flights\n\nFor Airport Transfer or Booking Status, just type it directly.`
+        `Welcome to Traventions!\n\nI'm Sini, your Trav-AI Buddy.\nPlease select a service to assist you better.\n1. Leisure\n2. Flights Tickets\n3. Hotels`
       );
       if (
         recentAiText === normalizeTextForDedupe(quickMenuReply) &&
@@ -700,9 +822,19 @@ ${knowledge.websiteSnippets.length ? knowledge.websiteSnippets.map((v, i) => `${
       return;
     }
 
+    const selectedService = detectServiceSelection(userMessage);
     let response: string;
     await sendTypingIndicatorForYCloud(inboundMessageId);
-    if (process.env.OPENAI_API_KEY) {
+    if (selectedService === 'leisure') {
+      response =
+        'Great choice. *Leisure* it is.\nPlease share:\n1. Destination\n2. Travel dates\n3. Number of travelers\n4. Budget range\n\nI will craft the best options for you.';
+    } else if (selectedService === 'flights') {
+      response =
+        'Perfect. I can help with *Flight Tickets*.\nPlease share:\n1. From city\n2. To city\n3. Departure date\n4. Return date (if round trip)\n5. Number of passengers';
+    } else if (selectedService === 'hotels') {
+      response =
+        'Awesome. Let us find your *Hotel*.\nPlease share:\n1. City\n2. Check-in date\n3. Check-out date\n4. Guests and rooms\n5. Budget per night';
+    } else if (process.env.OPENAI_API_KEY) {
       try {
         response = await getChatResponse(userMessage, systemPrompt, history);
       } catch (error) {

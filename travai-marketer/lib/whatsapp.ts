@@ -223,11 +223,16 @@ interface IncomingMessage {
   timestamp: string;
   type: string;
   text?: { body?: string };
+  button?: { text?: string; payload?: string };
+  interactive?: {
+    type?: string;
+    button_reply?: { id?: string; title?: string };
+    list_reply?: { id?: string; title?: string; description?: string };
+  };
   image?: { id?: string; caption?: string; mime_type?: string };
   document?: { id?: string; filename?: string; mime_type?: string };
   audio?: { id?: string };
   video?: { id?: string };
-  interactive?: { type?: string };
 }
 
 interface IncomingStatus {
@@ -258,11 +263,16 @@ interface WebhookPayload {
     to?: string;
     type?: string;
     text?: { body?: string };
+    button?: { text?: string; payload?: string };
+    interactive?: {
+      type?: string;
+      button_reply?: { id?: string; title?: string };
+      list_reply?: { id?: string; title?: string; description?: string };
+    };
     image?: { id?: string; mime_type?: string; caption?: string };
     document?: { id?: string; filename?: string; mime_type?: string };
     audio?: { id?: string };
     video?: { id?: string };
-    interactive?: { type?: string };
     createTime?: string;
     sendTime?: string;
   };
@@ -333,6 +343,7 @@ export function parseWhatsAppWebhook(body: WebhookPayload) {
         timestamp: toUnixSeconds(inbound.sendTime || inbound.createTime || body.createTime),
         type: inferredType,
         text: inbound.text,
+        button: inbound.button,
         image: inbound.image,
         document: inbound.document,
         audio: inbound.audio,
@@ -347,6 +358,8 @@ export function parseWhatsAppWebhook(body: WebhookPayload) {
         timestamp: toUnixSeconds(ycloudMessage.createTime || body.createTime),
         type: inferredType,
         text: ycloudMessage.text,
+        button: (ycloudMessage as { button?: IncomingMessage['button'] }).button,
+        interactive: (ycloudMessage as { interactive?: IncomingMessage['interactive'] }).interactive,
       });
     }
 
@@ -384,6 +397,42 @@ export function extractMessage(message: IncomingMessage) {
 
   if (message.type === 'text') {
     return { ...base, text: message.text?.body || '' };
+  }
+
+  if (message.type === 'button') {
+    return {
+      ...base,
+      text: message.button?.text || message.button?.payload || '',
+      buttonId: message.button?.payload || '',
+    };
+  }
+
+  if (message.type === 'interactive') {
+    const interactiveType = message.interactive?.type || '';
+    if (interactiveType === 'button_reply') {
+      return {
+        ...base,
+        text:
+          message.interactive?.button_reply?.title ||
+          message.interactive?.button_reply?.id ||
+          '',
+        buttonId: message.interactive?.button_reply?.id || '',
+      };
+    }
+    if (interactiveType === 'list_reply') {
+      return {
+        ...base,
+        text:
+          message.interactive?.list_reply?.title ||
+          message.interactive?.list_reply?.id ||
+          '',
+        buttonId: message.interactive?.list_reply?.id || '',
+      };
+    }
+    return {
+      ...base,
+      text: '',
+    };
   }
 
   if (message.type === 'image') {
