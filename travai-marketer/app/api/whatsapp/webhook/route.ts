@@ -541,11 +541,20 @@ ${knowledge.databaseSnippets.length ? knowledge.databaseSnippets.map((v, i) => `
 WEBSITE PAGE INDEX:
 ${knowledge.websiteSnippets.length ? knowledge.websiteSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : `1. Traventions - ${WEBSITE_FALLBACK_URL}`}`.trim();
 
-    const response = process.env.OPENAI_API_KEY
-      ? await getChatResponse(userMessage, systemPrompt, history)
-      : packageIntent
-      ? buildRuleBasedItinerary(userMessage)
-      : 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
+    let response: string;
+    if (process.env.OPENAI_API_KEY) {
+      try {
+        response = await getChatResponse(userMessage, systemPrompt, history);
+      } catch (error) {
+        console.error('[WhatsApp] OpenAI reply generation failed, using fallback:', error);
+        response =
+          'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
+      }
+    } else {
+      response = packageIntent
+        ? buildRuleBasedItinerary(userMessage)
+        : 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
+    }
 
     const responseWithFallback =
       packageIntent && !response.includes(knowledge.bestWebsiteUrl || WEBSITE_FALLBACK_URL)
