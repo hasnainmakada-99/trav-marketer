@@ -8,9 +8,20 @@ import OpenAI from 'openai';
 
 let _openai: OpenAI | null = null;
 
+function getSanitizedOpenAIKey() {
+  return (process.env.OPENAI_API_KEY || '')
+    .trim()
+    .replace(/^['"]+|['"]+$/g, '');
+}
+
+function getPreferredChatModel() {
+  const raw = (process.env.OPENAI_MODEL || '').trim();
+  return raw.length > 0 ? raw : 'gpt-4o-mini';
+}
+
 function getOpenAI(): OpenAI {
   if (!_openai) {
-    _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    _openai = new OpenAI({ apiKey: getSanitizedOpenAIKey() });
   }
   return _openai;
 }
@@ -27,7 +38,7 @@ export async function getChatResponse(
   userMessage: string,
   systemPrompt: string,
   conversationHistory: Message[] = [],
-  model: string = 'gpt-4o'
+  model: string = getPreferredChatModel()
 ): Promise<string> {
   try {
     const messages: Message[] = [
