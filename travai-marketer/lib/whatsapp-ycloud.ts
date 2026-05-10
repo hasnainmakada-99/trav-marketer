@@ -5,6 +5,12 @@ interface SendResult {
   raw?: unknown;
 }
 
+interface SimpleResult {
+  success: boolean;
+  error?: string;
+  raw?: unknown;
+}
+
 function toE164(phone: string): string {
   const trimmed = String(phone || '').trim();
   if (!trimmed) return '';
@@ -52,6 +58,48 @@ export async function sendYCloudTextMessage(params: {
       messageId: data?.whatsappMessage?.id || data?.id || data?.messageId || null,
       raw: data,
     };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+}
+
+export async function showYCloudTypingIndicator(params: {
+  apiKey: string;
+  inboundMessageId: string;
+}): Promise<SimpleResult> {
+  const inboundId = String(params.inboundMessageId || '').trim();
+  if (!inboundId) {
+    return { success: false, error: 'Missing inbound message id' };
+  }
+
+  try {
+    const response = await fetch(
+      `https://api.ycloud.com/v2/whatsapp/inboundMessages/${encodeURIComponent(inboundId)}/typingIndicator`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': params.apiKey,
+        },
+      }
+    );
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return {
+        success: false,
+        error:
+          data?.error?.message ||
+          data?.error?.whatsappApiError?.message ||
+          `YCloud typing indicator error: ${response.status}`,
+        raw: data,
+      };
+    }
+
+    return { success: true, raw: data };
   } catch (error) {
     return {
       success: false,

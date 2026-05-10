@@ -7,7 +7,7 @@ import {
   sendWhatsAppMessage,
   verifyWebhookToken,
 } from '@/lib/whatsapp';
-import { sendYCloudTextMessage } from '@/lib/whatsapp-ycloud';
+import { sendYCloudTextMessage, showYCloudTypingIndicator } from '@/lib/whatsapp-ycloud';
 import { getChatResponse, classifyIntent, extractCustomerInfo } from '@/lib/openai';
 import { createDocument, listDocuments, updateDocument } from '@/lib/appwrite';
 import { normalizeToWhatsAppMarkdown } from '@/lib/whatsapp-format';
@@ -28,6 +28,9 @@ const YCLOUD_WEBHOOK_SECRET = (process.env.YCLOUD_WEBHOOK_SECRET || '')
   .trim()
   .replace(/^['"]+|['"]+$/g, '');
 const YCLOUD_ENFORCE_SIGNATURE = process.env.YCLOUD_ENFORCE_SIGNATURE === 'true';
+const RECENT_INBOUND_TTL_MS = 2 * 60 * 1000;
+const RECENT_AI_DUPLICATE_WINDOW_MS = 45 * 1000;
+const recentInboundKeys = new Map<string, number>();
 
 function isGreetingMessage(text: string) {
   const normalized = text.trim().toLowerCase();
@@ -62,6 +65,49 @@ function verifyYCloudSignature(rawBody: string, signatureHeader: string, secret:
   const provided = Buffer.from(signatureHex, 'hex');
   if (expected.length !== provided.length) return false;
   return timingSafeEqual(expected, provided);
+}
+
+function normalizeTextForDedupe(input: string): string {
+  return String(input || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+function buildInboundDedupeKey(params: {
+  teamId: string;
+  phone: string;
+  messageId: string | null;
+  type: string;
+  text: string;
+}): string {
+  const team = String(params.teamId || 'system');
+  const phone = String(params.phone || '');
+  if (params.messageId) {
+    return `mid:${team}:${phone}:${params.messageId}`;
+  }
+  return `content:${team}:${phone}:${params.type}:${normalizeTextForDedupe(params.text)}`;
+}
+
+function wasRecentlyProcessedInbound(key: string): boolean {
+  const now = Date.now();
+  const expiry = recentInboundKeys.get(key);
+  if (!expiry) return false;
+  if (expiry <= now) {
+    recentInboundKeys.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function markInboundProcessed(key: string) {
+  const now = Date.now();
+  for (const [candidate, expiry] of recentInboundKeys.entries()) {
+    if (expiry <= now) {
+      recentInboundKeys.delete(candidate);
+    }
+  }
+  recentInboundKeys.set(key, now + RECENT_INBOUND_TTL_MS);
 }
 
 async function hasHumanTakeover(teamId: string, phone: string) {
@@ -132,6 +178,22 @@ async function sendViaYCloud(params: {
     mode: 'ycloud',
     messageId: result.messageId || null,
   };
+}
+
+async function sendTypingIndicatorForYCloud(inboundMessageId: string | null) {
+  if (resolveOutboundMode() !== 'ycloud' || !inboundMessageId) {
+    return;
+  }
+  const apiKey = (process.env.YCLOUD_API_KEY || '').trim();
+  if (!apiKey) return;
+
+  const typingResult = await showYCloudTypingIndicator({
+    apiKey,
+    inboundMessageId,
+  });
+  if (!typingResult.success) {
+    console.warn('[WhatsApp] Typing indicator failed:', typingResult.error);
+  }
 }
 
 async function sendViaMetaCloud(params: {
@@ -331,6 +393,33 @@ async function processIncomingMessage(
     const text = 'text' in incoming ? (incoming.text || '') : '';
     const messageId = incoming.messageId || null;
     const teamId = await resolveTeamIdByPhoneNumberId(webhookPhoneNumberId);
+    const dedupeKey = buildInboundDedupeKey({
+      teamId,
+      phone,
+      messageId,
+      type,
+      text,
+    });
+
+    if (wasRecentlyProcessedInbound(dedupeKey)) {
+      console.log(`[WhatsApp] Skipping duplicate inbound (memory cache) ${dedupeKey}`);
+      return;
+    }
+
+    if (messageId) {
+      const existing = await listDocuments('conversations', [
+        Query.equal('teamId', teamId),
+        Query.equal('phone', phone),
+        Query.equal('sentBy', 'customer'),
+        Query.equal('metaMessageId', messageId),
+        Query.limit(1),
+      ]);
+      if (existing.documents.length > 0) {
+        console.log(`[WhatsApp] Skipping duplicate inbound messageId=${messageId}`);
+        markInboundProcessed(dedupeKey);
+        return;
+      }
+    }
 
     console.log(`[Incoming] Incoming ${type} message from ${phone}:`, text || messageId);
 
@@ -363,6 +452,7 @@ async function processIncomingMessage(
       deliveryStatus: 'received',
       createdAt: new Date().toISOString(),
     });
+    markInboundProcessed(dedupeKey);
 
     if (!text) {
       return;
@@ -389,7 +479,8 @@ async function processIncomingMessage(
         intent,
         webhookPhoneNumberId,
         teamId,
-        requestUrl
+        requestUrl,
+        messageId
       );
     } else {
       // Route complaints to staff
@@ -485,7 +576,8 @@ async function generateAndSendResponse(
   intent: string,
   webhookPhoneNumberId: string,
   teamId: string,
-  requestUrl: string
+  requestUrl: string,
+  inboundMessageId: string | null
 ) {
   try {
     const resolvedTeamId =
@@ -507,8 +599,30 @@ async function generateAndSendResponse(
         role: (c.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
         content: c.message || '[media]',
       }));
+    // Current inbound was already stored above, so remove it from history to avoid double prompting.
+    if (history.length > 0) {
+      const last = history[history.length - 1];
+      if (
+        last.role === 'user' &&
+        normalizeTextForDedupe(last.content) === normalizeTextForDedupe(userMessage)
+      ) {
+        history.pop();
+      }
+    }
     const assistantMessages = historyRows.filter((row) => row.role === 'assistant').length;
     const firstAssistantReply = assistantMessages === 0;
+    const recentAi = await listDocuments('conversations', [
+      Query.equal('teamId', resolvedTeamId),
+      Query.equal('customerId', customer.$id),
+      Query.equal('sentBy', 'ai'),
+      Query.orderDesc('$createdAt'),
+      Query.limit(1),
+    ]);
+    const recentAiDoc = recentAi.documents[0] as
+      | { message?: string; createdAt?: string; $createdAt?: string }
+      | undefined;
+    const recentAiText = normalizeTextForDedupe(recentAiDoc?.message || '');
+    const recentAiTs = new Date(recentAiDoc?.createdAt || recentAiDoc?.$createdAt || 0).getTime();
 
     const businessConfigResult = await listDocuments('business_configs', [
       Query.equal('teamId', resolvedTeamId),
@@ -554,6 +668,14 @@ ${knowledge.websiteSnippets.length ? knowledge.websiteSnippets.map((v, i) => `${
       const quickMenuReply = normalizeToWhatsAppMarkdown(
         `Welcome to Traventions!\n\nI'm your travel support assistant.\nPlease choose a service:\n1. Hotel\n2. Holiday Package\n3. Flights\n\nFor Airport Transfer or Booking Status, just type it directly.`
       );
+      if (
+        recentAiText === normalizeTextForDedupe(quickMenuReply) &&
+        Number.isFinite(recentAiTs) &&
+        Date.now() - recentAiTs <= RECENT_AI_DUPLICATE_WINDOW_MS
+      ) {
+        console.log('[WhatsApp] Skipping duplicate greeting auto-reply');
+        return;
+      }
       const sendResult = await sendAutoReply({
         requestUrl,
         teamId: resolvedTeamId,
@@ -579,6 +701,7 @@ ${knowledge.websiteSnippets.length ? knowledge.websiteSnippets.map((v, i) => `${
     }
 
     let response: string;
+    await sendTypingIndicatorForYCloud(inboundMessageId);
     if (process.env.OPENAI_API_KEY) {
       try {
         response = await getChatResponse(userMessage, systemPrompt, history);
@@ -598,6 +721,14 @@ ${knowledge.websiteSnippets.length ? knowledge.websiteSnippets.map((v, i) => `${
         ? `${response}\n\nFor latest packages, please visit ${knowledge.bestWebsiteUrl || WEBSITE_FALLBACK_URL}.`
         : response;
     const waFormattedResponse = normalizeToWhatsAppMarkdown(responseWithFallback);
+    if (
+      recentAiText === normalizeTextForDedupe(waFormattedResponse) &&
+      Number.isFinite(recentAiTs) &&
+      Date.now() - recentAiTs <= RECENT_AI_DUPLICATE_WINDOW_MS
+    ) {
+      console.log('[WhatsApp] Skipping duplicate AI response send');
+      return;
+    }
 
     const sendResult = await sendAutoReply({
       requestUrl,
