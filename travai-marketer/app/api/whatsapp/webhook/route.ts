@@ -41,6 +41,10 @@ const YCLOUD_WEBHOOK_SECRET = (process.env.YCLOUD_WEBHOOK_SECRET || '')
 const YCLOUD_ENFORCE_SIGNATURE = process.env.YCLOUD_ENFORCE_SIGNATURE === 'true';
 const RECENT_INBOUND_TTL_MS = 2 * 60 * 1000;
 const RECENT_AI_DUPLICATE_WINDOW_MS = 45 * 1000;
+const CLASSIFY_TIMEOUT_MS = Number(process.env.WA_CLASSIFY_TIMEOUT_MS || '1200');
+const KNOWLEDGE_TIMEOUT_MS = Number(process.env.WA_KNOWLEDGE_TIMEOUT_MS || '1800');
+const TYPING_REFRESH_MS = Number(process.env.WA_TYPING_REFRESH_MS || '2200');
+const TYPING_MAX_MS = Number(process.env.WA_TYPING_MAX_MS || '45000');
 const recentInboundKeys = new Map<string, number>();
 const GREETING_BUTTONS = [
   { id: 'svc_leisure', title: 'Leisure' },
@@ -125,6 +129,20 @@ function normalizeTextForDedupe(input: string): string {
     .trim()
     .replace(/\s+/g, ' ')
     .toLowerCase();
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timeoutHandle = setTimeout(() => resolve(fallback), Math.max(300, timeoutMs));
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
 }
 
 function buildInboundDedupeKey(params: {
@@ -261,20 +279,83 @@ async function sendYCloudGreetingExperience(params: {
   };
 }
 
-async function sendTypingIndicatorForYCloud(inboundMessageId: string | null) {
+async function startYCloudTypingKeepAlive(inboundMessageId: string | null) {
   if (resolveOutboundMode() !== 'ycloud' || !inboundMessageId) {
-    return;
+    return { stop: async () => {} };
   }
   const apiKey = (process.env.YCLOUD_API_KEY || '').trim();
-  if (!apiKey) return;
-
-  const typingResult = await showYCloudTypingIndicator({
-    apiKey,
-    inboundMessageId,
-  });
-  if (!typingResult.success) {
-    console.warn('[WhatsApp] Typing indicator failed:', typingResult.error);
+  if (!apiKey) {
+    return { stop: async () => {} };
   }
+
+  const inboundId = String(inboundMessageId || '').trim();
+  if (!inboundId) {
+    return { stop: async () => {} };
+  }
+
+  let stopped = false;
+  let inFlight: Promise<void> | null = null;
+  const startedAt = Date.now();
+
+  const emitTyping = async () => {
+    const typingResult = await showYCloudTypingIndicator({
+      apiKey,
+      inboundMessageId: inboundId,
+    });
+    if (!typingResult.success) {
+      console.warn('[WhatsApp] Typing indicator failed:', typingResult.error);
+    }
+  };
+
+  await emitTyping();
+
+  const interval = setInterval(() => {
+    if (stopped) return;
+    if (Date.now() - startedAt >= Math.max(8000, TYPING_MAX_MS)) {
+      stopped = true;
+      clearInterval(interval);
+      return;
+    }
+    if (inFlight) return;
+    inFlight = emitTyping().finally(() => {
+      inFlight = null;
+    });
+  }, Math.max(1200, TYPING_REFRESH_MS));
+
+  return {
+    stop: async () => {
+      if (stopped) return;
+      stopped = true;
+      clearInterval(interval);
+      if (inFlight) {
+        await inFlight;
+      }
+    },
+  };
+}
+
+async function loadTravelKnowledgeFast(
+  teamId: string,
+  userMessage: string
+): Promise<Awaited<ReturnType<typeof loadTravelKnowledge>>> {
+  const fallback: Awaited<ReturnType<typeof loadTravelKnowledge>> = {
+    databaseSnippets: [] as string[],
+    hasPackageData: false,
+    bestWebsiteUrl: sanitizeWebsiteUrlForBot(WEBSITE_FALLBACK_URL),
+    bestWebsiteTitle: 'Traventions',
+    websiteSnippets: [] as string[],
+    diagnostics: {
+      collectionsScanned: [] as string[],
+      collectionDocCounts: {} as Record<string, number>,
+      crawledPages: 0,
+    },
+  };
+
+  return withTimeout(
+    loadTravelKnowledge(teamId, userMessage).catch(() => fallback),
+    KNOWLEDGE_TIMEOUT_MS,
+    fallback
+  );
 }
 
 async function sendViaMetaCloud(params: {
@@ -507,19 +588,6 @@ async function processIncomingMessage(
     // Find or create customer record
     let customer = await findOrCreateCustomer(phone, teamId);
 
-    // Extract customer info from message (name, email, etc.)
-    if (text && process.env.OPENAI_API_KEY) {
-      const extractedInfo = await extractCustomerInfo(text);
-      if (extractedInfo.name && !customer.name) {
-        customer = await updateDocument('customers', customer.$id, {
-          name: extractedInfo.name,
-          email: extractedInfo.email,
-          phone: extractedInfo.phone || phone,
-          updatedAt: new Date().toISOString(),
-        });
-      }
-    }
-
     // Save the conversation message
     await createDocument('conversations', {
       teamId,
@@ -539,6 +607,22 @@ async function processIncomingMessage(
       return;
     }
 
+    // Non-critical: extract profile details in background so reply path stays fast.
+    if (process.env.OPENAI_API_KEY) {
+      extractCustomerInfo(text)
+        .then(async (extractedInfo) => {
+          if (extractedInfo?.name && !customer.name) {
+            customer = await updateDocument('customers', customer.$id, {
+              name: extractedInfo.name,
+              email: extractedInfo.email,
+              phone: extractedInfo.phone || phone,
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        })
+        .catch(() => {});
+    }
+
     const handover = await hasHumanTakeover(teamId, phone);
     if (handover) {
       console.log(`[WhatsApp] AI suppressed for ${phone} due to staff takeover`);
@@ -551,7 +635,11 @@ async function processIncomingMessage(
     const intent = greetingMessage
       ? 'greeting'
       : process.env.OPENAI_API_KEY
-        ? await classifyIntent(text, businessContext).catch(() => 'other')
+        ? await withTimeout(
+            classifyIntent(text, businessContext).catch(() => 'other'),
+            CLASSIFY_TIMEOUT_MS,
+            'other'
+          )
         : 'other';
 
     // Generate AI response for all non-complaint intents.
@@ -666,14 +754,16 @@ async function generateAndSendResponse(
   try {
     const resolvedTeamId =
       teamId || customer.teamId || process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'system';
+    const typingKeepAlive = await startYCloudTypingKeepAlive(inboundMessageId);
+    try {
 
-    // Get recent conversation history
-    const convos = await listDocuments('conversations', [
-      Query.equal('teamId', resolvedTeamId),
-      Query.equal('customerId', customer.$id),
-      Query.orderDesc('$createdAt'),
-      Query.limit(10),
-    ]);
+      // Get recent conversation history
+      const convos = await listDocuments('conversations', [
+        Query.equal('teamId', resolvedTeamId),
+        Query.equal('customerId', customer.$id),
+        Query.orderDesc('$createdAt'),
+        Query.limit(10),
+      ]);
 
     const historyRows = convos.documents as Array<{ role?: string; message?: string }>;
     const history = historyRows
@@ -716,50 +806,8 @@ async function generateAndSendResponse(
       | { businessName?: string; openaiSystemPrompt?: string }
       | undefined;
 
-    const packageIntent = isPackageIntent(userMessage, intent);
-    const knowledge = await loadTravelKnowledge(resolvedTeamId, userMessage);
-    const safeWebsiteSnippets = sanitizeWebsiteSnippetsForBot(knowledge.websiteSnippets);
-    const routeChoice = resolveSafeRouteChoice({
-      message: userMessage,
-      classifiedIntent: intent,
-      websiteUrlHint: knowledge.bestWebsiteUrl,
-    });
-    const safeBestWebsiteUrl = sanitizeWebsiteUrlForBot(knowledge.bestWebsiteUrl);
-
-    // Generate AI response
-    const systemPrompt =
-      `${businessConfig?.openaiSystemPrompt || ''}\n\n` +
-      `You are Traventions' WhatsApp assistant.
-Mention Traventions in customer-facing replies.
-${firstAssistantReply ? 'Start this reply with "Welcome to Traventions!".' : 'Do not repeat the welcome line on every reply.'}
-${getBotRoutePolicyPromptBlock()}
-For package/pricing questions:
-- First use database knowledge for exact known details.
-- If DB package data is missing, still provide a practical sample itinerary.
-- Then include the most relevant website page from the index.
-Use only WhatsApp-supported formatting:
-- Bold: *text*
-- Italic: _text_
-- Strikethrough: ~text~
-- Bullets: * item
-- Numbered lists: 1. item
-- Quote: > text
-- Inline code: \`code\`
-- Code block: \`\`\`code\`\`\`
-Do not use markdown headings like #, ##, ###.
-Current intent: ${intent}
-Package intent: ${packageIntent ? 'yes' : 'no'}
-Package data available: ${knowledge.hasPackageData ? 'yes' : 'no'}
-Best safe website page: ${knowledge.bestWebsiteTitle} (${safeBestWebsiteUrl})
-Preferred route for this query: ${routeChoice.url}${routeChoice.loginRequired ? ' (login required)' : ''}
-DATABASE KNOWLEDGE:
-${knowledge.databaseSnippets.length ? knowledge.databaseSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : 'No relevant snippets found.'}
-WEBSITE PAGE INDEX:
-${safeWebsiteSnippets.length ? safeWebsiteSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : `1. Traventions - ${WEBSITE_FALLBACK_URL}`}`.trim();
-
     if (isGreetingMessage(userMessage)) {
       const mode = resolveOutboundMode();
-      await sendTypingIndicatorForYCloud(inboundMessageId);
 
       if (mode === 'ycloud') {
         const priorGreeting = normalizeTextForDedupe(GREETING_MENU_TEXT);
@@ -828,8 +876,71 @@ ${safeWebsiteSnippets.length ? safeWebsiteSnippets.map((v, i) => `${i + 1}. ${v}
     }
 
     const selectedService = detectServiceSelection(userMessage);
+    const packageIntent = isPackageIntent(userMessage, intent);
+
+    let knowledge: Awaited<ReturnType<typeof loadTravelKnowledge>> = {
+      databaseSnippets: [] as string[],
+      hasPackageData: false,
+      bestWebsiteUrl: sanitizeWebsiteUrlForBot(WEBSITE_FALLBACK_URL),
+      bestWebsiteTitle: 'Traventions',
+      websiteSnippets: [] as string[],
+      diagnostics: {
+        collectionsScanned: [] as string[],
+        collectionDocCounts: {} as Record<string, number>,
+        crawledPages: 0,
+      },
+    };
+    let safeWebsiteSnippets: string[] = [];
+    let routeChoice = resolveSafeRouteChoice({
+      message: userMessage,
+      classifiedIntent: intent,
+      websiteUrlHint: knowledge.bestWebsiteUrl,
+    });
+    let safeBestWebsiteUrl = sanitizeWebsiteUrlForBot(knowledge.bestWebsiteUrl);
+    let systemPrompt = '';
+
+    if (!selectedService && process.env.OPENAI_API_KEY) {
+      knowledge = await loadTravelKnowledgeFast(resolvedTeamId, userMessage);
+      safeWebsiteSnippets = sanitizeWebsiteSnippetsForBot(knowledge.websiteSnippets);
+      routeChoice = resolveSafeRouteChoice({
+        message: userMessage,
+        classifiedIntent: intent,
+        websiteUrlHint: knowledge.bestWebsiteUrl,
+      });
+      safeBestWebsiteUrl = sanitizeWebsiteUrlForBot(knowledge.bestWebsiteUrl);
+
+      systemPrompt =
+        `${businessConfig?.openaiSystemPrompt || ''}\n\n` +
+        `You are Traventions' WhatsApp assistant.
+Mention Traventions in customer-facing replies.
+${firstAssistantReply ? 'Start this reply with "Welcome to Traventions!".' : 'Do not repeat the welcome line on every reply.'}
+${getBotRoutePolicyPromptBlock()}
+For package/pricing questions:
+- First use database knowledge for exact known details.
+- If DB package data is missing, still provide a practical sample itinerary.
+- Then include the most relevant website page from the index.
+Use only WhatsApp-supported formatting:
+- Bold: *text*
+- Italic: _text_
+- Strikethrough: ~text~
+- Bullets: * item
+- Numbered lists: 1. item
+- Quote: > text
+- Inline code: \`code\`
+- Code block: \`\`\`code\`\`\`
+Do not use markdown headings like #, ##, ###.
+Current intent: ${intent}
+Package intent: ${packageIntent ? 'yes' : 'no'}
+Package data available: ${knowledge.hasPackageData ? 'yes' : 'no'}
+Best safe website page: ${knowledge.bestWebsiteTitle} (${safeBestWebsiteUrl})
+Preferred route for this query: ${routeChoice.url}${routeChoice.loginRequired ? ' (login required)' : ''}
+DATABASE KNOWLEDGE:
+${knowledge.databaseSnippets.length ? knowledge.databaseSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : 'No relevant snippets found.'}
+WEBSITE PAGE INDEX:
+${safeWebsiteSnippets.length ? safeWebsiteSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : `1. Traventions - ${WEBSITE_FALLBACK_URL}`}`.trim();
+    }
+
     let response: string;
-    await sendTypingIndicatorForYCloud(inboundMessageId);
     if (selectedService === 'leisure') {
       response =
         'Great choice. *Leisure* it is.\nPlease share:\n1. Destination\n2. Travel dates\n3. Number of travelers\n4. Budget range\n\nI will craft the best options for you.';
@@ -841,7 +952,11 @@ ${safeWebsiteSnippets.length ? safeWebsiteSnippets.map((v, i) => `${i + 1}. ${v}
         'Awesome. Let us find your *Hotel*.\nPlease share:\n1. City\n2. Check-in date\n3. Check-out date\n4. Guests and rooms\n5. Budget per night';
     } else if (process.env.OPENAI_API_KEY) {
       try {
-        response = await getChatResponse(userMessage, systemPrompt, history);
+        response = await getChatResponse(
+          userMessage,
+          systemPrompt || "You are Traventions' WhatsApp assistant.",
+          history
+        );
         response = enforceSafeUrlsInReply(response);
       } catch (error) {
         console.error('[WhatsApp] OpenAI reply generation failed, using fallback:', error);
@@ -893,10 +1008,13 @@ ${safeWebsiteSnippets.length ? safeWebsiteSnippets.map((v, i) => `${i + 1}. ${v}
       createdAt: new Date().toISOString(),
     });
 
-    if (sendResult.success) {
-      console.log(`[OK] AI response sent to ${phone} via ${sendResult.mode}`);
-    } else {
-      console.error('Failed to send AI response');
+      if (sendResult.success) {
+        console.log(`[OK] AI response sent to ${phone} via ${sendResult.mode}`);
+      } else {
+        console.error('Failed to send AI response');
+      }
+    } finally {
+      await typingKeepAlive.stop();
     }
   } catch (error) {
     console.error('[WhatsApp] Error generating/sending response:', error);
