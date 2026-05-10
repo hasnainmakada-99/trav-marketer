@@ -29,6 +29,13 @@ const YCLOUD_WEBHOOK_SECRET = (process.env.YCLOUD_WEBHOOK_SECRET || '')
   .replace(/^['"]+|['"]+$/g, '');
 const YCLOUD_ENFORCE_SIGNATURE = process.env.YCLOUD_ENFORCE_SIGNATURE === 'true';
 
+function isGreetingMessage(text: string) {
+  const normalized = text.trim().toLowerCase();
+  return /^(hi|hello|hey|hlo|helo|namaste|yo|good morning|good afternoon|good evening)$/.test(
+    normalized
+  );
+}
+
 function resolveOutboundMode() {
   const forced = (process.env.WHATSAPP_OUTBOUND_MODE || '').trim().toLowerCase();
   if (forced === 'bridge' || forced === 'meta' || forced === 'ycloud') {
@@ -500,6 +507,8 @@ async function generateAndSendResponse(
         role: (c.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
         content: c.message || '[media]',
       }));
+    const assistantMessages = historyRows.filter((row) => row.role === 'assistant').length;
+    const firstAssistantReply = assistantMessages === 0;
 
     const businessConfigResult = await listDocuments('business_configs', [
       Query.equal('teamId', resolvedTeamId),
@@ -517,7 +526,7 @@ async function generateAndSendResponse(
       `${businessConfig?.openaiSystemPrompt || ''}\n\n` +
       `You are Traventions' WhatsApp assistant.
 Mention Traventions in customer-facing replies.
-For first meaningful assistant reply in a thread, start with "Welcome to Traventions!".
+${firstAssistantReply ? 'Start this reply with "Welcome to Traventions!".' : 'Do not repeat the welcome line on every reply.'}
 For package/pricing questions:
 - First use database knowledge for exact known details.
 - If DB package data is missing, still provide a practical sample itinerary.
@@ -540,6 +549,34 @@ DATABASE KNOWLEDGE:
 ${knowledge.databaseSnippets.length ? knowledge.databaseSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : 'No relevant snippets found.'}
 WEBSITE PAGE INDEX:
 ${knowledge.websiteSnippets.length ? knowledge.websiteSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : `1. Traventions - ${WEBSITE_FALLBACK_URL}`}`.trim();
+
+    if (isGreetingMessage(userMessage)) {
+      const quickMenuReply = normalizeToWhatsAppMarkdown(
+        `Welcome to Traventions!\n\nI'm your travel support assistant.\nPlease choose a service:\n1. Hotel\n2. Holiday Package\n3. Flights\n\nFor Airport Transfer or Booking Status, just type it directly.`
+      );
+      const sendResult = await sendAutoReply({
+        requestUrl,
+        teamId: resolvedTeamId,
+        customerId: customer.$id,
+        phone,
+        message: quickMenuReply,
+        webhookPhoneNumberId,
+      });
+
+      await createDocument('conversations', {
+        teamId: resolvedTeamId,
+        customerId: customer.$id,
+        phone: phone,
+        role: 'assistant',
+        message: quickMenuReply,
+        messageType: 'text',
+        sentBy: 'ai',
+        metaMessageId: sendResult.messageId || null,
+        deliveryStatus: sendResult.success ? 'sent' : 'failed',
+        createdAt: new Date().toISOString(),
+      });
+      return;
+    }
 
     let response: string;
     if (process.env.OPENAI_API_KEY) {
