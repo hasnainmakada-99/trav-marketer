@@ -9,7 +9,6 @@ import {
 } from '@/lib/whatsapp';
 import {
   sendYCloudTextMessage,
-  sendYCloudImageMessage,
   sendYCloudReplyButtonsMessage,
   showYCloudTypingIndicator,
 } from '@/lib/whatsapp-ycloud';
@@ -238,29 +237,19 @@ async function sendYCloudGreetingExperience(params: {
   }
 
   const imageUrl = getGreetingImageUrl(params.requestUrl);
-  const imageResult = await sendYCloudImageMessage({
-    apiKey,
-    fromPhoneE164: fromPhone,
-    toPhone: params.phone,
-    imageUrl,
-  });
-  if (!imageResult.success) {
-    throw new Error(imageResult.error || 'Failed to send greeting image via YCloud');
-  }
-
   const menuResult = await sendYCloudReplyButtonsMessage({
     apiKey,
     fromPhoneE164: fromPhone,
     toPhone: params.phone,
     bodyText: GREETING_MENU_TEXT,
     buttons: [...GREETING_BUTTONS],
+    headerImageUrl: imageUrl,
   });
   if (!menuResult.success) {
-    throw new Error(menuResult.error || 'Failed to send greeting buttons via YCloud');
+    throw new Error(menuResult.error || 'Failed to send greeting interactive card via YCloud');
   }
 
   return {
-    imageMessageId: imageResult.messageId || null,
     menuMessageId: menuResult.messageId || null,
   };
 }
@@ -780,7 +769,7 @@ ${knowledge.websiteSnippets.length ? knowledge.websiteSnippets.map((v, i) => `${
           message: GREETING_MENU_TEXT,
           messageType: 'interactive',
           sentBy: 'ai',
-          metaMessageId: greetingSend.menuMessageId || greetingSend.imageMessageId || null,
+          metaMessageId: greetingSend.menuMessageId || null,
           deliveryStatus: 'sent',
           createdAt: new Date().toISOString(),
         });

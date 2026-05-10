@@ -127,6 +127,7 @@ export async function sendYCloudReplyButtonsMessage(params: {
   toPhone: string;
   bodyText: string;
   buttons: ButtonOption[];
+  headerImageUrl?: string;
 }): Promise<SendResult> {
   try {
     const cleanedButtons = params.buttons
@@ -153,6 +154,16 @@ export async function sendYCloudReplyButtonsMessage(params: {
         type: 'interactive',
         interactive: {
           type: 'button',
+          ...(params.headerImageUrl?.trim()
+            ? {
+                header: {
+                  type: 'image',
+                  image: {
+                    link: params.headerImageUrl.trim(),
+                  },
+                },
+              }
+            : {}),
           body: {
             text: params.bodyText,
           },
