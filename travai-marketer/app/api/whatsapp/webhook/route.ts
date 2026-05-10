@@ -4,11 +4,14 @@ import {
   extractMessage,
   extractStatus,
   parseWhatsAppWebhook,
+  sendWhatsAppMessage,
   verifyWebhookToken,
 } from '@/lib/whatsapp';
+import { sendYCloudTextMessage } from '@/lib/whatsapp-ycloud';
 import { getChatResponse, classifyIntent, extractCustomerInfo } from '@/lib/openai';
 import { createDocument, listDocuments, updateDocument } from '@/lib/appwrite';
 import { normalizeToWhatsAppMarkdown } from '@/lib/whatsapp-format';
+import { createHmac, timingSafeEqual } from 'crypto';
 import {
   buildRuleBasedItinerary,
   isPackageIntent,
@@ -21,6 +24,32 @@ const WEBSITE_FALLBACK_URL =
   process.env.TRAVENTIONS_WEBSITE_URL || 'https://traventions-ai.vercel.app';
 const HUMAN_HANDOVER_MINUTES = Number(process.env.WA_HUMAN_HANDOVER_MINUTES || '15');
 const DISABLE_HUMAN_HANDOVER = process.env.WA_DISABLE_HUMAN_HANDOVER === 'true';
+const YCLOUD_WEBHOOK_SECRET = (process.env.YCLOUD_WEBHOOK_SECRET || '').trim();
+
+function resolveOutboundMode() {
+  const forced = (process.env.WHATSAPP_OUTBOUND_MODE || '').trim().toLowerCase();
+  if (forced === 'bridge' || forced === 'meta' || forced === 'ycloud') {
+    return forced;
+  }
+  return process.env.BRIDGE_SHARED_SECRET ? 'bridge' : 'meta';
+}
+
+function verifyYCloudSignature(rawBody: string, signatureHeader: string, secret: string): boolean {
+  const parts = signatureHeader
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const timestamp = parts.find((part) => part.startsWith('t='))?.slice(2);
+  const signatureHex = parts.find((part) => part.startsWith('s='))?.slice(2);
+  if (!timestamp || !signatureHex) return false;
+
+  const signedPayload = `${timestamp}.${rawBody}`;
+  const expectedHex = createHmac('sha256', secret).update(signedPayload).digest('hex');
+  const expected = Buffer.from(expectedHex, 'hex');
+  const provided = Buffer.from(signatureHex, 'hex');
+  if (expected.length !== provided.length) return false;
+  return timingSafeEqual(expected, provided);
+}
 
 async function hasHumanTakeover(teamId: string, phone: string) {
   if (DISABLE_HUMAN_HANDOVER) {
@@ -64,6 +93,60 @@ async function hasHumanTakeover(teamId: string, phone: string) {
   return Date.now() - latestStaffTs <= handoverWindowMs;
 }
 
+async function sendViaYCloud(params: {
+  phone: string;
+  message: string;
+}) {
+  const apiKey = (process.env.YCLOUD_API_KEY || '').trim();
+  const fromPhone = (process.env.YCLOUD_WHATSAPP_FROM || '').trim();
+  if (!apiKey || !fromPhone) {
+    throw new Error('YCloud send is not configured. Set YCLOUD_API_KEY and YCLOUD_WHATSAPP_FROM.');
+  }
+  const result = await sendYCloudTextMessage({
+    apiKey,
+    fromPhoneE164: fromPhone,
+    toPhone: params.phone,
+    message: params.message,
+  });
+  if (!result.success) {
+    throw new Error(result.error || 'YCloud send failed');
+  }
+  return {
+    success: true,
+    mode: 'ycloud',
+    messageId: result.messageId || null,
+  };
+}
+
+async function sendViaMetaCloud(params: {
+  phone: string;
+  message: string;
+  webhookPhoneNumberId: string;
+}) {
+  const phoneNumberId =
+    params.webhookPhoneNumberId || (process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim();
+  const whatsappToken = (process.env.WHATSAPP_TOKEN || '').trim();
+  if (!phoneNumberId || !whatsappToken) {
+    throw new Error(
+      'Meta Cloud send is not configured. Set WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_TOKEN.'
+    );
+  }
+  const result = await sendWhatsAppMessage({
+    phoneNumberId,
+    recipientPhone: params.phone,
+    message: params.message,
+    whatsappToken,
+  });
+  if (!result.success) {
+    throw new Error(result.error || 'Meta Cloud send failed');
+  }
+  return {
+    success: true,
+    mode: 'meta',
+    messageId: result.messageId || null,
+  };
+}
+
 async function queueBridgeReply(params: {
   requestUrl: string;
   teamId: string;
@@ -94,6 +177,28 @@ async function queueBridgeReply(params: {
     mode: 'bridge',
     messageId: controlData?.commandId || null,
   };
+}
+
+async function sendAutoReply(params: {
+  requestUrl: string;
+  teamId: string;
+  customerId: string;
+  phone: string;
+  message: string;
+  webhookPhoneNumberId: string;
+}) {
+  const mode = resolveOutboundMode();
+  if (mode === 'ycloud') {
+    return sendViaYCloud({ phone: params.phone, message: params.message });
+  }
+  if (mode === 'meta') {
+    return sendViaMetaCloud({
+      phone: params.phone,
+      message: params.message,
+      webhookPhoneNumberId: params.webhookPhoneNumberId,
+    });
+  }
+  return queueBridgeReply(params);
 }
 
 /**
@@ -139,7 +244,20 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    const rawBody = await request.text();
+    const body = rawBody ? JSON.parse(rawBody) : {};
+
+    const ycloudSignature = request.headers.get('YCloud-Signature');
+    if (ycloudSignature && YCLOUD_WEBHOOK_SECRET) {
+      const validYCloudSignature = verifyYCloudSignature(
+        rawBody || '{}',
+        ycloudSignature,
+        YCLOUD_WEBHOOK_SECRET
+      );
+      if (!validYCloudSignature) {
+        return NextResponse.json({ error: 'Invalid YCloud webhook signature' }, { status: 401 });
+      }
+    }
 
     // Validate webhook signature (implement X-Hub-Signature verification in production)
     // const signature = request.headers.get('X-Hub-Signature-256');
@@ -426,15 +544,16 @@ ${knowledge.websiteSnippets.length ? knowledge.websiteSnippets.map((v, i) => `${
         : response;
     const waFormattedResponse = normalizeToWhatsAppMarkdown(responseWithFallback);
 
-    const sendResult = await queueBridgeReply({
+    const sendResult = await sendAutoReply({
       requestUrl,
       teamId: resolvedTeamId,
       customerId: customer.$id,
       phone,
       message: waFormattedResponse,
+      webhookPhoneNumberId,
     });
 
-    // Save the outgoing message with the actual Meta message ID
+    // Save the outgoing message with the actual provider message ID
     await createDocument('conversations', {
       teamId: resolvedTeamId,
       customerId: customer.$id,
@@ -444,14 +563,14 @@ ${knowledge.websiteSnippets.length ? knowledge.websiteSnippets.map((v, i) => `${
       messageType: 'text',
       sentBy: 'ai',
       metaMessageId: sendResult.messageId || null,
-      deliveryStatus: sendResult.success ? 'bridged' : 'failed',
+      deliveryStatus: sendResult.success ? 'sent' : 'failed',
       createdAt: new Date().toISOString(),
     });
 
     if (sendResult.success) {
-      console.log(`[OK] AI response sent to ${phone}`);
+      console.log(`[OK] AI response sent to ${phone} via ${sendResult.mode}`);
     } else {
-      console.error('Failed to send AI response: bridge queue failed');
+      console.error('Failed to send AI response');
     }
   } catch (error) {
     console.error('[WhatsApp] Error generating/sending response:', error);

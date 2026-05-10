@@ -249,20 +249,122 @@ interface WebhookPayload {
       };
     }>;
   }>;
+  type?: string;
+  createTime?: string;
+  whatsappInboundMessage?: {
+    id?: string;
+    wamid?: string;
+    from?: string;
+    to?: string;
+    type?: string;
+    text?: { body?: string };
+    image?: { id?: string; mime_type?: string; caption?: string };
+    document?: { id?: string; filename?: string; mime_type?: string };
+    audio?: { id?: string };
+    video?: { id?: string };
+    interactive?: { type?: string };
+    createTime?: string;
+    sendTime?: string;
+  };
+  whatsappMessage?: {
+    id?: string;
+    from?: string;
+    to?: string;
+    type?: string;
+    status?: string;
+    text?: { body?: string };
+    updateTime?: string;
+    createTime?: string;
+  };
+  data?: {
+    whatsappInboundMessage?: WebhookPayload['whatsappInboundMessage'];
+    whatsappMessage?: WebhookPayload['whatsappMessage'];
+  };
+}
+
+function toUnixSeconds(value?: string): string {
+  if (!value) return `${Math.floor(Date.now() / 1000)}`;
+  const ts = new Date(value).getTime();
+  if (!Number.isFinite(ts) || ts <= 0) return `${Math.floor(Date.now() / 1000)}`;
+  return `${Math.floor(ts / 1000)}`;
+}
+
+function inferYCloudMessageType(message: Record<string, unknown>): string {
+  if (typeof message.type === 'string' && message.type.trim()) {
+    return message.type;
+  }
+  if (message.text) return 'text';
+  if (message.image) return 'image';
+  if (message.document) return 'document';
+  if (message.audio) return 'audio';
+  if (message.video) return 'video';
+  return 'text';
 }
 
 export function parseWhatsAppWebhook(body: WebhookPayload) {
   try {
+    // Meta Cloud API webhook shape
     const entry = body.entry?.[0];
     const change = entry?.changes?.[0];
     const value = change?.value;
+    if (value) {
+      return {
+        phoneNumberId: value?.metadata?.phone_number_id,
+        displayPhoneNumber: value?.metadata?.display_phone_number,
+        contact: value?.contacts?.[0],
+        messages: value?.messages || [],
+        statuses: value?.statuses || [],
+      };
+    }
+
+    // YCloud webhook shape
+    const inbound = body.whatsappInboundMessage || body.data?.whatsappInboundMessage;
+    const ycloudMessage = body.whatsappMessage || body.data?.whatsappMessage;
+    const eventType = String(body.type || '');
+
+    const messages: IncomingMessage[] = [];
+    const statuses: IncomingStatus[] = [];
+
+    if (inbound) {
+      const inferredType = inferYCloudMessageType(inbound as Record<string, unknown>);
+      messages.push({
+        from: String(inbound.from || ''),
+        id: String(inbound.wamid || inbound.id || ''),
+        timestamp: toUnixSeconds(inbound.sendTime || inbound.createTime || body.createTime),
+        type: inferredType,
+        text: inbound.text,
+        image: inbound.image,
+        document: inbound.document,
+        audio: inbound.audio,
+        video: inbound.video,
+        interactive: inbound.interactive,
+      });
+    } else if (eventType.includes('inbound') && ycloudMessage) {
+      const inferredType = inferYCloudMessageType(ycloudMessage as Record<string, unknown>);
+      messages.push({
+        from: String(ycloudMessage.from || ''),
+        id: String(ycloudMessage.id || ''),
+        timestamp: toUnixSeconds(ycloudMessage.createTime || body.createTime),
+        type: inferredType,
+        text: ycloudMessage.text,
+      });
+    }
+
+    if (ycloudMessage?.status) {
+      statuses.push({
+        id: String(ycloudMessage.id || ''),
+        recipient_id: String(ycloudMessage.to || ''),
+        status: String(ycloudMessage.status || ''),
+        timestamp: toUnixSeconds(ycloudMessage.updateTime || body.createTime),
+      });
+    }
 
     return {
-      phoneNumberId: value?.metadata?.phone_number_id,
-      displayPhoneNumber: value?.metadata?.display_phone_number,
-      contact: value?.contacts?.[0],
-      messages: value?.messages || [],
-      statuses: value?.statuses || [],
+      phoneNumberId: '',
+      displayPhoneNumber: '',
+      contact: undefined,
+      messages,
+      statuses,
     };
   } catch (error) {
     console.error('Error parsing WhatsApp webhook:', error);
@@ -274,7 +376,7 @@ export function extractMessage(message: IncomingMessage) {
   if (!message) return null;
 
   const base = {
-    phone: message.from,
+    phone: normalizePhone(message.from || ''),
     timestamp: message.timestamp,
     messageId: message.id,
     type: message.type,
@@ -316,7 +418,7 @@ export function extractMessage(message: IncomingMessage) {
 export function extractStatus(status: IncomingStatus) {
   if (!status) return null;
   return {
-    phone: status.recipient_id,
+    phone: normalizePhone(status.recipient_id || ''),
     messageId: status.id,
     status: status.status,
     timestamp: status.timestamp,

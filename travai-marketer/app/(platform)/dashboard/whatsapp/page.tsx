@@ -4,6 +4,10 @@ import { useEffect, useState, useCallback, type ReactNode } from 'react';
 
 const TEAM_ID =
   process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
+const PUBLIC_WHATSAPP_MODE = (
+  process.env.NEXT_PUBLIC_WHATSAPP_OUTBOUND_MODE || 'bridge'
+).toLowerCase();
+const IS_YCLOUD_MODE = PUBLIC_WHATSAPP_MODE === 'ycloud';
 
 type Tab = 'inbox' | 'send' | 'templates' | 'setup';
 
@@ -309,7 +313,7 @@ export default function WhatsAppPage() {
           </div>
           <div className="flex items-center gap-2 text-xs text-gray-500">
             <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-            Connected via WA Web Bridge
+            {IS_YCLOUD_MODE ? 'Connected via YCloud WhatsApp API' : 'Connected via WA Web Bridge'}
           </div>
         </div>
 
@@ -1363,6 +1367,7 @@ function SetupTab({
 }: {
   showToast: (m: string, t?: 'success' | 'error') => void;
 }) {
+  const isYCloudMode = IS_YCLOUD_MODE;
   const [bridgeState, setBridgeState] = useState<{
     status: 'starting' | 'connected' | 'disconnected' | 'qr_required' | 'error';
     qrText: string | null;
@@ -1386,6 +1391,10 @@ function SetupTab({
   const copy = (text: string) => navigator.clipboard.writeText(text);
 
   const loadBridgeState = useCallback(async () => {
+    if (isYCloudMode) {
+      setBridgeLoading(false);
+      return;
+    }
     try {
       const res = await fetch(
         `/api/wa-bridge/state?teamId=${encodeURIComponent(TEAM_ID)}`,
@@ -1400,9 +1409,13 @@ function SetupTab({
     } finally {
       setBridgeLoading(false);
     }
-  }, []);
+  }, [isYCloudMode]);
 
   useEffect(() => {
+    if (isYCloudMode) {
+      setBridgeLoading(false);
+      return;
+    }
     const run = () => {
       void loadBridgeState();
     };
@@ -1412,7 +1425,7 @@ function SetupTab({
       clearTimeout(initial);
       clearInterval(t);
     };
-  }, [loadBridgeState]);
+  }, [isYCloudMode, loadBridgeState]);
 
   useEffect(() => {
     const tick = () => {
@@ -1493,6 +1506,102 @@ function SetupTab({
       setBridgeActionLoading(null);
     }
   };
+
+  if (isYCloudMode) {
+    return (
+      <div className="h-full overflow-y-auto p-6">
+        <div className="max-w-3xl mx-auto space-y-4">
+          <div className="bg-white border border-gray-200 rounded-lg p-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold text-gray-900">YCloud Webhook Status</h2>
+              <span className="text-xs px-2 py-1 rounded-full font-medium bg-emerald-100 text-emerald-700">
+                Active Mode: YCLOUD
+              </span>
+            </div>
+            <p className="text-sm text-gray-500 mt-1">
+              Bridge is disabled in this mode. Inbound and outbound WhatsApp traffic runs through YCloud webhooks + API.
+            </p>
+          </div>
+
+          <div className="bg-white border border-gray-200 rounded-lg p-6">
+            <h2 className="text-lg font-bold text-gray-900 mb-1">
+              YCloud Webhook Endpoint
+            </h2>
+            <p className="text-sm text-gray-500 mb-5">
+              Add this URL in YCloud {'->'} Developers {'->'} Webhooks {'->'} Add Endpoint.
+            </p>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Endpoint URL
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    readOnly
+                    value={webhookUrl}
+                    className="flex-1 px-3 py-2 bg-gray-50 border border-gray-300 rounded-lg text-sm font-mono"
+                  />
+                  <button
+                    onClick={() => copy(webhookUrl)}
+                    className="px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50 rounded-lg border border-emerald-200"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Events to subscribe
+                </label>
+                <div className="text-xs text-gray-600 space-y-1">
+                  <p>
+                    <code className="bg-gray-100 px-1 rounded">whatsapp.inbound.message</code>{' '}
+                    (required for incoming customer messages)
+                  </p>
+                  <p>
+                    <code className="bg-gray-100 px-1 rounded">whatsapp.message.updated</code>{' '}
+                    (recommended for sent/delivered/read status)
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white border border-gray-200 rounded-lg p-6">
+            <h2 className="text-lg font-bold text-gray-900 mb-3">
+              Required Production Environment Variables
+            </h2>
+            <p className="text-sm text-gray-500 mb-4">
+              Set these in Vercel {'->'} Project {'->'} Settings {'->'} Environment Variables.
+            </p>
+            <div className="space-y-2">
+              {[
+                { key: 'WHATSAPP_OUTBOUND_MODE', hint: 'Set to ycloud' },
+                { key: 'YCLOUD_API_KEY', hint: 'API key from YCloud Developers' },
+                { key: 'YCLOUD_WHATSAPP_FROM', hint: 'Sender number in E.164, e.g. +919428122003' },
+                { key: 'YCLOUD_WEBHOOK_SECRET', hint: 'Webhook endpoint secret from YCloud (recommended)' },
+                { key: 'OPENAI_API_KEY', hint: 'Used to generate AI responses' },
+              ].map((v) => (
+                <div
+                  key={v.key}
+                  className="flex items-start justify-between gap-2 py-2 border-b border-gray-100 last:border-0"
+                >
+                  <div>
+                    <code className="text-sm font-mono text-gray-900">
+                      {v.key}
+                    </code>
+                    <p className="text-xs text-gray-500 mt-0.5">{v.hint}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full overflow-y-auto p-6">

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sendWhatsAppMessage, sendWhatsAppTemplate } from '@/lib/whatsapp';
+import { sendYCloudTextMessage } from '@/lib/whatsapp-ycloud';
 import { createDocument, getDocument, updateDocument } from '@/lib/appwrite';
 
 function sleep(ms: number) {
@@ -56,6 +57,14 @@ function applyTemplateParams(text: string, params: string[]) {
   });
 }
 
+function resolveOutboundMode() {
+  const forced = (process.env.WHATSAPP_OUTBOUND_MODE || '').trim().toLowerCase();
+  if (forced === 'bridge' || forced === 'meta' || forced === 'ycloud') {
+    return forced;
+  }
+  return process.env.BRIDGE_SHARED_SECRET ? 'bridge' : 'meta';
+}
+
 /**
  * POST /api/whatsapp/send
  * Send a WhatsApp message to a customer
@@ -80,7 +89,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const bridgeModeEnabled = Boolean(process.env.BRIDGE_SHARED_SECRET);
+    const outboundMode = resolveOutboundMode();
+    const bridgeModeEnabled = outboundMode === 'bridge';
     const normalizedPhone = String(phone || '').replace(/[^\d]/g, '');
     const normalizedMessage = String(message || '').trim();
     const normalizedParams = Array.isArray(templateParams)
@@ -258,6 +268,62 @@ export async function POST(request: NextRequest) {
           commandId: commandId || null,
           phone: normalizedPhone,
           status: commandResult.status,
+          timestamp: new Date().toISOString(),
+        },
+        { status: 200 }
+      );
+    }
+
+    if (!templateName && outboundMode === 'ycloud') {
+      const apiKey = (process.env.YCLOUD_API_KEY || '').trim();
+      const fromPhone = (process.env.YCLOUD_WHATSAPP_FROM || '').trim();
+      if (!apiKey || !fromPhone) {
+        return NextResponse.json(
+          {
+            error:
+              'YCloud is not configured. Set YCLOUD_API_KEY and YCLOUD_WHATSAPP_FROM.',
+          },
+          { status: 500 }
+        );
+      }
+
+      const ycloudResult = await sendYCloudTextMessage({
+        apiKey,
+        fromPhoneE164: fromPhone,
+        toPhone: normalizedPhone,
+        message: normalizedMessage,
+      });
+
+      if (!ycloudResult.success) {
+        return NextResponse.json(
+          { error: ycloudResult.error || 'Failed to send message via YCloud' },
+          { status: 400 }
+        );
+      }
+
+      try {
+        await createDocument('conversations', {
+          teamId,
+          customerId: customerId || 'manual',
+          phone: normalizedPhone,
+          role: 'assistant',
+          message: normalizedMessage,
+          messageType: 'text',
+          sentBy: 'staff',
+          metaMessageId: ycloudResult.messageId || null,
+          deliveryStatus: 'sent',
+          createdAt: new Date().toISOString(),
+        });
+      } catch (dbError) {
+        console.error('Failed to save YCloud message to database:', dbError);
+      }
+
+      return NextResponse.json(
+        {
+          success: true,
+          mode: 'ycloud',
+          messageId: ycloudResult.messageId || null,
+          phone: normalizedPhone,
           timestamp: new Date().toISOString(),
         },
         { status: 200 }
