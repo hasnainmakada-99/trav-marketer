@@ -58,6 +58,9 @@ function verifyYCloudSignature(rawBody: string, signatureHeader: string, secret:
 }
 
 async function hasHumanTakeover(teamId: string, phone: string) {
+  if (resolveOutboundMode() === 'ycloud') {
+    return false;
+  }
   if (DISABLE_HUMAN_HANDOVER) {
     return false;
   }
