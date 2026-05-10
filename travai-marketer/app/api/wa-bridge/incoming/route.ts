@@ -10,6 +10,13 @@ import {
   isPackageIntent,
   loadTravelKnowledge,
 } from '@/lib/travel-knowledge';
+import {
+  enforceSafeUrlsInReply,
+  getBotRoutePolicyPromptBlock,
+  resolveSafeRouteChoice,
+  sanitizeWebsiteSnippetsForBot,
+  sanitizeWebsiteUrlForBot,
+} from '@/lib/whatsapp-bot-routing';
 
 const BRIDGE_SHARED_SECRET = process.env.BRIDGE_SHARED_SECRET || '';
 const BRIDGE_INSTANCE_KEY = (
@@ -144,7 +151,7 @@ async function buildReply(params: {
     loadTravelKnowledge(params.teamId, params.userMessage).catch(() => ({
       databaseSnippets: [] as string[],
       hasPackageData: false,
-      bestWebsiteUrl: WEBSITE_FALLBACK_URL,
+      bestWebsiteUrl: sanitizeWebsiteUrlForBot(WEBSITE_FALLBACK_URL),
       bestWebsiteTitle: 'Traventions',
       websiteSnippets: [] as string[],
       diagnostics: { collectionsScanned: [], collectionDocCounts: {}, crawledPages: 0 },
@@ -176,8 +183,15 @@ async function buildReply(params: {
     ? knowledge.databaseSnippets.map((item, i) => `${i + 1}. ${item}`).join('\n')
     : 'No relevant package or itinerary data found in database.';
   const packageIntent = isPackageIntent(params.userMessage, params.intent);
-  const websiteKnowledge = knowledge.websiteSnippets.length
-    ? knowledge.websiteSnippets.map((item, i) => `${i + 1}. ${item}`).join('\n')
+  const safeWebsiteSnippets = sanitizeWebsiteSnippetsForBot(knowledge.websiteSnippets);
+  const routeChoice = resolveSafeRouteChoice({
+    message: params.userMessage,
+    classifiedIntent: params.intent,
+    websiteUrlHint: knowledge.bestWebsiteUrl,
+  });
+  const safeBestWebsiteUrl = sanitizeWebsiteUrlForBot(knowledge.bestWebsiteUrl);
+  const websiteKnowledge = safeWebsiteSnippets.length
+    ? safeWebsiteSnippets.map((item, i) => `${i + 1}. ${item}`).join('\n')
     : `1. Traventions Home - ${WEBSITE_FALLBACK_URL}`;
 
   const systemPrompt =
@@ -186,6 +200,7 @@ async function buildReply(params: {
 Business name must appear as "Traventions" in customer-facing replies.
 ${firstAssistantReply ? 'Start this reply with: "Welcome to Traventions!".' : 'Do not repeat the welcome line again in every reply.'}
 Current intent: ${params.intent}.
+${getBotRoutePolicyPromptBlock()}
 If user asks for packages/itineraries/pricing:
 - First use database knowledge below.
 - If DB package data is missing, still provide a practical sample itinerary based on user budget/days/destination.
@@ -209,7 +224,8 @@ Do not use markdown headings like #, ##, ###.
 
 Package intent detected: ${packageIntent ? 'yes' : 'no'}
 Package data available in DB: ${knowledge.hasPackageData ? 'yes' : 'no'}
-Best website page for this query: ${knowledge.bestWebsiteTitle} (${knowledge.bestWebsiteUrl})
+Best safe website page for this query: ${knowledge.bestWebsiteTitle} (${safeBestWebsiteUrl})
+Preferred route for this query: ${routeChoice.url}${routeChoice.loginRequired ? ' (login required)' : ''}
 
 DATABASE KNOWLEDGE:
 ${databaseKnowledge}
@@ -222,6 +238,7 @@ ${websiteKnowledge}`.trim();
       return {
         reply: normalizeToWhatsAppMarkdown(buildRuleBasedItinerary(params.userMessage)),
         quickMenu: false,
+        quickMenuOptions: null,
       };
     }
     return {
@@ -229,6 +246,7 @@ ${websiteKnowledge}`.trim();
         'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.'
       ),
       quickMenu: false,
+      quickMenuOptions: null,
     };
   }
 
@@ -247,9 +265,9 @@ ${websiteKnowledge}`.trim();
   const quickSelectionPrompt = mapQuickMenuSelectionToIntentText(params.userMessage);
   const effectiveUserMessage = quickSelectionPrompt || params.userMessage;
   const response = await getChatResponse(effectiveUserMessage, systemPrompt, history);
-  const inrSafeResponse = enforceInrReply(response);
+  const inrSafeResponse = enforceSafeUrlsInReply(enforceInrReply(response));
   if (packageIntent) {
-    const preferredUrl = knowledge.bestWebsiteUrl || WEBSITE_FALLBACK_URL;
+    const preferredUrl = routeChoice.url || safeBestWebsiteUrl || sanitizeWebsiteUrlForBot(WEBSITE_FALLBACK_URL);
     const alreadyHasUrl = inrSafeResponse.includes(preferredUrl);
     if (!alreadyHasUrl) {
       return {
@@ -257,12 +275,14 @@ ${websiteKnowledge}`.trim();
           `${inrSafeResponse}\n\nFor latest live packages and booking, visit ${preferredUrl}.`
         ),
         quickMenu: false,
+        quickMenuOptions: null,
       };
     }
   }
   return {
     reply: normalizeToWhatsAppMarkdown(inrSafeResponse),
     quickMenu: false,
+    quickMenuOptions: null,
   };
 }
 

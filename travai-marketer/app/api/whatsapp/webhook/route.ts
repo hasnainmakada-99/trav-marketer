@@ -21,6 +21,13 @@ import {
   isPackageIntent,
   loadTravelKnowledge,
 } from '@/lib/travel-knowledge';
+import {
+  enforceSafeUrlsInReply,
+  getBotRoutePolicyPromptBlock,
+  resolveSafeRouteChoice,
+  sanitizeWebsiteSnippetsForBot,
+  sanitizeWebsiteUrlForBot,
+} from '@/lib/whatsapp-bot-routing';
 
 // Verify webhook token from Meta
 const WEBHOOK_VERIFY_TOKEN = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || 'travai_secure_token_2024';
@@ -711,6 +718,13 @@ async function generateAndSendResponse(
 
     const packageIntent = isPackageIntent(userMessage, intent);
     const knowledge = await loadTravelKnowledge(resolvedTeamId, userMessage);
+    const safeWebsiteSnippets = sanitizeWebsiteSnippetsForBot(knowledge.websiteSnippets);
+    const routeChoice = resolveSafeRouteChoice({
+      message: userMessage,
+      classifiedIntent: intent,
+      websiteUrlHint: knowledge.bestWebsiteUrl,
+    });
+    const safeBestWebsiteUrl = sanitizeWebsiteUrlForBot(knowledge.bestWebsiteUrl);
 
     // Generate AI response
     const systemPrompt =
@@ -718,6 +732,7 @@ async function generateAndSendResponse(
       `You are Traventions' WhatsApp assistant.
 Mention Traventions in customer-facing replies.
 ${firstAssistantReply ? 'Start this reply with "Welcome to Traventions!".' : 'Do not repeat the welcome line on every reply.'}
+${getBotRoutePolicyPromptBlock()}
 For package/pricing questions:
 - First use database knowledge for exact known details.
 - If DB package data is missing, still provide a practical sample itinerary.
@@ -735,11 +750,12 @@ Do not use markdown headings like #, ##, ###.
 Current intent: ${intent}
 Package intent: ${packageIntent ? 'yes' : 'no'}
 Package data available: ${knowledge.hasPackageData ? 'yes' : 'no'}
-Best website page: ${knowledge.bestWebsiteTitle} (${knowledge.bestWebsiteUrl})
+Best safe website page: ${knowledge.bestWebsiteTitle} (${safeBestWebsiteUrl})
+Preferred route for this query: ${routeChoice.url}${routeChoice.loginRequired ? ' (login required)' : ''}
 DATABASE KNOWLEDGE:
 ${knowledge.databaseSnippets.length ? knowledge.databaseSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : 'No relevant snippets found.'}
 WEBSITE PAGE INDEX:
-${knowledge.websiteSnippets.length ? knowledge.websiteSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : `1. Traventions - ${WEBSITE_FALLBACK_URL}`}`.trim();
+${safeWebsiteSnippets.length ? safeWebsiteSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : `1. Traventions - ${WEBSITE_FALLBACK_URL}`}`.trim();
 
     if (isGreetingMessage(userMessage)) {
       const mode = resolveOutboundMode();
@@ -826,6 +842,7 @@ ${knowledge.websiteSnippets.length ? knowledge.websiteSnippets.map((v, i) => `${
     } else if (process.env.OPENAI_API_KEY) {
       try {
         response = await getChatResponse(userMessage, systemPrompt, history);
+        response = enforceSafeUrlsInReply(response);
       } catch (error) {
         console.error('[WhatsApp] OpenAI reply generation failed, using fallback:', error);
         response =
@@ -837,11 +854,13 @@ ${knowledge.websiteSnippets.length ? knowledge.websiteSnippets.map((v, i) => `${
         : 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
     }
 
+    const preferredUrl = routeChoice.url || safeBestWebsiteUrl || sanitizeWebsiteUrlForBot(WEBSITE_FALLBACK_URL);
     const responseWithFallback =
-      packageIntent && !response.includes(knowledge.bestWebsiteUrl || WEBSITE_FALLBACK_URL)
-        ? `${response}\n\nFor latest packages, please visit ${knowledge.bestWebsiteUrl || WEBSITE_FALLBACK_URL}.`
+      packageIntent && !response.includes(preferredUrl)
+        ? `${response}\n\nFor latest packages, please visit ${preferredUrl}.`
         : response;
-    const waFormattedResponse = normalizeToWhatsAppMarkdown(responseWithFallback);
+    const safeResponse = enforceSafeUrlsInReply(responseWithFallback);
+    const waFormattedResponse = normalizeToWhatsAppMarkdown(safeResponse);
     if (
       recentAiText === normalizeTextForDedupe(waFormattedResponse) &&
       Number.isFinite(recentAiTs) &&

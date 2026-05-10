@@ -1,5 +1,6 @@
 import { Query } from 'node-appwrite';
 import { APPWRITE_DATABASE_ID, getDatabaseClient } from '@/lib/appwrite';
+import { isConfidentialOrBlockedRoutePath, isCustomerSafeRoutePath } from '@/lib/whatsapp-bot-routing';
 
 const WEBSITE_BASE_URL =
   process.env.TRAVENTIONS_WEBSITE_URL || 'https://traventions-ai.vercel.app';
@@ -189,6 +190,12 @@ function normalizeUrl(url: string): string | null {
         parsed.pathname
       )
     ) {
+      return null;
+    }
+    if (isConfidentialOrBlockedRoutePath(parsed.pathname)) {
+      return null;
+    }
+    if (!isCustomerSafeRoutePath(parsed.pathname)) {
       return null;
     }
 
