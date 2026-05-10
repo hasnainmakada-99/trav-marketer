@@ -374,7 +374,7 @@ async function processIncomingMessage(
       : 'other';
 
     // Generate an AI response for normal conversational intents.
-    if (['inquiry', 'booking', 'followup', 'other'].includes(intent)) {
+    if (['inquiry', 'booking', 'followup', 'other', 'greeting'].includes(intent)) {
       await generateAndSendResponse(
         customer,
         text,
