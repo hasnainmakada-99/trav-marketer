@@ -24,7 +24,9 @@ const WEBSITE_FALLBACK_URL =
   process.env.TRAVENTIONS_WEBSITE_URL || 'https://traventions-ai.vercel.app';
 const HUMAN_HANDOVER_MINUTES = Number(process.env.WA_HUMAN_HANDOVER_MINUTES || '15');
 const DISABLE_HUMAN_HANDOVER = process.env.WA_DISABLE_HUMAN_HANDOVER === 'true';
-const YCLOUD_WEBHOOK_SECRET = (process.env.YCLOUD_WEBHOOK_SECRET || '').trim();
+const YCLOUD_WEBHOOK_SECRET = (process.env.YCLOUD_WEBHOOK_SECRET || '')
+  .trim()
+  .replace(/^['"]+|['"]+$/g, '');
 
 function resolveOutboundMode() {
   const forced = (process.env.WHATSAPP_OUTBOUND_MODE || '').trim().toLowerCase();
