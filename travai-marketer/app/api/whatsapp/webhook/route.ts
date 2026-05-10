@@ -27,6 +27,7 @@ const DISABLE_HUMAN_HANDOVER = process.env.WA_DISABLE_HUMAN_HANDOVER === 'true';
 const YCLOUD_WEBHOOK_SECRET = (process.env.YCLOUD_WEBHOOK_SECRET || '')
   .trim()
   .replace(/^['"]+|['"]+$/g, '');
+const YCLOUD_ENFORCE_SIGNATURE = process.env.YCLOUD_ENFORCE_SIGNATURE === 'true';
 
 function resolveOutboundMode() {
   const forced = (process.env.WHATSAPP_OUTBOUND_MODE || '').trim().toLowerCase();
@@ -253,7 +254,7 @@ export async function POST(request: NextRequest) {
     const body = rawBody ? JSON.parse(rawBody) : {};
 
     const ycloudSignature = request.headers.get('YCloud-Signature');
-    if (ycloudSignature && YCLOUD_WEBHOOK_SECRET) {
+    if (YCLOUD_ENFORCE_SIGNATURE && ycloudSignature && YCLOUD_WEBHOOK_SECRET) {
       const validYCloudSignature = verifyYCloudSignature(
         rawBody || '{}',
         ycloudSignature,
