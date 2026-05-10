@@ -62,6 +62,9 @@ function resolveOutboundMode() {
   if (forced === 'bridge' || forced === 'meta' || forced === 'ycloud') {
     return forced;
   }
+  if ((process.env.YCLOUD_API_KEY || '').trim()) {
+    return 'ycloud';
+  }
   return process.env.BRIDGE_SHARED_SECRET ? 'bridge' : 'meta';
 }
 
