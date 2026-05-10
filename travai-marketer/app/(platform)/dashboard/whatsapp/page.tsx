@@ -5,7 +5,7 @@ import { useEffect, useState, useCallback, type ReactNode } from 'react';
 const TEAM_ID =
   process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
 const PUBLIC_WHATSAPP_MODE = (
-  process.env.NEXT_PUBLIC_WHATSAPP_OUTBOUND_MODE || 'bridge'
+  process.env.NEXT_PUBLIC_WHATSAPP_OUTBOUND_MODE || 'ycloud'
 ).toLowerCase();
 const IS_YCLOUD_MODE = PUBLIC_WHATSAPP_MODE === 'ycloud';
 
@@ -676,16 +676,13 @@ function SendTab({
 
   useEffect(() => {
     const t = setTimeout(() => {
-      void loadTemplates();
+      if (!IS_YCLOUD_MODE) {
+        void loadTemplates();
+      }
       void loadLocalTemplates();
     }, 0);
     return () => clearTimeout(t);
   }, [loadTemplates, loadLocalTemplates]);
-
-  useEffect(() => {
-    if (integrationStatus === 'connected') return;
-    setTemplateSource('local');
-  }, [integrationStatus]);
 
   const handleSend = async () => {
     const normalizedPhone = phone.replace(/[^\d]/g, '');
@@ -704,6 +701,10 @@ function SendTab({
     if (mode === 'template') {
       if (templateSource === 'local' && !localTemplateId.trim()) {
         showToast('Select a local template', 'error');
+        return;
+      }
+      if (IS_YCLOUD_MODE && templateSource !== 'local') {
+        showToast('In YCloud mode, only Local Templates are supported from dashboard.', 'error');
         return;
       }
       if (templateSource === 'meta' && !templateName.trim()) {
@@ -829,16 +830,18 @@ function SendTab({
                     >
                       Refresh local
                     </button>
-                    <button
-                      onClick={() => void loadTemplates()}
-                      className="text-xs text-emerald-600 hover:text-emerald-700"
-                    >
-                      Refresh Meta
-                    </button>
+                    {!IS_YCLOUD_MODE && (
+                      <button
+                        onClick={() => void loadTemplates()}
+                        className="text-xs text-emerald-600 hover:text-emerald-700"
+                      >
+                        Refresh Meta
+                      </button>
+                    )}
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
+                <div className={`grid gap-2 ${IS_YCLOUD_MODE ? 'grid-cols-1' : 'grid-cols-2'}`}>
                   <button
                     type="button"
                     onClick={() => setTemplateSource('local')}
@@ -848,23 +851,25 @@ function SendTab({
                         : 'bg-gray-100 text-gray-700'
                     }`}
                   >
-                    Local Templates
+                    {IS_YCLOUD_MODE ? 'Local Templates (YCloud)' : 'Local Templates'}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setTemplateSource('meta')}
-                    disabled={integrationStatus !== 'connected'}
-                    className={`px-3 py-2 rounded-lg text-sm font-medium ${
-                      templateSource === 'meta'
-                        ? 'bg-emerald-600 text-white'
-                        : 'bg-gray-100 text-gray-700'
-                    } disabled:opacity-50`}
-                  >
-                    Meta Templates
-                  </button>
+                  {!IS_YCLOUD_MODE && (
+                    <button
+                      type="button"
+                      onClick={() => setTemplateSource('meta')}
+                      disabled={integrationStatus !== 'connected'}
+                      className={`px-3 py-2 rounded-lg text-sm font-medium ${
+                        templateSource === 'meta'
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-gray-100 text-gray-700'
+                      } disabled:opacity-50`}
+                    >
+                      Meta Templates
+                    </button>
+                  )}
                 </div>
 
-                {templatesError && (
+                {!IS_YCLOUD_MODE && templatesError && (
                   <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
                     {templatesError}
                   </div>
@@ -874,13 +879,13 @@ function SendTab({
                     {localTemplatesError}
                   </div>
                 )}
-                {templatesNotice && (
+                {!IS_YCLOUD_MODE && templatesNotice && (
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-800">
                     {templatesNotice}
                   </div>
                 )}
 
-                {templateSource === 'local' ? (
+                {IS_YCLOUD_MODE || templateSource === 'local' ? (
                   <select
                     value={localTemplateId}
                     onChange={(e) => setLocalTemplateId(e.target.value)}
@@ -945,7 +950,7 @@ function SendTab({
                 sending ||
                 (mode === 'template' &&
                   ((templateSource === 'local' && !localTemplateId) ||
-                    (templateSource === 'meta' && !templateName)))
+                    (!IS_YCLOUD_MODE && templateSource === 'meta' && !templateName)))
               }
               className="w-full px-4 py-2.5 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
             >
@@ -970,17 +975,21 @@ function SendTab({
                     : 'text-gray-700'
                 }`}
               >
-                {integrationStatus}
+                {IS_YCLOUD_MODE ? 'ycloud' : integrationStatus}
               </span>
             </p>
-            <p className="text-gray-700">
-              Approved templates: <span className="font-medium">{approvedTemplates.length}</span>
-            </p>
+            {!IS_YCLOUD_MODE && (
+              <p className="text-gray-700">
+                Approved templates: <span className="font-medium">{approvedTemplates.length}</span>
+              </p>
+            )}
             <p className="text-gray-700">
               Local templates: <span className="font-medium">{localTemplates.length}</span>
             </p>
             <p className="text-xs text-gray-500 pt-2">
-              {integrationStatus === 'bridge_only'
+              {IS_YCLOUD_MODE
+                ? 'YCloud mode active. Use Local Templates for outbound campaigns and quick menu sends from dashboard.'
+                : integrationStatus === 'bridge_only'
                 ? 'Bridge mode active. Use Local Templates with optional button labels; Meta templates require Cloud API connection.'
                 : 'If Meta template mode is empty, check Meta token/app and template approvals in Meta Business Manager.'}
             </p>
@@ -1062,7 +1071,9 @@ function TemplatesTab({
 
   useEffect(() => {
     const t = setTimeout(() => {
-      void load();
+      if (!IS_YCLOUD_MODE) {
+        void load();
+      }
       void loadLocal();
     }, 0);
     return () => clearTimeout(t);
@@ -1129,9 +1140,9 @@ function TemplatesTab({
         <div className="bg-white border border-gray-200 rounded-lg p-5">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-lg font-bold text-gray-900">Local Bridge Templates</h2>
+              <h2 className="text-lg font-bold text-gray-900">Local Templates</h2>
               <p className="text-sm text-gray-500">
-                Create your own templates with optional quick buttons (up to 3) for bridge mode.
+                Create your own templates with optional quick buttons (up to 3) for dashboard sending.
               </p>
             </div>
             <button
@@ -1249,7 +1260,8 @@ function TemplatesTab({
           </div>
         </div>
 
-        <div className="bg-white border border-gray-200 rounded-lg p-5">
+        {!IS_YCLOUD_MODE && (
+          <div className="bg-white border border-gray-200 rounded-lg p-5">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="text-lg font-bold text-gray-900">Meta Approved Templates</h2>
@@ -1355,7 +1367,8 @@ function TemplatesTab({
               );
             })}
           </div>
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );
