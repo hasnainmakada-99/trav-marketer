@@ -1593,7 +1593,7 @@ function SetupTab({
               {[
                 { key: 'WHATSAPP_OUTBOUND_MODE', hint: 'Set to ycloud' },
                 { key: 'YCLOUD_API_KEY', hint: 'API key from YCloud Developers' },
-                { key: 'YCLOUD_WHATSAPP_FROM', hint: 'Sender number in E.164, e.g. +919428122003' },
+                { key: 'YCLOUD_WHATSAPP_FROM', hint: 'Sender number in E.164, e.g. +919945525531' },
                 { key: 'YCLOUD_WEBHOOK_SECRET', hint: 'Webhook endpoint secret from YCloud (recommended)' },
                 { key: 'OPENAI_API_KEY', hint: 'Used to generate AI responses' },
               ].map((v) => (
