@@ -162,14 +162,36 @@ function scoreByKeywords(text: string, keywords: string[]) {
   return score;
 }
 
-function resolveKnowledgeDatabaseIds() {
+async function resolveKnowledgeDatabaseIds() {
   const envDatabaseIds = (process.env.WA_KNOWLEDGE_DATABASE_IDS || '')
     .split(',')
     .map((v) => v.trim())
     .filter(Boolean);
+  const secondaryDatabaseId = (process.env.WA_KNOWLEDGE_SECONDARY_DATABASE_ID || '').trim();
+  const autoDiscoverDatabases =
+    (process.env.WA_KNOWLEDGE_AUTO_DISCOVER_DBS || 'true').trim().toLowerCase() !== 'false';
+  const discovered: string[] = [];
+
+  if (autoDiscoverDatabases) {
+    try {
+      const db = getDatabaseClient();
+      const response = await db.list();
+      for (const item of response.databases || []) {
+        if (item?.$id) discovered.push(item.$id);
+      }
+    } catch {
+      // best effort only
+    }
+  }
 
   return Array.from(
-    new Set([APPWRITE_DATABASE_ID, SECONDARY_DEFAULT_DATABASE_ID, ...envDatabaseIds])
+    new Set([
+      APPWRITE_DATABASE_ID,
+      SECONDARY_DEFAULT_DATABASE_ID,
+      secondaryDatabaseId,
+      ...envDatabaseIds,
+      ...discovered,
+    ])
   );
 }
 
@@ -300,7 +322,8 @@ async function resolveKnowledgeCollections(): Promise<CollectionRef[]> {
     .filter(Boolean);
   const refs: CollectionRef[] = [];
 
-  for (const databaseId of resolveKnowledgeDatabaseIds()) {
+  const databaseIds = await resolveKnowledgeDatabaseIds();
+  for (const databaseId of databaseIds) {
     try {
       const response = await db.listCollections(databaseId);
       const discovered = response.collections

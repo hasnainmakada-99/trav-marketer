@@ -295,6 +295,34 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
   );
 }
 
+export function buildConversationMemoryBlock(args: {
+  state: WorkflowState;
+  recentUserMessages?: string[];
+}): string {
+  const recent = (args.recentUserMessages || []).filter(Boolean).slice(-6);
+  const slotPairs = Object.entries(args.state.slots || {}).filter(([, v]) => Boolean(v));
+  const slotText =
+    slotPairs.length > 0
+      ? slotPairs.map(([k, v]) => `${k}=${v}`).join(', ')
+      : 'none';
+  const recentText =
+    recent.length > 0
+      ? recent.map((v, i) => `${i + 1}. ${v}`).join('\n')
+      : 'none';
+
+  return [
+    'CONVERSATION MEMORY (must be respected):',
+    `- Active workflow: ${args.state.intent}`,
+    `- Captured user details: ${slotText}`,
+    `- Missing details: ${
+      args.state.missingSlots.length ? args.state.missingSlots.join(', ') : 'none'
+    }`,
+    '- Recent user messages:',
+    recentText,
+    '- Do not ask for already captured details again unless user explicitly edits them.',
+  ].join('\n');
+}
+
 export function detectWorkflowIntent(message: string, classifiedIntent?: string): WorkflowIntent {
   const text = normalize(message);
   const intentText = normalize(classifiedIntent || '');

@@ -18,6 +18,7 @@ import {
   sanitizeWebsiteUrlForBot,
 } from '@/lib/whatsapp-bot-routing';
 import {
+  buildConversationMemoryBlock,
   buildWorkflowReply,
   detectWorkflowIntent,
   getGreetingMenuText,
@@ -167,7 +168,7 @@ async function buildReply(params: {
   }>;
 
   const history = historyRows
-    .slice(0, 5)
+    .slice(0, 12)
     .reverse()
     .map((row) => ({
       role: (row.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
@@ -180,6 +181,25 @@ async function buildReply(params: {
     | { openaiSystemPrompt?: string }
     | undefined;
   const workflowIntent = detectWorkflowIntent(params.userMessage, params.intent);
+  const workflowState = resolveWorkflowState({
+    userMessage: params.userMessage,
+    classifiedIntent: params.intent,
+    selectedIntent: workflowIntent === 'unknown' ? null : workflowIntent,
+    historyMessages: historyRows
+      .slice(0, 20)
+      .reverse()
+      .map((row) => String(row.message || ''))
+      .filter(Boolean),
+  });
+  const memoryBlock = buildConversationMemoryBlock({
+    state: workflowState,
+    recentUserMessages: historyRows
+      .filter((row) => row.role === 'user')
+      .slice(0, 12)
+      .reverse()
+      .map((row) => String(row.message || ''))
+      .filter(Boolean),
+  });
   const databaseKnowledge = knowledge.databaseSnippets.length
     ? knowledge.databaseSnippets.map((item, i) => `${i + 1}. ${item}`).join('\n')
     : 'No relevant package or itinerary data found in database.';
@@ -204,6 +224,7 @@ ${firstAssistantReply ? 'Start this reply with: "Welcome to Traventions!".' : 'D
 Current intent: ${params.intent}.
 ${getBotRoutePolicyPromptBlock()}
 ${getWorkflowSystemPromptBlock(workflowIntent)}
+${memoryBlock}
 If user asks for packages/itineraries/pricing:
 - First use database knowledge below.
 - If DB package data is missing, still provide a practical sample itinerary based on user budget/days/destination.

@@ -29,6 +29,7 @@ import {
   sanitizeWebsiteUrlForBot,
 } from '@/lib/whatsapp-bot-routing';
 import {
+  buildConversationMemoryBlock,
   buildWorkflowReply,
   detectWorkflowIntent,
   getGreetingMenuText,
@@ -763,7 +764,7 @@ async function generateAndSendResponse(
 
     const historyRows = convos.documents as Array<{ role?: string; message?: string }>;
     const history = historyRows
-      .slice(0, 5)
+      .slice(0, 12)
       .reverse()
       .map((c) => ({
         role: (c.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
@@ -950,6 +951,16 @@ async function generateAndSendResponse(
     let safeBestWebsiteUrl = sanitizeWebsiteUrlForBot(knowledge.bestWebsiteUrl);
     let systemPrompt = '';
 
+    const memoryBlock = buildConversationMemoryBlock({
+      state: workflowState,
+      recentUserMessages: historyRows
+        .filter((row) => row.role === 'user')
+        .slice(0, 12)
+        .reverse()
+        .map((row) => String(row.message || ''))
+        .filter(Boolean),
+    });
+
     if (!selectedService && process.env.OPENAI_API_KEY) {
       knowledge = await loadTravelKnowledgeFast(resolvedTeamId, userMessage);
       safeWebsiteSnippets = sanitizeWebsiteSnippetsForBot(knowledge.websiteSnippets);
@@ -967,6 +978,7 @@ Mention Traventions in customer-facing replies.
 ${firstAssistantReply ? 'Start this reply with "Welcome to Traventions!".' : 'Do not repeat the welcome line on every reply.'}
 ${getBotRoutePolicyPromptBlock()}
 ${getWorkflowSystemPromptBlock(workflowIntent)}
+${memoryBlock}
 For package/pricing questions:
 - First use database knowledge for exact known details.
 - If DB package data is missing, still provide a practical sample itinerary.
