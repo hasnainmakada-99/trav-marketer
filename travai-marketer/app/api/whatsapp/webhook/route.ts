@@ -29,11 +29,12 @@ import {
   sanitizeWebsiteUrlForBot,
 } from '@/lib/whatsapp-bot-routing';
 import {
+  buildWorkflowReply,
   detectWorkflowIntent,
   getGreetingMenuText,
-  getWorkflowStarterReply,
   getWorkflowSystemPromptBlock,
   PRIMARY_QUICK_MENU_OPTIONS,
+  resolveWorkflowState,
 } from '@/lib/whatsapp-workflow';
 
 // Verify webhook token from Meta
@@ -70,6 +71,12 @@ function isGreetingMessage(text: string) {
 function detectServiceSelection(text: string) {
   const detected = detectWorkflowIntent(text);
   return detected === 'unknown' ? null : detected;
+}
+
+function looksLikeWorkflowDataMessage(text: string) {
+  return /(from|to|destination|travel|date|travellers|travelers|passengers|adults|nights|budget|check-?in|check-?out|callback|\+?\d[\d -]{7,})/i.test(
+    text
+  );
 }
 
 function getGreetingImageUrl(requestUrl: string) {
@@ -865,8 +872,62 @@ async function generateAndSendResponse(
     }
 
     const selectedService = detectServiceSelection(userMessage);
+    const historyMessages = historyRows
+      .slice(0, 20)
+      .reverse()
+      .map((row) => String(row.message || ''))
+      .filter(Boolean);
+    const workflowState = resolveWorkflowState({
+      userMessage,
+      classifiedIntent: intent,
+      selectedIntent: selectedService,
+      historyMessages,
+    });
     const packageIntent =
       workflowIntent === 'plan_holiday' || isPackageIntent(userMessage, intent);
+
+    const deterministicWorkflowReply = buildWorkflowReply(workflowState);
+    const shouldUseDeterministicWorkflow =
+      workflowState.intent !== 'unknown' &&
+      Boolean(deterministicWorkflowReply) &&
+      (selectedService !== null ||
+        looksLikeWorkflowDataMessage(userMessage) ||
+        !process.env.OPENAI_API_KEY);
+
+    if (shouldUseDeterministicWorkflow && deterministicWorkflowReply) {
+      const waWorkflowReply = normalizeToWhatsAppMarkdown(deterministicWorkflowReply);
+      if (
+        recentAiText === normalizeTextForDedupe(waWorkflowReply) &&
+        Number.isFinite(recentAiTs) &&
+        Date.now() - recentAiTs <= RECENT_AI_DUPLICATE_WINDOW_MS
+      ) {
+        console.log('[WhatsApp] Skipping duplicate deterministic workflow response');
+        return;
+      }
+
+      const sendResult = await sendAutoReply({
+        requestUrl,
+        teamId: resolvedTeamId,
+        customerId: customer.$id,
+        phone,
+        message: waWorkflowReply,
+        webhookPhoneNumberId,
+      });
+
+      await createDocument('conversations', {
+        teamId: resolvedTeamId,
+        customerId: customer.$id,
+        phone: phone,
+        role: 'assistant',
+        message: waWorkflowReply,
+        messageType: 'text',
+        sentBy: 'ai',
+        metaMessageId: sendResult.messageId || null,
+        deliveryStatus: sendResult.success ? 'sent' : 'failed',
+        createdAt: new Date().toISOString(),
+      });
+      return;
+    }
 
     let knowledge: Awaited<ReturnType<typeof loadTravelKnowledge>> = {
       databaseSnippets: [] as string[],
@@ -932,10 +993,7 @@ ${safeWebsiteSnippets.length ? safeWebsiteSnippets.map((v, i) => `${i + 1}. ${v}
     }
 
     let response: string;
-    if (selectedService) {
-      const starter = getWorkflowStarterReply(selectedService);
-      response = starter || 'Please share your request details and preferred callback time.';
-    } else if (process.env.OPENAI_API_KEY) {
+    if (process.env.OPENAI_API_KEY) {
       try {
         response = await getChatResponse(
           userMessage,

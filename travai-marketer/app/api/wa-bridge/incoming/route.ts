@@ -18,11 +18,12 @@ import {
   sanitizeWebsiteUrlForBot,
 } from '@/lib/whatsapp-bot-routing';
 import {
+  buildWorkflowReply,
   detectWorkflowIntent,
   getGreetingMenuText,
-  getWorkflowStarterReply,
   getWorkflowSystemPromptBlock,
   PRIMARY_QUICK_MENU_OPTIONS,
+  resolveWorkflowState,
 } from '@/lib/whatsapp-workflow';
 
 const BRIDGE_SHARED_SECRET = process.env.BRIDGE_SHARED_SECRET || '';
@@ -57,8 +58,20 @@ function isGreetingMessage(text: string) {
 
 function mapQuickMenuSelectionToIntentText(text: string) {
   const detected = detectWorkflowIntent(text);
-  const starter = getWorkflowStarterReply(detected);
+  const starter = buildWorkflowReply(
+    resolveWorkflowState({
+      userMessage: text,
+      selectedIntent: detected === 'unknown' ? null : detected,
+      historyMessages: [],
+    })
+  );
   return starter || null;
+}
+
+function looksLikeWorkflowDataMessage(text: string) {
+  return /(from|to|destination|travel|date|travellers|travelers|passengers|adults|nights|budget|check-?in|check-?out|callback|\+?\d[\d -]{7,})/i.test(
+    text
+  );
 }
 
 function enforceInrReply(text: string) {
@@ -433,8 +446,40 @@ export async function POST(request: NextRequest) {
     const intent = process.env.OPENAI_API_KEY
       ? await classifyIntent(text, `Team: ${teamId}, channel: whatsapp_web`)
       : 'other';
+    const selectedIntent = detectWorkflowIntent(text);
+    const recentConversations = await listDocuments('conversations', [
+      Query.equal('teamId', teamId),
+      Query.equal('customerId', customer.$id),
+      Query.orderDesc('$createdAt'),
+      Query.limit(20),
+    ]).catch(() => ({ documents: [] as Array<{ message?: string | null }> }));
+    const historyMessages = (recentConversations.documents as Array<{ message?: string | null }>)
+      .slice(0, 20)
+      .reverse()
+      .map((row) => String(row.message || ''))
+      .filter(Boolean);
+    const workflowState = resolveWorkflowState({
+      userMessage: text,
+      classifiedIntent: intent,
+      selectedIntent: selectedIntent === 'unknown' ? null : selectedIntent,
+      historyMessages,
+    });
 
-    const built = await buildReply({
+    const deterministicWorkflowReply = buildWorkflowReply(workflowState);
+    const shouldUseDeterministicWorkflow =
+      workflowState.intent !== 'unknown' &&
+      Boolean(deterministicWorkflowReply) &&
+      (looksLikeWorkflowDataMessage(text) ||
+        selectedIntent !== 'unknown' ||
+        !process.env.OPENAI_API_KEY);
+
+    const built = shouldUseDeterministicWorkflow && deterministicWorkflowReply
+      ? {
+          reply: normalizeToWhatsAppMarkdown(deterministicWorkflowReply),
+          quickMenu: false,
+          quickMenuOptions: null as string[] | null,
+        }
+      : await buildReply({
       teamId,
       customerId: customer.$id,
       userMessage: text,
