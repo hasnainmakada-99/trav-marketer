@@ -28,6 +28,13 @@ import {
   sanitizeWebsiteSnippetsForBot,
   sanitizeWebsiteUrlForBot,
 } from '@/lib/whatsapp-bot-routing';
+import {
+  detectWorkflowIntent,
+  getGreetingMenuText,
+  getWorkflowStarterReply,
+  getWorkflowSystemPromptBlock,
+  PRIMARY_QUICK_MENU_OPTIONS,
+} from '@/lib/whatsapp-workflow';
 
 // Verify webhook token from Meta
 const WEBHOOK_VERIFY_TOKEN = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || 'travai_secure_token_2024';
@@ -47,11 +54,11 @@ const TYPING_REFRESH_MS = Number(process.env.WA_TYPING_REFRESH_MS || '2200');
 const TYPING_MAX_MS = Number(process.env.WA_TYPING_MAX_MS || '45000');
 const recentInboundKeys = new Map<string, number>();
 const GREETING_BUTTONS = [
-  { id: 'svc_leisure', title: 'Leisure' },
-  { id: 'svc_flights', title: 'Flights Tickets' },
-  { id: 'svc_hotels', title: 'Hotels' },
+  { id: 'svc_1', title: PRIMARY_QUICK_MENU_OPTIONS[0] },
+  { id: 'svc_2', title: PRIMARY_QUICK_MENU_OPTIONS[1] },
+  { id: 'svc_3', title: PRIMARY_QUICK_MENU_OPTIONS[2] },
 ] as const;
-const GREETING_MENU_TEXT = `Welcome to Traventions!\n\nI'm Sini, your Trav-AI Buddy.\nPlease select a service to assist you better.`;
+const GREETING_MENU_TEXT = getGreetingMenuText();
 
 function isGreetingMessage(text: string) {
   const normalized = text.trim().toLowerCase();
@@ -61,26 +68,8 @@ function isGreetingMessage(text: string) {
 }
 
 function detectServiceSelection(text: string) {
-  const normalized = normalizeTextForDedupe(text);
-  if (
-    normalized === 'leisure' ||
-    normalized === 'holiday package' ||
-    normalized === 'holiday packages'
-  ) {
-    return 'leisure' as const;
-  }
-  if (
-    normalized === 'flights tickets' ||
-    normalized === 'flight tickets' ||
-    normalized === 'flights' ||
-    normalized === 'flight'
-  ) {
-    return 'flights' as const;
-  }
-  if (normalized === 'hotels' || normalized === 'hotel') {
-    return 'hotels' as const;
-  }
-  return null;
+  const detected = detectWorkflowIntent(text);
+  return detected === 'unknown' ? null : detected;
 }
 
 function getGreetingImageUrl(requestUrl: string) {
@@ -805,12 +794,14 @@ async function generateAndSendResponse(
     const businessConfig = businessConfigResult.documents[0] as
       | { businessName?: string; openaiSystemPrompt?: string }
       | undefined;
+    const workflowIntent = detectWorkflowIntent(userMessage, intent);
 
     if (isGreetingMessage(userMessage)) {
       const mode = resolveOutboundMode();
+      const greetingMenu = getGreetingMenuText(customer.name || null);
 
       if (mode === 'ycloud') {
-        const priorGreeting = normalizeTextForDedupe(GREETING_MENU_TEXT);
+        const priorGreeting = normalizeTextForDedupe(greetingMenu);
         if (
           recentAiText === priorGreeting &&
           Number.isFinite(recentAiTs) &&
@@ -830,7 +821,7 @@ async function generateAndSendResponse(
           customerId: customer.$id,
           phone: phone,
           role: 'assistant',
-          message: GREETING_MENU_TEXT,
+          message: greetingMenu,
           messageType: 'interactive',
           sentBy: 'ai',
           metaMessageId: greetingSend.menuMessageId || null,
@@ -840,9 +831,7 @@ async function generateAndSendResponse(
         return;
       }
 
-      const quickMenuReply = normalizeToWhatsAppMarkdown(
-        `Welcome to Traventions!\n\nI'm Sini, your Trav-AI Buddy.\nPlease select a service to assist you better.\n1. Leisure\n2. Flights Tickets\n3. Hotels`
-      );
+      const quickMenuReply = normalizeToWhatsAppMarkdown(greetingMenu);
       if (
         recentAiText === normalizeTextForDedupe(quickMenuReply) &&
         Number.isFinite(recentAiTs) &&
@@ -876,7 +865,8 @@ async function generateAndSendResponse(
     }
 
     const selectedService = detectServiceSelection(userMessage);
-    const packageIntent = isPackageIntent(userMessage, intent);
+    const packageIntent =
+      workflowIntent === 'plan_holiday' || isPackageIntent(userMessage, intent);
 
     let knowledge: Awaited<ReturnType<typeof loadTravelKnowledge>> = {
       databaseSnippets: [] as string[],
@@ -915,6 +905,7 @@ async function generateAndSendResponse(
 Mention Traventions in customer-facing replies.
 ${firstAssistantReply ? 'Start this reply with "Welcome to Traventions!".' : 'Do not repeat the welcome line on every reply.'}
 ${getBotRoutePolicyPromptBlock()}
+${getWorkflowSystemPromptBlock(workflowIntent)}
 For package/pricing questions:
 - First use database knowledge for exact known details.
 - If DB package data is missing, still provide a practical sample itinerary.
@@ -941,15 +932,9 @@ ${safeWebsiteSnippets.length ? safeWebsiteSnippets.map((v, i) => `${i + 1}. ${v}
     }
 
     let response: string;
-    if (selectedService === 'leisure') {
-      response =
-        'Great choice. *Leisure* it is.\nPlease share:\n1. Destination\n2. Travel dates\n3. Number of travelers\n4. Budget range\n\nI will craft the best options for you.';
-    } else if (selectedService === 'flights') {
-      response =
-        'Perfect. I can help with *Flight Tickets*.\nPlease share:\n1. From city\n2. To city\n3. Departure date\n4. Return date (if round trip)\n5. Number of passengers';
-    } else if (selectedService === 'hotels') {
-      response =
-        'Awesome. Let us find your *Hotel*.\nPlease share:\n1. City\n2. Check-in date\n3. Check-out date\n4. Guests and rooms\n5. Budget per night';
+    if (selectedService) {
+      const starter = getWorkflowStarterReply(selectedService);
+      response = starter || 'Please share your request details and preferred callback time.';
     } else if (process.env.OPENAI_API_KEY) {
       try {
         response = await getChatResponse(

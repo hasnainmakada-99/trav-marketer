@@ -17,6 +17,13 @@ import {
   sanitizeWebsiteSnippetsForBot,
   sanitizeWebsiteUrlForBot,
 } from '@/lib/whatsapp-bot-routing';
+import {
+  detectWorkflowIntent,
+  getGreetingMenuText,
+  getWorkflowStarterReply,
+  getWorkflowSystemPromptBlock,
+  PRIMARY_QUICK_MENU_OPTIONS,
+} from '@/lib/whatsapp-workflow';
 
 const BRIDGE_SHARED_SECRET = process.env.BRIDGE_SHARED_SECRET || '';
 const BRIDGE_INSTANCE_KEY = (
@@ -36,9 +43,9 @@ interface BridgeIncomingBody {
 }
 
 const SUPPORT_MENU_OPTIONS = [
-  'Hotel',
-  'Holiday Package',
-  'Flights',
+  PRIMARY_QUICK_MENU_OPTIONS[0],
+  PRIMARY_QUICK_MENU_OPTIONS[1],
+  PRIMARY_QUICK_MENU_OPTIONS[2],
 ] as const;
 
 function isGreetingMessage(text: string) {
@@ -49,29 +56,9 @@ function isGreetingMessage(text: string) {
 }
 
 function mapQuickMenuSelectionToIntentText(text: string) {
-  const normalized = text.trim().toLowerCase();
-  const compact = normalized.replace(/\s+/g, ' ');
-  if (compact === '1' || compact.includes('svc_1') || compact.includes('hotel')) {
-    return 'Customer selected Hotel. Ask destination and budget in INR. Use exact database pricing only; if missing, ask clarifying questions instead of inventing ranges.';
-  }
-  if (
-    compact === '2' ||
-    compact.includes('svc_2') ||
-    compact.includes('holiday') ||
-    compact.includes('package')
-  ) {
-    return 'Customer selected Holiday Package. Ask destination + budget + days and suggest best matching packages/itinerary.';
-  }
-  if (compact === '3' || compact.includes('svc_3') || compact.includes('flight')) {
-    return 'Customer selected Flights. Ask origin, destination, dates, travellers and share flight-planning guidance.';
-  }
-  if (compact === '4' || compact.includes('svc_4') || compact.includes('transfer')) {
-    return 'Customer selected Airport Transfer. Ask route, date/time, passengers, and luggage details.';
-  }
-  if (compact === '5' || compact.includes('svc_5') || compact.includes('status')) {
-    return 'Customer selected Booking Status. Ask for booking reference and registered phone/email.';
-  }
-  return null;
+  const detected = detectWorkflowIntent(text);
+  const starter = getWorkflowStarterReply(detected);
+  return starter || null;
 }
 
 function enforceInrReply(text: string) {
@@ -179,10 +166,12 @@ async function buildReply(params: {
   const businessConfig = businessConfigResult.documents[0] as
     | { openaiSystemPrompt?: string }
     | undefined;
+  const workflowIntent = detectWorkflowIntent(params.userMessage, params.intent);
   const databaseKnowledge = knowledge.databaseSnippets.length
     ? knowledge.databaseSnippets.map((item, i) => `${i + 1}. ${item}`).join('\n')
     : 'No relevant package or itinerary data found in database.';
-  const packageIntent = isPackageIntent(params.userMessage, params.intent);
+  const packageIntent =
+    workflowIntent === 'plan_holiday' || isPackageIntent(params.userMessage, params.intent);
   const safeWebsiteSnippets = sanitizeWebsiteSnippetsForBot(knowledge.websiteSnippets);
   const routeChoice = resolveSafeRouteChoice({
     message: params.userMessage,
@@ -201,6 +190,7 @@ Business name must appear as "Traventions" in customer-facing replies.
 ${firstAssistantReply ? 'Start this reply with: "Welcome to Traventions!".' : 'Do not repeat the welcome line again in every reply.'}
 Current intent: ${params.intent}.
 ${getBotRoutePolicyPromptBlock()}
+${getWorkflowSystemPromptBlock(workflowIntent)}
 If user asks for packages/itineraries/pricing:
 - First use database knowledge below.
 - If DB package data is missing, still provide a practical sample itinerary based on user budget/days/destination.
@@ -251,9 +241,8 @@ ${websiteKnowledge}`.trim();
   }
 
   if (isGreetingMessage(params.userMessage)) {
-    const namePart = params.customerName ? ` ${params.customerName}` : '';
     const quickMenuReply = normalizeToWhatsAppMarkdown(
-      `Welcome to Traventions!${namePart}\n\nI'm your travel support assistant.\nPlease choose a service:\n1. Hotel\n2. Holiday Package\n3. Flights\n\nFor Airport Transfer or Booking Status, just type it directly.`
+      getGreetingMenuText(params.customerName || null)
     );
     return {
       reply: quickMenuReply,
@@ -263,8 +252,15 @@ ${websiteKnowledge}`.trim();
   }
 
   const quickSelectionPrompt = mapQuickMenuSelectionToIntentText(params.userMessage);
-  const effectiveUserMessage = quickSelectionPrompt || params.userMessage;
-  const response = await getChatResponse(effectiveUserMessage, systemPrompt, history);
+  if (quickSelectionPrompt) {
+    return {
+      reply: normalizeToWhatsAppMarkdown(quickSelectionPrompt),
+      quickMenu: false,
+      quickMenuOptions: null,
+    };
+  }
+
+  const response = await getChatResponse(params.userMessage, systemPrompt, history);
   const inrSafeResponse = enforceSafeUrlsInReply(enforceInrReply(response));
   if (packageIntent) {
     const preferredUrl = routeChoice.url || safeBestWebsiteUrl || sanitizeWebsiteUrlForBot(WEBSITE_FALLBACK_URL);
@@ -389,9 +385,8 @@ export async function POST(request: NextRequest) {
 
     // Fast path: greeting messages never need AI classification or website crawl.
     if (isGreetingMessage(text)) {
-      const namePart = customer.name || body.name ? ` ${customer.name || body.name}` : '';
       const greetingReply = normalizeToWhatsAppMarkdown(
-        `Welcome to Traventions!${namePart}\n\nI'm your travel support assistant.\nPlease choose a service:\n1. Hotel\n2. Holiday Package\n3. Flights\n\nFor Airport Transfer or Booking Status, just type it directly.`
+        getGreetingMenuText(customer.name || body.name || null)
       );
       createDocument('conversations', {
         teamId,
