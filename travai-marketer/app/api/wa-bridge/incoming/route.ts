@@ -191,22 +191,16 @@ async function buildReply(params: {
   userMessage: string;
   intent: string;
   customerName?: string;
+  workflowState?: ReturnType<typeof resolveWorkflowState>;
+  deterministicTemplate?: string | null;
 }) {
-  const [historyResult, knowledge, businessConfigResult] = await Promise.all([
+  const [historyResult, businessConfigResult] = await Promise.all([
     listDocuments('conversations', [
       Query.equal('teamId', params.teamId),
       Query.equal('customerId', params.customerId),
       Query.orderDesc('$createdAt'),
       Query.limit(20),
     ]).catch(() => ({ documents: [] })),
-    loadTravelKnowledge(params.teamId, params.userMessage).catch(() => ({
-      databaseSnippets: [] as string[],
-      hasPackageData: false,
-      bestWebsiteUrl: sanitizeWebsiteUrlForBot(WEBSITE_FALLBACK_URL),
-      bestWebsiteTitle: 'Traventions',
-      websiteSnippets: [] as string[],
-      diagnostics: { collectionsScanned: [], collectionDocCounts: {}, crawledPages: 0 },
-    })),
     listDocuments('business_configs', [Query.equal('teamId', params.teamId), Query.limit(1)]).catch(
       () => ({ documents: [] })
     ),
@@ -230,11 +224,14 @@ async function buildReply(params: {
   const businessConfig = businessConfigResult.documents[0] as
     | { openaiSystemPrompt?: string }
     | undefined;
-  const workflowIntent = detectWorkflowIntent(params.userMessage, params.intent);
-  const workflowState = resolveWorkflowState({
+
+  const workflowState = params.workflowState ?? resolveWorkflowState({
     userMessage: params.userMessage,
     classifiedIntent: params.intent,
-    selectedIntent: workflowIntent === 'unknown' ? null : workflowIntent,
+    selectedIntent: (() => {
+      const d = detectWorkflowIntent(params.userMessage, params.intent);
+      return d === 'unknown' ? null : d;
+    })(),
     historyMessages: historyRows
       .filter((row) => row.role === 'user')
       .slice(0, 20)
@@ -242,8 +239,10 @@ async function buildReply(params: {
       .map((row) => String(row.message || ''))
       .filter(Boolean),
   });
-  const wfStage = workflowState.stage;
-  const wfSlots = workflowState.slots;
+  const workflowIntent = workflowState.intent === 'unknown'
+    ? detectWorkflowIntent(params.userMessage, params.intent)
+    : workflowState.intent;
+
   const memoryBlock = buildConversationMemoryBlock({
     state: workflowState,
     recentUserMessages: historyRows
@@ -253,11 +252,29 @@ async function buildReply(params: {
       .map((row) => String(row.message || ''))
       .filter(Boolean),
   });
-  const databaseKnowledge = knowledge.databaseSnippets.length
-    ? knowledge.databaseSnippets.map((item, i) => `${i + 1}. ${item}`).join('\n')
-    : 'No relevant package or itinerary data found in database.';
-  const packageIntent =
-    workflowIntent === 'plan_holiday' || isPackageIntent(params.userMessage, params.intent);
+
+  // Load knowledge only for stages that need package/pricing data
+  const needsKnowledge = workflowState.stage === 'unknown' ||
+    workflowState.stage === 'show_packages' ||
+    workflowState.stage === 'ask_travel_details' ||
+    isPackageIntent(params.userMessage, params.intent);
+
+  const knowledge = needsKnowledge
+    ? await loadTravelKnowledge(params.teamId, params.userMessage).catch(() => ({
+        databaseSnippets: [] as string[],
+        hasPackageData: false,
+        bestWebsiteUrl: sanitizeWebsiteUrlForBot(WEBSITE_FALLBACK_URL),
+        bestWebsiteTitle: 'Traventions',
+        websiteSnippets: [] as string[],
+        diagnostics: { collectionsScanned: [] as string[], collectionDocCounts: {} as Record<string, number>, crawledPages: 0 },
+      }))
+    : {
+        databaseSnippets: [] as string[], hasPackageData: false,
+        bestWebsiteUrl: sanitizeWebsiteUrlForBot(WEBSITE_FALLBACK_URL),
+        bestWebsiteTitle: 'Traventions', websiteSnippets: [] as string[],
+        diagnostics: { collectionsScanned: [] as string[], collectionDocCounts: {} as Record<string, number>, crawledPages: 0 },
+      };
+
   const safeWebsiteSnippets = sanitizeWebsiteSnippetsForBot(knowledge.websiteSnippets);
   const routeChoice = resolveSafeRouteChoice({
     message: params.userMessage,
@@ -265,105 +282,47 @@ async function buildReply(params: {
     websiteUrlHint: knowledge.bestWebsiteUrl,
   });
   const safeBestWebsiteUrl = sanitizeWebsiteUrlForBot(knowledge.bestWebsiteUrl);
-  const websiteKnowledge = safeWebsiteSnippets.length
-    ? safeWebsiteSnippets.map((item, i) => `${i + 1}. ${item}`).join('\n')
-    : `1. Traventions Home - ${WEBSITE_FALLBACK_URL}`;
-
-  const systemPrompt =
-    `${businessConfig?.openaiSystemPrompt || ''}\n\n` +
-    `You are Traventions' WhatsApp assistant.
-Business name must appear as "Traventions" in customer-facing replies.
-${firstAssistantReply ? 'Start this reply with: "Welcome to Traventions!".' : 'Do not repeat the welcome line again in every reply.'}
-Current intent: ${params.intent}.
-${getBotRoutePolicyPromptBlock()}
-${getWorkflowSystemPromptBlock(workflowIntent, wfStage, wfSlots)}
-${memoryBlock}
-If user asks for packages/itineraries/pricing:
-- First use database knowledge below.
-- If DB package data is missing, still provide a practical sample itinerary based on user budget/days/destination.
-- After answering, include the most relevant page link from the website index.
-Currency and pricing rules:
-- Currency must be INR only.
-- Do not mention USD or dollar symbols.
-- Use exact numeric pricing from database snippets when available.
-- If exact DB pricing is not found, explicitly say pricing is on request and ask follow-up questions.
-Keep tone warm, concise, and practical.
-Use only WhatsApp-supported formatting:
-- Bold: *text*
-- Italic: _text_
-- Strikethrough: ~text~
-- Bullets: * item
-- Numbered lists: 1. item
-- Quote: > text
-- Inline code: \`code\`
-- Code block: \`\`\`code\`\`\`
-Do not use markdown headings like #, ##, ###.
-
-Package intent detected: ${packageIntent ? 'yes' : 'no'}
-Package data available in DB: ${knowledge.hasPackageData ? 'yes' : 'no'}
-Best safe website page for this query: ${knowledge.bestWebsiteTitle} (${safeBestWebsiteUrl})
-Preferred route for this query: ${routeChoice.url}${routeChoice.loginRequired ? ' (login required)' : ''}
-
-DATABASE KNOWLEDGE:
-${databaseKnowledge}
-
-WEBSITE PAGE INDEX:
-${websiteKnowledge}`.trim();
 
   if (!process.env.OPENAI_API_KEY) {
-    if (packageIntent) {
-      return {
-        reply: normalizeToWhatsAppMarkdown(buildRuleBasedItinerary(params.userMessage)),
-        quickMenu: false,
-        quickMenuOptions: null,
-      };
-    }
+    const det = params.deterministicTemplate;
     return {
       reply: normalizeToWhatsAppMarkdown(
-        'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.'
+        det || buildRuleBasedItinerary(params.userMessage)
       ),
       quickMenu: false,
       quickMenuOptions: null,
     };
   }
 
-  if (isGreetingMessage(params.userMessage)) {
-    const quickMenuReply = normalizeToWhatsAppMarkdown(
-      getGreetingMenuText(params.customerName || null)
-    );
-    return {
-      reply: quickMenuReply,
-      quickMenu: true,
-      quickMenuOptions: [...SUPPORT_MENU_OPTIONS],
-    };
-  }
-
-  const quickSelectionPrompt = mapQuickMenuSelectionToIntentText(params.userMessage);
-  if (quickSelectionPrompt) {
-    return {
-      reply: normalizeToWhatsAppMarkdown(quickSelectionPrompt),
-      quickMenu: false,
-      quickMenuOptions: null,
-    };
-  }
+  const systemPrompt = (
+    `${businessConfig?.openaiSystemPrompt || ''}\n\n` +
+    `You are Traventions' WhatsApp assistant named Sini.
+${firstAssistantReply ? 'Start this reply with "Welcome to Traventions!".' : 'Do not repeat the welcome greeting on every reply.'}
+${getBotRoutePolicyPromptBlock()}
+${getWorkflowSystemPromptBlock(workflowIntent, workflowState.stage, workflowState.slots, params.deterministicTemplate ?? null)}
+${memoryBlock}
+${needsKnowledge ? `DATABASE KNOWLEDGE:
+${knowledge.databaseSnippets.length ? knowledge.databaseSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : 'No relevant snippets found.'}
+WEBSITE PAGE INDEX:
+${safeWebsiteSnippets.length ? safeWebsiteSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : `1. Traventions Home - ${WEBSITE_FALLBACK_URL}`}
+Best safe website page: ${knowledge.bestWebsiteTitle} (${safeBestWebsiteUrl})` : ''}`.trim()
+  );
 
   const response = await getChatResponse(params.userMessage, systemPrompt, history);
-  const inrSafeResponse = enforceSafeUrlsInReply(enforceInrReply(response));
+  const safeResponse = enforceSafeUrlsInReply(enforceInrReply(response));
+  const packageIntent = isPackageIntent(params.userMessage, params.intent);
   if (packageIntent) {
     const preferredUrl = routeChoice.url || safeBestWebsiteUrl || sanitizeWebsiteUrlForBot(WEBSITE_FALLBACK_URL);
-    const alreadyHasUrl = inrSafeResponse.includes(preferredUrl);
-    if (!alreadyHasUrl) {
+    if (!safeResponse.includes(preferredUrl)) {
       return {
-        reply: normalizeToWhatsAppMarkdown(
-          `${inrSafeResponse}\n\nFor latest live packages and booking, visit ${preferredUrl}.`
-        ),
+        reply: normalizeToWhatsAppMarkdown(`${safeResponse}\n\nFor latest packages, visit ${preferredUrl}`),
         quickMenu: false,
         quickMenuOptions: null,
       };
     }
   }
   return {
-    reply: normalizeToWhatsAppMarkdown(inrSafeResponse),
+    reply: normalizeToWhatsAppMarkdown(safeResponse),
     quickMenu: false,
     quickMenuOptions: null,
   };
@@ -550,37 +509,8 @@ export async function POST(request: NextRequest) {
     });
 
     const deterministicWorkflowReply = buildWorkflowReply(workflowState);
-    const isPersonalizedShowPackages =
-      workflowState.stage === 'show_packages' &&
-      workflowState.slots.holiday_type === 'personalized';
-    // Always use the deterministic workflow reply when we have an active intent and stage.
-    // AI is only used for unknown intent (general questions) or personalized package generation.
-    const shouldUseDeterministicWorkflow =
-      workflowState.intent !== 'unknown' &&
-      workflowState.stage !== 'unknown' &&
-      Boolean(deterministicWorkflowReply) &&
-      !isPersonalizedShowPackages;
 
-    const built = shouldUseDeterministicWorkflow && deterministicWorkflowReply
-      ? {
-          reply: normalizeToWhatsAppMarkdown(deterministicWorkflowReply),
-          quickMenu: false,
-          quickMenuOptions: null as string[] | null,
-        }
-      : await buildReply({
-      teamId,
-      customerId: customer.$id,
-      userMessage: correctedText,
-      intent,
-      customerName: customer.name || body.name || undefined,
-    }).catch(() => ({
-      reply: 'Welcome to Traventions! Our team will get back to you shortly.',
-      quickMenu: false,
-      quickMenuOptions: null as string[] | null,
-    }));
-    const reply = built.reply;
-
-    // Save lead to CRM when workflow is confirmed or contact info was just collected
+    // Save lead to CRM before generating response (fire-and-forget)
     if (workflowState.leadShouldBeSaved) {
       saveLead({
         teamId,
@@ -598,6 +528,21 @@ export async function POST(request: NextRequest) {
         intent: workflowState.intent,
       }).catch(() => {});
     }
+
+    const built = await buildReply({
+      teamId,
+      customerId: customer.$id,
+      userMessage: correctedText,
+      intent,
+      customerName: customer.name || body.name || undefined,
+      workflowState,
+      deterministicTemplate: deterministicWorkflowReply,
+    }).catch(() => ({
+      reply: 'Welcome to Traventions! Our team will get back to you shortly.',
+      quickMenu: false,
+      quickMenuOptions: null as string[] | null,
+    }));
+    const reply = built.reply;
 
     // Fire-and-forget: never let a DB write failure block the reply to the customer.
     createDocument('conversations', {

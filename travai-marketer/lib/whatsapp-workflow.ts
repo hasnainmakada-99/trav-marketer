@@ -568,6 +568,15 @@ function findLockedIntentFromHistory(historyMessages: string[]): WorkflowIntent 
   return null;
 }
 
+// Returns true only when the message is an explicit, unambiguous service selection
+// (button tap, single keyword, or "Plan a Holiday" / "Flights" / "Hotels").
+// Used to decide whether the current message can override a locked intent from history.
+function isDirectServiceSelection(message: string): boolean {
+  const text = normalize(message);
+  return /^(plan a holiday|plan holiday|flights?|hotels?|svc_1|svc_2|svc_3|1|2|3)$/.test(text) ||
+    /^(visa|transfer|forex|insurance|mice|booking status)$/.test(text);
+}
+
 export function resolveWorkflowState(args: {
   userMessage: string;
   classifiedIntent?: string;
@@ -579,9 +588,17 @@ export function resolveWorkflowState(args: {
   const selected = args.selectedIntent && args.selectedIntent !== 'unknown' ? args.selectedIntent : null;
   const locked = shouldResetState(args.userMessage) ? null : findLockedIntentFromHistory(historyMessages);
 
+  // Locked intent from history wins unless the current message is an explicit,
+  // unambiguous service selection (button tap / single keyword).
+  // This prevents travel-detail messages like "2 Adults, July, Bangalore, 5 Nights"
+  // from accidentally overriding the locked plan_holiday intent.
+  const canOverrideLocked = !locked || isDirectServiceSelection(args.userMessage);
   const intent: WorkflowIntent =
-    selected || locked || (msgIntent !== 'unknown' ? msgIntent : 'unknown');
-  const source: WorkflowState['source'] = selected
+    (canOverrideLocked && selected) ? selected
+      : locked
+        ? locked
+        : selected || (msgIntent !== 'unknown' ? msgIntent : 'unknown');
+  const source: WorkflowState['source'] = selected && canOverrideLocked
     ? 'selected_now'
     : locked
       ? 'locked_history'
@@ -923,57 +940,115 @@ export function buildConversationMemoryBlock(args: {
   ].join('\n');
 }
 
-export function getWorkflowSystemPromptBlock(intent: WorkflowIntent, stage?: WorkflowStage, slots?: WorkflowSlotMap): string {
-  const intentLabel = intent === 'unknown' ? 'not yet identified' : intent.replace('_', ' ');
+export function getWorkflowSystemPromptBlock(
+  intent: WorkflowIntent,
+  stage?: WorkflowStage,
+  slots?: WorkflowSlotMap,
+  stageDraftReply?: string | null
+): string {
+  const intentLabel = intent === 'unknown' ? 'not yet identified' : intent.replace(/_/g, ' ');
   const stageLabel = stage || 'unknown';
+  const collected = Object.entries(slots || {})
+    .filter(([, v]) => Boolean(v))
+    .map(([k, v]) => `${k}: ${v}`)
+    .join(', ') || 'nothing yet';
 
-  let packageGenBlock = '';
-  if (stage === 'show_packages' && slots?.holiday_type === 'personalized') {
-    const dest = slots?.destination || 'the destination';
-    const nights = slots?.nights || '5';
-    const hotelPref = slots?.hotel_preference || '4 star';
-    const travellers = slots?.travellers || '';
-    const travelTime = slots?.travel_time || '';
-    const departureCity = slots?.departure_city || '';
+  // ── per-stage task instructions ─────────────────────────────────────────────
+  let task = '';
 
-    packageGenBlock = `
-PERSONALIZED PACKAGE GENERATION — REQUIRED:
+  if (stage === 'ask_destination') {
+    task = `Ask the customer which destination they want to visit.
+Ask for the destination ONLY — nothing else yet.`;
+
+  } else if (stage === 'ask_holiday_type') {
+    task = `Ask the customer to choose between:
+🌟 Exclusive Holiday Deals
+✨ Personalized Holidays
+Do NOT ask about travel details yet. Only ask for the holiday type.`;
+
+  } else if (stage === 'ask_travel_details') {
+    const missing: string[] = [];
+    if (intent === 'plan_holiday') {
+      if (!slots?.travellers)    missing.push('Number of Travellers');
+      if (!slots?.travel_time)   missing.push('Travel Month or Dates');
+      if (!slots?.departure_city) missing.push('Departure City');
+      if (!slots?.nights)        missing.push('Number of Nights');
+      if (slots?.holiday_type === 'personalized' && !slots?.hotel_preference)
+        missing.push('Hotel Preference (3 / 4 / 5 Star)');
+    } else if (intent === 'flights') {
+      if (!slots?.from_city)  missing.push('Departure City');
+      if (!slots?.to_city)    missing.push('Destination City');
+      if (!slots?.travel_time) missing.push('Travel Date');
+      if (!slots?.travellers) missing.push('Number of Travellers');
+    } else if (intent === 'hotels') {
+      if (!slots?.destination) missing.push('Destination');
+      if (!slots?.travellers)  missing.push('Number of Travellers');
+      if (!slots?.travel_time) missing.push('Travel Month or Dates');
+      if (!slots?.nights)      missing.push('Number of Nights');
+    }
+    task = `Ask for ONLY these missing travel details: ${missing.length ? missing.join(', ') : 'none — all collected'}.
+ALREADY COLLECTED — DO NOT ASK AGAIN: ${collected}.`;
+
+  } else if (stage === 'show_packages') {
+    if (slots?.holiday_type === 'personalized') {
+      const dest = slots?.destination || 'the destination';
+      const nights = slots?.nights || '5';
+      const hotelPref = slots?.hotel_preference || '4 star';
+      const travellers = slots?.travellers || '';
+      const travelTime = slots?.travel_time || '';
+      const departureCity = slots?.departure_city || '';
+      task = `PERSONALIZED PACKAGE GENERATION — REQUIRED:
 The customer wants a personalized holiday to ${dest} for ${travellers || 'the given travellers'}, ${travelTime || 'on the given dates'}, departing ${departureCity || 'from their city'}, ${nights} nights, ${hotelPref} hotels.
-Generate exactly 5 package options with these names in order: Classic Explorer, Scenic & Relaxation, Premium Experience, Budget Friendly, Luxury Touch.
-Use this exact format for each:
-
+Generate exactly 5 package options named: Classic Explorer, Scenic & Relaxation, Premium Experience, Budget Friendly, Luxury Touch.
+Format each as:
 🌟 Option [N]: [Name]
-🏨 ${hotelPref} Hotels
-🌃 ${nights} Nights / ${String(parseInt(nights) + 1)} Days
-💰 ₹[realistic price per person in INR]  PP
+🏨 ${hotelPref} Hotels | 🌃 ${nights} Nights / ${String(parseInt(nights, 10) + 1)} Days | 💰 ₹[realistic INR price] PP
+✨ Highlights: [5 specific sightseeing/activity highlights for ${dest}]
 
-✨ Included Highlights:
-✔ [highlight 1]
-✔ [highlight 2]
-✔ [highlight 3]
-✔ [highlight 4]
-✔ [highlight 5]
-
-After all 5 options, always end with exactly:
+End with:
 ✨ Would you like to:
+1️⃣ Select an option  📄 Get Day-wise Itinerary  ✏️ Modify This Plan  📞 Arrange Callback
+Use realistic INR pricing. Never mention USD or $.`;
+    } else {
+      task = `Show the available exclusive holiday packages for ${slots?.destination || 'the destination'}.
+Include destination, travellers, travel dates, departure city, and nights as a summary.
+Then show the website link for packages and ask if they want: Package Details, Customize Holiday, or Arrange Callback.`;
+    }
 
-1️⃣ Select an option
-📄 Get Day-wise Itinerary
-✏️ Modify This Plan
-📞 Arrange Callback
+  } else if (stage === 'collect_lead') {
+    task = `Ask the customer for their Full Name, Phone Number, and Email ID.
+All 3 must be collected. Ask in a friendly single message with an example format.
+Do NOT ask for travel details — those are already collected.`;
 
-Use realistic INR pricing. Keep highlights specific to ${dest} — real sightseeing spots, activities. Do not mention USD or $.
-`;
+  } else if (stage === 'ask_callback') {
+    task = `Thank the customer for sharing their details and ask for their preferred callback time.
+Tell them a travel expert will call at that time.
+Already have: name=${slots?.name || '?'}, phone=${slots?.phone || '?'}, email=${slots?.email || '?'}.`;
+
+  } else if (stage === 'confirmed') {
+    task = `Confirm the callback is scheduled. Thank the customer warmly.
+Callback time: ${slots?.callback_time || 'at the earliest'}. Travel expert will reach out.
+Close the conversation with warm, encouraging words.`;
   }
 
+  // Draft reply as structural guide (optional)
+  const draftBlock = (stageDraftReply && stage !== 'show_packages')
+    ? `\nSTAGE REPLY STRUCTURE (follow this closely, adapt the wording naturally):\n${stageDraftReply}`
+    : '';
+
   return `
-WHATSAPP SALES WORKFLOW:
-- Current intent: ${intentLabel}
+TRAVEL SALES WORKFLOW — FOLLOW STRICTLY:
+- Customer intent: ${intentLabel}
 - Current stage: ${stageLabel}
-- Follow a warm, friendly, emoji-rich tone like a knowledgeable travel advisor.
-- Ask only missing details; never repeat already-provided information.
-- Use INR only for all pricing.
-${packageGenBlock}
+- Collected so far: ${collected}
+- YOUR TASK FOR THIS REPLY: ${task}
+${draftBlock}
+FORMATTING RULES (mandatory):
+- WhatsApp formatting only: *bold*, _italic_, numbered lists, bullet * lists
+- NEVER use markdown links [text](url) — write plain URLs only
+- Friendly emojis are encouraged
+- INR only for all pricing — never USD or $
+- Keep reply concise and on-topic for the current stage
 `.trim();
 }
 

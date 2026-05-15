@@ -947,65 +947,28 @@ async function generateAndSendResponse(
     const packageIntent =
       workflowIntent === 'plan_holiday' || isPackageIntent(correctedText, intent);
 
+    // Deterministic reply is used as a STRUCTURAL TEMPLATE fed into the AI prompt,
+    // not sent directly. AI generates the final response every time.
     const deterministicWorkflowReply = buildWorkflowReply(workflowState);
-    // Use AI for personalized show_packages; deterministic for all other stages
-    const isPersonalizedShowPackages =
-      workflowState.stage === 'show_packages' &&
-      workflowState.slots.holiday_type === 'personalized';
-    // Always use the deterministic workflow reply when we have an active intent and stage.
-    // AI is only used for unknown intent (general questions) or personalized package generation.
-    const shouldUseDeterministicWorkflow =
-      workflowState.intent !== 'unknown' &&
-      workflowState.stage !== 'unknown' &&
-      Boolean(deterministicWorkflowReply) &&
-      !isPersonalizedShowPackages;
 
-    if (shouldUseDeterministicWorkflow && deterministicWorkflowReply) {
-      const waWorkflowReply = normalizeToWhatsAppMarkdown(deterministicWorkflowReply);
-      if (
-        recentAiText === normalizeTextForDedupe(waWorkflowReply) &&
-        Number.isFinite(recentAiTs) &&
-        Date.now() - recentAiTs <= RECENT_AI_DUPLICATE_WINDOW_MS
-      ) {
-        console.log('[WhatsApp] Skipping duplicate deterministic workflow response');
-        return;
-      }
-
-      const sendResult = await sendAutoReply({
-        requestUrl,
-        teamId: resolvedTeamId,
-        customerId: customer.$id,
-        phone,
-        message: waWorkflowReply,
-        webhookPhoneNumberId,
-      });
-
-      await createDocument('conversations', {
-        teamId: resolvedTeamId,
-        customerId: customer.$id,
-        phone: phone,
-        role: 'assistant',
-        message: waWorkflowReply,
-        messageType: 'text',
-        sentBy: 'ai',
-        metaMessageId: sendResult.messageId || null,
-        deliveryStatus: sendResult.success ? 'sent' : 'failed',
-        createdAt: new Date().toISOString(),
-      });
-
-      // Save lead to CRM when conversation is confirmed (callback collected)
-      if (workflowState.leadShouldBeSaved) {
-        saveLead({
-          teamId: resolvedTeamId,
-          phone,
-          customer,
-          slots: workflowState.slots,
-          intent: workflowState.intent,
-        }).catch((err) => console.error('[WhatsApp] Lead save failed:', err));
-      }
-      return;
+    // Fire-and-forget lead saves — happen before response generation
+    if (workflowState.leadShouldBeSaved) {
+      saveLead({
+        teamId: resolvedTeamId, phone, customer,
+        slots: workflowState.slots, intent: workflowState.intent,
+      }).catch((err) => console.error('[WhatsApp] Lead save failed:', err));
+    } else if (workflowState.stage === 'ask_callback' && workflowState.slots.name && workflowState.slots.phone) {
+      saveLead({
+        teamId: resolvedTeamId, phone, customer,
+        slots: workflowState.slots, intent: workflowState.intent,
+      }).catch(() => {});
     }
 
+    // Load knowledge for package/pricing stages; skip for simple conversational stages
+    const needsKnowledge = workflowState.stage === 'unknown' ||
+      workflowState.stage === 'show_packages' ||
+      workflowState.stage === 'ask_travel_details' ||
+      packageIntent;
     let knowledge: Awaited<ReturnType<typeof loadTravelKnowledge>> = {
       databaseSnippets: [] as string[],
       hasPackageData: false,
@@ -1018,14 +981,16 @@ async function generateAndSendResponse(
         crawledPages: 0,
       },
     };
-    let safeWebsiteSnippets: string[] = [];
-    let routeChoice = resolveSafeRouteChoice({
+    if (needsKnowledge && process.env.OPENAI_API_KEY) {
+      knowledge = await loadTravelKnowledgeFast(resolvedTeamId, correctedText);
+    }
+    const safeWebsiteSnippets = sanitizeWebsiteSnippetsForBot(knowledge.websiteSnippets);
+    const routeChoice = resolveSafeRouteChoice({
       message: correctedText,
       classifiedIntent: intent,
       websiteUrlHint: knowledge.bestWebsiteUrl,
     });
-    let safeBestWebsiteUrl = sanitizeWebsiteUrlForBot(knowledge.bestWebsiteUrl);
-    let systemPrompt = '';
+    const safeBestWebsiteUrl = sanitizeWebsiteUrlForBot(knowledge.bestWebsiteUrl);
 
     const memoryBlock = buildConversationMemoryBlock({
       state: workflowState,
@@ -1037,73 +1002,43 @@ async function generateAndSendResponse(
         .filter(Boolean),
     });
 
-    if (!selectedService && process.env.OPENAI_API_KEY) {
-      knowledge = await loadTravelKnowledgeFast(resolvedTeamId, correctedText);
-      safeWebsiteSnippets = sanitizeWebsiteSnippetsForBot(knowledge.websiteSnippets);
-      routeChoice = resolveSafeRouteChoice({
-        message: correctedText,
-        classifiedIntent: intent,
-        websiteUrlHint: knowledge.bestWebsiteUrl,
-      });
-      safeBestWebsiteUrl = sanitizeWebsiteUrlForBot(knowledge.bestWebsiteUrl);
-
-      systemPrompt =
-        `${businessConfig?.openaiSystemPrompt || ''}\n\n` +
-        `You are Traventions' WhatsApp assistant named Sini.
-Mention Traventions in customer-facing replies.
-${firstAssistantReply ? 'Start this reply with "Welcome to Traventions!".' : 'Do not repeat the welcome line on every reply.'}
+    // Build system prompt — workflow stage instructions + optional deterministic template
+    const systemPrompt = (
+      `${businessConfig?.openaiSystemPrompt || ''}\n\n` +
+      `You are Traventions' WhatsApp assistant named Sini.
+${firstAssistantReply ? 'Start this reply with "Welcome to Traventions!".' : 'Do not repeat the welcome greeting on every reply.'}
 ${getBotRoutePolicyPromptBlock()}
-${getWorkflowSystemPromptBlock(workflowIntent, workflowState.stage, workflowState.slots)}
+${getWorkflowSystemPromptBlock(workflowIntent, workflowState.stage, workflowState.slots, deterministicWorkflowReply)}
 ${memoryBlock}
-For package/pricing questions:
-- First use database knowledge for exact known details.
-- If DB package data is missing, still provide a practical sample itinerary.
-- Then include the most relevant website page from the index.
-Use only WhatsApp-supported formatting:
-- Bold: *text*
-- Italic: _text_
-- Strikethrough: ~text~
-- Bullets: * item
-- Numbered lists: 1. item
-- Quote: > text
-- Inline code: \`code\`
-- Code block: \`\`\`code\`\`\`
-Do not use markdown headings like #, ##, ###.
-Current intent: ${intent}
-Package intent: ${packageIntent ? 'yes' : 'no'}
-Package data available: ${knowledge.hasPackageData ? 'yes' : 'no'}
-Best safe website page: ${knowledge.bestWebsiteTitle} (${safeBestWebsiteUrl})
-Preferred route for this query: ${routeChoice.url}${routeChoice.loginRequired ? ' (login required)' : ''}
-DATABASE KNOWLEDGE:
+${needsKnowledge ? `DATABASE KNOWLEDGE:
 ${knowledge.databaseSnippets.length ? knowledge.databaseSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : 'No relevant snippets found.'}
 WEBSITE PAGE INDEX:
-${safeWebsiteSnippets.length ? safeWebsiteSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : `1. Traventions - ${WEBSITE_FALLBACK_URL}`}`.trim();
-    }
+${safeWebsiteSnippets.length ? safeWebsiteSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : `1. Traventions - ${WEBSITE_FALLBACK_URL}`}
+Best safe website page: ${knowledge.bestWebsiteTitle} (${safeBestWebsiteUrl})` : ''}`.trim()
+    );
 
     let response: string;
     if (process.env.OPENAI_API_KEY) {
       try {
-        response = await getChatResponse(
-          correctedText,
-          systemPrompt || "You are Traventions' WhatsApp assistant.",
-          history
-        );
+        response = await getChatResponse(correctedText, systemPrompt, history);
         response = enforceSafeUrlsInReply(response);
       } catch (error) {
         console.error('[WhatsApp] OpenAI reply generation failed, using fallback:', error);
-        response =
+        // Fall back to deterministic if AI fails
+        response = deterministicWorkflowReply ||
           'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
       }
     } else {
-      response = packageIntent
-        ? buildRuleBasedItinerary(userMessage)
-        : 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
+      // No API key: use deterministic or rule-based
+      response = deterministicWorkflowReply ||
+        (packageIntent ? buildRuleBasedItinerary(correctedText)
+          : 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.');
     }
 
     const preferredUrl = routeChoice.url || safeBestWebsiteUrl || sanitizeWebsiteUrlForBot(WEBSITE_FALLBACK_URL);
     const responseWithFallback =
       packageIntent && !response.includes(preferredUrl)
-        ? `${response}\n\nFor latest packages, please visit ${preferredUrl}.`
+        ? `${response}\n\nFor latest packages, visit ${preferredUrl}`
         : response;
     const safeResponse = enforceSafeUrlsInReply(responseWithFallback);
     const waFormattedResponse = normalizeToWhatsAppMarkdown(safeResponse);
@@ -1143,28 +1078,6 @@ ${safeWebsiteSnippets.length ? safeWebsiteSnippets.map((v, i) => `${i + 1}. ${v}
         console.log(`[OK] AI response sent to ${phone} via ${sendResult.mode}`);
       } else {
         console.error('Failed to send AI response');
-      }
-
-      // Save lead to CRM if workflow reached confirmed stage via AI path
-      if (workflowState.leadShouldBeSaved) {
-        saveLead({
-          teamId: resolvedTeamId,
-          phone,
-          customer,
-          slots: workflowState.slots,
-          intent: workflowState.intent,
-        }).catch((err) => console.error('[WhatsApp] Lead save failed:', err));
-      }
-
-      // Also save partial lead immediately when contact info is shared (ask_callback stage)
-      if (workflowState.stage === 'ask_callback' && workflowState.slots.name && workflowState.slots.phone) {
-        saveLead({
-          teamId: resolvedTeamId,
-          phone,
-          customer,
-          slots: workflowState.slots,
-          intent: workflowState.intent,
-        }).catch(() => {});
       }
     } finally {
       await typingKeepAlive.stop();
