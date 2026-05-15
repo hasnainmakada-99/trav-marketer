@@ -273,6 +273,9 @@ function tryParseCommaFormat(raw: string, intent: WorkflowIntent, existingSlots:
   const emailRx = /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i;
   const phoneRx = /^\+?\d[\d\s-]{6,14}\d$/;
 
+  // Detect parts that contain a month name (in any position, e.g. "june mid", "mid-June")
+  const containsMonthRx = /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\b/i;
+
   let travellersAccum: string[] = [];
   const unclassified: string[] = [];
 
@@ -282,7 +285,8 @@ function tryParseCommaFormat(raw: string, intent: WorkflowIntent, existingSlots:
       if (!slots.email) slots.email = part.trim().toLowerCase();
     } else if (phoneRx.test(part.trim())) {
       if (!slots.phone) slots.phone = part.trim().replace(/\s+/g, '');
-    } else if (monthRx.test(lp)) {
+    } else if (monthRx.test(lp) || (containsMonthRx.test(part) && /^[a-zA-Z\s-]+$/.test(part))) {
+      // Captures "june", "june mid", "mid-June", "early July" etc.
       if (!slots.travel_time) slots.travel_time = part;
     } else if (nightsRx.test(lp)) {
       const m = lp.match(/^(\d+)/);
@@ -293,6 +297,9 @@ function tryParseCommaFormat(raw: string, intent: WorkflowIntent, existingSlots:
       slots.hotel_preference = lp.replace(/\s*hotels?\s*/g, '').trim();
     } else if (!slots.travel_time && dateRx.test(part) && /\d/.test(part)) {
       slots.travel_time = part;
+    } else if (/^\d+$/.test(part.trim()) && !travellersAccum.length && !slots.travellers) {
+      // Standalone digit (e.g. "2") — treat as traveller count
+      travellersAccum.push(part.trim());
     } else {
       unclassified.push(part);
     }
@@ -313,6 +320,9 @@ function tryParseCommaFormat(raw: string, intent: WorkflowIntent, existingSlots:
   // Remaining unclassified strings may be city names — apply blocklist
   const safeCityPart = (candidate: string) => {
     const key = normalize(candidate).trim();
+    // Exclude parts that contain a month name — those are travel dates, not cities
+    if (containsMonthRx.test(candidate)) return false;
+    if (/\d/.test(candidate)) return false;
     return /^[a-zA-Z\s.'-]{2,30}$/.test(candidate) && !NON_CITY_WORDS.has(key);
   };
 
@@ -425,6 +435,18 @@ function parseGeneralSlots(message: string, intent: WorkflowIntent = 'unknown'):
   if (departure) slots.departure_city = departure;
   if (!slots.departure_city && slots.from_city) {
     slots.departure_city = slots.from_city;
+  }
+  // "from [city]" pattern — catches "from Ahmedabad", "from Delhi" in holiday/hotel context
+  if (!slots.departure_city && (intent === 'plan_holiday' || intent === 'hotels')) {
+    const fromM = raw.match(/\bfrom\s+([a-zA-Z][a-zA-Z .'-]{1,28})(?=[\s,]|$)/i);
+    if (fromM) {
+      const candidate = fromM[1].trim();
+      const key = normalize(candidate);
+      const hasMonth = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\b/i.test(candidate);
+      if (!hasMonth && !NON_CITY_WORDS.has(key) && !/\d/.test(candidate)) {
+        slots.departure_city = candidate;
+      }
+    }
   }
 
   const nights = pick(/\b(\d+)\s*(?:nights?|night stay)\b/i, raw);
@@ -822,27 +844,33 @@ export function detectWorkflowIntent(message: string, classifiedIntent?: string)
   const intentText = normalize(classifiedIntent || '');
   const joined = `${text} ${intentText}`;
 
+  // Digit menu selections (1/2/3) only fire when the ENTIRE message is that digit.
+  // This prevents "2 adults" or "2, june, ..." from being classified as "Flights".
+  const isDigitSelect = (n: string) => new RegExp(`^${n}\\.?\\s*$`).test(text);
+
   // plan_holiday — fuzzy-match "holiday", "package", "tour", "leisure"
   if (
-    /(^|\s)(1|svc_1|plan holiday|plan a holiday|holiday package|holiday|leisure|tour package)(\s|$)/.test(joined) ||
+    isDigitSelect('1') ||
+    /(^|\s)(svc_1|plan holiday|plan a holiday|holiday package|holiday|leisure|tour package)(\s|$)/.test(joined) ||
     fuzzyAny(text, ['holiday', 'package', 'tour', 'leisure'])
   ) {
     // Guard: must not be primarily about flights or hotels to avoid false positives
     const flightLike = fuzzyAny(text, ['flight', 'flights', 'airfare', 'ticket']);
-    const hotelLike = /(^|\s)(3|svc_3|hotel|hotels|stay|resort)(\s|$)/.test(joined);
+    const hotelLike = isDigitSelect('3') || /(^|\s)(svc_3|hotel|hotels|stay|resort)(\s|$)/.test(joined);
     if (!flightLike && !hotelLike) return 'plan_holiday';
   }
 
   // flights — fuzzy-match "flights", "flight", "airfare"
   if (
-    /(^|\s)(2|svc_2|flight|flights|air ticket|airfare)(\s|$)/.test(joined) ||
+    isDigitSelect('2') ||
+    /(^|\s)(svc_2|flight|flights|air ticket|airfare)(\s|$)/.test(joined) ||
     fuzzyAny(text, ['flights', 'flight', 'airfare'])
   ) {
     return 'flights';
   }
 
   // hotels
-  if (/(^|\s)(3|svc_3|hotel|hotels|stay|resort)(\s|$)/.test(joined)) {
+  if (isDigitSelect('3') || /(^|\s)(svc_3|hotel|hotels|stay|resort)(\s|$)/.test(joined)) {
     return 'hotels';
   }
 

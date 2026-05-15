@@ -16,6 +16,9 @@ export function normalizeToWhatsAppMarkdown(input: string): string {
 
   let text = input.replace(/\r\n/g, '\n');
 
+  // Convert markdown links [text](url) → plain url — WhatsApp doesn't render hyperlinks
+  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$2');
+
   // Normalize fenced code blocks: ```lang\n...\n``` -> ```\n...\n```
   text = text.replace(/```[a-zA-Z0-9_-]+\n([\s\S]*?)```/g, (_, body: string) => {
     return `\`\`\`\n${body}\`\`\``;

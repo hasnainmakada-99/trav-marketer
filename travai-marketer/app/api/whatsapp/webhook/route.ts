@@ -952,14 +952,13 @@ async function generateAndSendResponse(
     const isPersonalizedShowPackages =
       workflowState.stage === 'show_packages' &&
       workflowState.slots.holiday_type === 'personalized';
+    // Always use the deterministic workflow reply when we have an active intent and stage.
+    // AI is only used for unknown intent (general questions) or personalized package generation.
     const shouldUseDeterministicWorkflow =
       workflowState.intent !== 'unknown' &&
       workflowState.stage !== 'unknown' &&
       Boolean(deterministicWorkflowReply) &&
-      !isPersonalizedShowPackages &&
-      (selectedService !== null ||
-        looksLikeWorkflowDataMessage(correctedText) ||
-        !process.env.OPENAI_API_KEY);
+      !isPersonalizedShowPackages;
 
     if (shouldUseDeterministicWorkflow && deterministicWorkflowReply) {
       const waWorkflowReply = normalizeToWhatsAppMarkdown(deterministicWorkflowReply);
