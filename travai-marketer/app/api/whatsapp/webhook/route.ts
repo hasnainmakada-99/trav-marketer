@@ -12,7 +12,7 @@ import {
   sendYCloudReplyButtonsMessage,
   showYCloudTypingIndicator,
 } from '@/lib/whatsapp-ycloud';
-import { getChatResponse, classifyIntent, extractCustomerInfo } from '@/lib/openai';
+import { getChatResponse, classifyIntent, extractCustomerInfo, preprocessMessage } from '@/lib/openai';
 import { createDocument, listDocuments, updateDocument } from '@/lib/appwrite';
 import { normalizeToWhatsAppMarkdown } from '@/lib/whatsapp-format';
 import { createHmac, timingSafeEqual } from 'crypto';
@@ -675,23 +675,31 @@ async function processIncomingMessage(
     }
 
     const greetingMessage = isGreetingMessage(text);
-    // Classify the intent only when OpenAI key exists, otherwise fall back.
+    // Preprocess: fix typos via AI + classify intent in one call
     const businessContext = `Team: ${teamId}, channel: whatsapp`;
-    const intent = greetingMessage
-      ? 'greeting'
-      : process.env.OPENAI_API_KEY
-        ? await withTimeout(
-            classifyIntent(text, businessContext).catch(() => 'other'),
-            CLASSIFY_TIMEOUT_MS,
-            'other'
-          )
-        : 'other';
+    let intent = 'other';
+    let correctedText = text; // AI-corrected version used for workflow/slot extraction
+    if (!greetingMessage && process.env.OPENAI_API_KEY) {
+      const preprocessed = await withTimeout(
+        preprocessMessage(text, businessContext).catch(() => ({ correctedText: text, intent: 'other' })),
+        CLASSIFY_TIMEOUT_MS,
+        { correctedText: text, intent: 'other' }
+      );
+      correctedText = preprocessed.correctedText;
+      intent = preprocessed.intent;
+      if (correctedText !== text) {
+        console.log(`[WhatsApp] Typo corrected: "${text}" → "${correctedText}"`);
+      }
+    } else if (greetingMessage) {
+      intent = 'greeting';
+    }
 
     // Generate AI response for all non-complaint intents.
     if (intent !== 'complaint') {
       await generateAndSendResponse(
         customer,
-        text,
+        text,           // original stored in DB
+        correctedText,  // typo-corrected used for logic
         phone,
         intent,
         webhookPhoneNumberId,
@@ -788,7 +796,8 @@ async function findOrCreateCustomer(phone: string, teamId: string) {
  */
 async function generateAndSendResponse(
   customer: { $id: string; teamId?: string; name?: string; email?: string },
-  userMessage: string,
+  userMessage: string,      // original text — stored in DB
+  correctedText: string,    // AI typo-corrected — used for intent/slot logic
   phone: string,
   intent: string,
   webhookPhoneNumberId: string,
@@ -850,9 +859,9 @@ async function generateAndSendResponse(
     const businessConfig = businessConfigResult.documents[0] as
       | { businessName?: string; openaiSystemPrompt?: string }
       | undefined;
-    const workflowIntent = detectWorkflowIntent(userMessage, intent);
+    const workflowIntent = detectWorkflowIntent(correctedText, intent);
 
-    if (isGreetingMessage(userMessage)) {
+    if (isGreetingMessage(correctedText)) {
       const mode = resolveOutboundMode();
       const greetingMenu = getGreetingMenuText(customer.name || null);
 
@@ -920,7 +929,7 @@ async function generateAndSendResponse(
       return;
     }
 
-    const selectedService = detectServiceSelection(userMessage);
+    const selectedService = detectServiceSelection(correctedText);
     // Only use CUSTOMER messages for slot extraction — bot messages contain menus/examples
     // that would otherwise pollute slot values (e.g. "Forex" from the service menu)
     const historyMessages = historyRows
@@ -930,13 +939,13 @@ async function generateAndSendResponse(
       .map((row) => String(row.message || ''))
       .filter(Boolean);
     const workflowState = resolveWorkflowState({
-      userMessage,
+      userMessage: correctedText,
       classifiedIntent: intent,
       selectedIntent: selectedService,
       historyMessages,
     });
     const packageIntent =
-      workflowIntent === 'plan_holiday' || isPackageIntent(userMessage, intent);
+      workflowIntent === 'plan_holiday' || isPackageIntent(correctedText, intent);
 
     const deterministicWorkflowReply = buildWorkflowReply(workflowState);
     // Use AI for personalized show_packages; deterministic for all other stages
@@ -949,7 +958,7 @@ async function generateAndSendResponse(
       Boolean(deterministicWorkflowReply) &&
       !isPersonalizedShowPackages &&
       (selectedService !== null ||
-        looksLikeWorkflowDataMessage(userMessage) ||
+        looksLikeWorkflowDataMessage(correctedText) ||
         !process.env.OPENAI_API_KEY);
 
     if (shouldUseDeterministicWorkflow && deterministicWorkflowReply) {
@@ -1012,7 +1021,7 @@ async function generateAndSendResponse(
     };
     let safeWebsiteSnippets: string[] = [];
     let routeChoice = resolveSafeRouteChoice({
-      message: userMessage,
+      message: correctedText,
       classifiedIntent: intent,
       websiteUrlHint: knowledge.bestWebsiteUrl,
     });
@@ -1030,10 +1039,10 @@ async function generateAndSendResponse(
     });
 
     if (!selectedService && process.env.OPENAI_API_KEY) {
-      knowledge = await loadTravelKnowledgeFast(resolvedTeamId, userMessage);
+      knowledge = await loadTravelKnowledgeFast(resolvedTeamId, correctedText);
       safeWebsiteSnippets = sanitizeWebsiteSnippetsForBot(knowledge.websiteSnippets);
       routeChoice = resolveSafeRouteChoice({
-        message: userMessage,
+        message: correctedText,
         classifiedIntent: intent,
         websiteUrlHint: knowledge.bestWebsiteUrl,
       });
@@ -1076,7 +1085,7 @@ ${safeWebsiteSnippets.length ? safeWebsiteSnippets.map((v, i) => `${i + 1}. ${v}
     if (process.env.OPENAI_API_KEY) {
       try {
         response = await getChatResponse(
-          userMessage,
+          correctedText,
           systemPrompt || "You are Traventions' WhatsApp assistant.",
           history
         );

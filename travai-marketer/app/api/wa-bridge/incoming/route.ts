@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
 
 export const maxDuration = 60;
-import { classifyIntent, extractCustomerInfo, getChatResponse } from '@/lib/openai';
+import { preprocessMessage, extractCustomerInfo, getChatResponse } from '@/lib/openai';
 import { createDocument, listDocuments, updateDocument } from '@/lib/appwrite';
 import { normalizeToWhatsAppMarkdown } from '@/lib/whatsapp-format';
 import {
@@ -517,10 +517,18 @@ export async function POST(request: NextRequest) {
         .catch(() => {});
     }
 
-    const intent = process.env.OPENAI_API_KEY
-      ? await classifyIntent(text, `Team: ${teamId}, channel: whatsapp_web`)
-      : 'other';
-    const selectedIntent = detectWorkflowIntent(text);
+    let intent = 'other';
+    let correctedText = text;
+    if (process.env.OPENAI_API_KEY) {
+      const preprocessed = await preprocessMessage(text, `Team: ${teamId}, channel: whatsapp_web`)
+        .catch(() => ({ correctedText: text, intent: 'other' }));
+      correctedText = preprocessed.correctedText;
+      intent = preprocessed.intent;
+      if (correctedText !== text) {
+        console.log(`[WA Bridge] Typo corrected: "${text}" → "${correctedText}"`);
+      }
+    }
+    const selectedIntent = detectWorkflowIntent(correctedText);
     const recentConversations = await listDocuments('conversations', [
       Query.equal('teamId', teamId),
       Query.equal('customerId', customer.$id),
@@ -535,7 +543,7 @@ export async function POST(request: NextRequest) {
       .map((row) => String(row.message || ''))
       .filter(Boolean);
     const workflowState = resolveWorkflowState({
-      userMessage: text,
+      userMessage: correctedText,
       classifiedIntent: intent,
       selectedIntent: selectedIntent === 'unknown' ? null : selectedIntent,
       historyMessages,
@@ -550,7 +558,7 @@ export async function POST(request: NextRequest) {
       workflowState.stage !== 'unknown' &&
       Boolean(deterministicWorkflowReply) &&
       !isPersonalizedShowPackages &&
-      (looksLikeWorkflowDataMessage(text) ||
+      (looksLikeWorkflowDataMessage(correctedText) ||
         selectedIntent !== 'unknown' ||
         !process.env.OPENAI_API_KEY);
 
@@ -563,7 +571,7 @@ export async function POST(request: NextRequest) {
       : await buildReply({
       teamId,
       customerId: customer.$id,
-      userMessage: text,
+      userMessage: correctedText,
       intent,
       customerName: customer.name || body.name || undefined,
     }).catch(() => ({

@@ -289,6 +289,54 @@ Respond with ONLY the category name.`,
 }
 
 /**
+ * Fix typos AND classify intent in a single GPT-4o-mini call.
+ * Returns the corrected message text and the intent category.
+ * Falls back to original text + 'other' on any error.
+ */
+export async function preprocessMessage(
+  message: string,
+  businessContext: string
+): Promise<{ correctedText: string; intent: string }> {
+  const fallback = { correctedText: message, intent: 'other' };
+  if (!message?.trim()) return fallback;
+  try {
+    const response = await getOpenAI().chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a travel-assistant pre-processor. Do exactly two things:
+1. SPELL-CHECK: Fix any typos or spelling errors in the user message (e.g. "fligths"→"flights", "exlcusive"→"exclusive", "Bangalroe"→"Bangalore", "persomalized"→"personalized"). Keep the same words and intent — only fix errors. If no errors, return as-is.
+2. CLASSIFY INTENT into one of: inquiry | complaint | booking | followup | spam | other
+
+Reply with ONLY valid JSON on a single line:
+{"corrected":"<fixed message>","intent":"<category>"}`,
+        },
+        {
+          role: 'user',
+          content: `Context: ${businessContext}\nMessage: "${message}"`,
+        },
+      ],
+      temperature: 0,
+      max_tokens: 200,
+    });
+
+    const raw = (response.choices[0]?.message?.content || '').trim();
+    const parsed = JSON.parse(raw);
+    return {
+      correctedText: (typeof parsed.corrected === 'string' && parsed.corrected.trim())
+        ? parsed.corrected.trim()
+        : message,
+      intent: (typeof parsed.intent === 'string' ? parsed.intent : 'other')
+        .toLowerCase()
+        .trim(),
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+/**
  * Extract key information from customer message
  */
 export async function extractCustomerInfo(
