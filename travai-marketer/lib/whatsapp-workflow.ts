@@ -75,53 +75,167 @@ function pick(regex: RegExp, text: string): string | null {
   return m[1].trim();
 }
 
-// Common typos for "exclusive": exlcusive, exculsive, exclusvie, exclsuive
-const EXCLUSIVE_VARIANTS = [
-  'exclusive', 'exlcusive', 'exclusvie', 'exculsive', 'exclsuive', 'exlusice', 'exclisive',
-];
-const PERSONALIZED_VARIANTS = [
-  'personalized', 'personalised', 'personilized', 'personalzied', 'peronalized',
-];
+// ─── fuzzy / typo matching ───────────────────────────────────────────────────
+
+// Levenshtein edit distance between two strings (optimised 1-row version)
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  const row: number[] = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = i;
+    for (let j = 1; j <= b.length; j++) {
+      const curr =
+        a[i - 1] === b[j - 1]
+          ? row[j - 1]
+          : 1 + Math.min(row[j], prev, row[j - 1]);
+      row[j - 1] = prev;
+      prev = curr;
+    }
+    row[b.length] = prev;
+  }
+  return row[b.length];
+}
+
+// Max edit-distance allowed for a keyword based on its length
+function maxDist(keyword: string): number {
+  const len = keyword.length;
+  if (len <= 3) return 0;   // short words: exact
+  if (len <= 5) return 1;   // medium: 1 typo
+  return 2;                  // long: up to 2 typos
+}
+
+// Returns true if any whitespace-separated word in `text` is within
+// edit-distance of `keyword`, or if `text` contains `keyword` as a substring.
+function fuzzyWord(text: string, keyword: string): boolean {
+  if (text.includes(keyword)) return true;
+  const dist = maxDist(keyword);
+  if (dist === 0) return false;
+  return text.split(/[\s,]+/).some(
+    (w) => Math.abs(w.length - keyword.length) <= dist && levenshtein(w, keyword) <= dist
+  );
+}
+
+// Returns true when text fuzzy-matches any of the supplied keywords
+function fuzzyAny(text: string, keywords: string[]): boolean {
+  return keywords.some((kw) => fuzzyWord(text, kw));
+}
+
+// Corrects common single-word typos and returns a cleaned version of the text
+// so downstream keyword detection benefits automatically
+function autoCorrect(text: string): string {
+  const corrections: Record<string, string> = {
+    // holidays / plans
+    holday: 'holiday', holiay: 'holiday', holidya: 'holiday', holidy: 'holiday',
+    hoiday: 'holiday', holiyday: 'holiday',
+    // flights
+    fligths: 'flights', fligts: 'flights', flighst: 'flights', flites: 'flights',
+    flghts: 'flights', fligh: 'flight',
+    // hotels
+    hotles: 'hotels', hetols: 'hotels', hotles2: 'hotels',
+    // exclusive
+    exlcusive: 'exclusive', exclusvie: 'exclusive', exculsive: 'exclusive',
+    exclsuive: 'exclusive', exlusice: 'exclusive', exclisive: 'exclusive',
+    exclsuive2: 'exclusive',
+    // personalized
+    persomalized: 'personalized', personalzied: 'personalized',
+    personilized: 'personalized', peronalized: 'personalized',
+    persanalised: 'personalized', personalised: 'personalized',
+    // details / package
+    detials: 'details', detils: 'details', pakage: 'package', pacakge: 'package',
+    packge: 'package', deatils: 'details',
+    // itinerary
+    itineray: 'itinerary', itinarary: 'itinerary', itinarery: 'itinerary',
+    // callback
+    callbck: 'callback', calback: 'callback', calbak: 'callback',
+    // customize
+    custmize: 'customize', cusomize: 'customize', custumize: 'customize',
+    // arrange
+    arange: 'arrange', arrang: 'arrange',
+    // visa / transfer / forex
+    tranfer: 'transfer', transfar: 'transfer', trasnfer: 'transfer',
+    vsisa: 'visa', visaa: 'visa',
+    forx: 'forex', froex: 'forex',
+  };
+
+  return text
+    .split(' ')
+    .map((word) => {
+      const lower = word.toLowerCase();
+      return corrections[lower] !== undefined
+        ? word.replace(new RegExp(word, 'i'), corrections[lower])
+        : word;
+    })
+    .join(' ');
+}
+
+function isGreetingLike(msg: string): boolean {
+  return /^(hi|hello|hey|hlo|helo|namaste|yo|good morning|good afternoon|good evening)$/i.test(
+    msg.trim()
+  );
+}
 
 function detectHolidayType(raw: string): string | null {
-  const text = normalize(raw);
+  const text = normalize(autoCorrect(raw));
+  // Personalized check first (more specific)
   if (
-    PERSONALIZED_VARIANTS.some((v) => text.includes(v)) ||
-    hasAny(text, ['personalized holidays', 'personalized holiday', 'customize holiday', 'custom holiday', 'customised'])
+    fuzzyAny(text, ['personalized', 'personalised', 'personalise', 'customize', 'customise', 'custom']) ||
+    hasAny(text, ['personalized holidays', 'personalized holiday', 'customize holiday', 'custom holiday'])
   ) {
     return 'personalized';
   }
-  if (EXCLUSIVE_VARIANTS.some((v) => text.includes(v))) {
+  if (fuzzyAny(text, ['exclusive'])) {
     return 'exclusive';
   }
   return null;
 }
 
 function detectPostPackageAction(raw: string): string | null {
-  const text = normalize(raw);
-  if (hasAny(text, ['get package details', 'package details', 'get details', 'package detail'])) return 'get_details';
-  if (hasAny(text, ['get itinerary', 'itinerary details', 'itinerary detail', 'day wise', 'day-wise', 'daywise', 'get day'])) return 'get_itinerary';
+  const text = normalize(autoCorrect(raw));
+  if (
+    fuzzyAny(text, ['package details', 'get details']) ||
+    hasAny(text, ['package detail', 'get package'])
+  ) return 'get_details';
+  if (
+    fuzzyAny(text, ['itinerary']) ||
+    hasAny(text, ['day wise', 'day-wise', 'daywise', 'get day'])
+  ) return 'get_itinerary';
   if (hasAny(text, ['select an option', 'select option', '1️⃣', '2️⃣', '3️⃣'])) return 'get_details';
-  if (hasAny(text, ['modify this plan', 'modify plan', 'edit plan', 'change plan'])) return 'customize';
-  if (hasAny(text, ['customize holiday', 'customise holiday'])) return 'customize';
-  if (hasAny(text, ['arrange callback', 'arrange call back', 'arrange a callback'])) return 'arrange_callback';
+  if (
+    fuzzyAny(text, ['modify', 'customize', 'customise']) ||
+    hasAny(text, ['edit plan', 'change plan'])
+  ) return 'customize';
+  if (
+    fuzzyAny(text, ['callback', 'arrange']) &&
+    (text.includes('arrange') || text.includes('callback'))
+  ) return 'arrange_callback';
   return null;
 }
 
 function parseCallbackTime(raw: string): string | null {
+  const corrected = autoCorrect(raw);
+
   const explicit = pick(
-    /\b(?:callback|call me|call back|preferred time|available at|prefer)\s*[:\-]?\s*([a-zA-Z0-9 :/-]{3,40})/i,
-    raw
+    /\b(?:callback|call me|call back|preferred time|available at|prefer|anytime|any time)\s*[:\-]?\s*([a-zA-Z0-9 :/-]{3,40})/i,
+    corrected
   );
   if (explicit) return explicit;
 
-  const timeExpr = raw.match(
-    /\b(today|tomorrow|tonight|this\s+(?:morning|afternoon|evening)|monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+at\s+[\d:]+\s*(?:am|pm)?|\s+(?:morning|afternoon|evening|night))?\b/i
+  // Day + optional time: "Today at 5 PM", "Tomorrow morning", "Saturday afternoon"
+  const timeExpr = corrected.match(
+    /\b(today|tomorrow|tonight|this\s+(?:morning|afternoon|evening|week|weekend)|monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+at\s+[\d:]+\s*(?:am|pm)?|\s+(?:morning|afternoon|evening|night|noon))?\b/i
   );
   if (timeExpr) return timeExpr[0].trim();
 
-  const justTime = raw.match(/\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i);
+  // Just a time: "5 PM", "10:30 AM", "5pm"
+  const justTime = corrected.match(/\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i);
   if (justTime) return justTime[0].trim();
+
+  // "anytime", "asap", "as soon as possible", "earliest"
+  if (/\b(anytime|any time|asap|earliest|convenient|whenever)\b/i.test(corrected)) {
+    return corrected.trim();
+  }
 
   return null;
 }
@@ -216,7 +330,7 @@ function tryParseCommaFormat(raw: string, intent: WorkflowIntent, existingSlots:
 }
 
 function parseGeneralSlots(message: string, intent: WorkflowIntent = 'unknown'): WorkflowSlotMap {
-  const raw = String(message || '').trim();
+  const raw = autoCorrect(String(message || '').trim()); // fix typos first
   const text = normalize(raw);
   const slots: WorkflowSlotMap = {};
 
@@ -466,6 +580,22 @@ export function resolveWorkflowState(args: {
     slots.holiday_type = 'personalized';
   }
 
+  // Stage-aware callback fallback: if all lead info is collected but callback_time
+  // is still missing, treat the current message as the callback time directly.
+  // This handles freeform responses like "evening tomorrow" or "5 pm on saturday".
+  const preStage = resolveStage(intent, slots);
+  if (preStage === 'ask_callback' && !slots.callback_time) {
+    const msg = args.userMessage.trim();
+    if (msg && msg.length <= 60) {
+      // Only use whole message if it doesn't look like a new service request
+      const looksLikeNewIntent =
+        detectWorkflowIntent(msg) !== 'unknown' || isGreetingLike(msg);
+      if (!looksLikeNewIntent) {
+        slots.callback_time = msg;
+      }
+    }
+  }
+
   const stage = resolveStage(intent, slots);
   const complete = stage === 'confirmed';
   const leadShouldBeSaved = complete;
@@ -687,23 +817,36 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
 // ─── intent detection ─────────────────────────────────────────────────────────
 
 export function detectWorkflowIntent(message: string, classifiedIntent?: string): WorkflowIntent {
-  const text = normalize(message);
+  const raw = autoCorrect(message);           // fix typos before detection
+  const text = normalize(raw);
   const intentText = normalize(classifiedIntent || '');
   const joined = `${text} ${intentText}`;
 
+  // plan_holiday — fuzzy-match "holiday", "package", "tour", "leisure"
   if (
-    /(^|\s)(1|svc_1|plan holiday|plan a holiday|holiday package|holiday|leisure|tour package)(\s|$)/.test(
-      joined
-    )
+    /(^|\s)(1|svc_1|plan holiday|plan a holiday|holiday package|holiday|leisure|tour package)(\s|$)/.test(joined) ||
+    fuzzyAny(text, ['holiday', 'package', 'tour', 'leisure'])
   ) {
-    return 'plan_holiday';
+    // Guard: must not be primarily about flights or hotels to avoid false positives
+    const flightLike = fuzzyAny(text, ['flight', 'flights', 'airfare', 'ticket']);
+    const hotelLike = /(^|\s)(3|svc_3|hotel|hotels|stay|resort)(\s|$)/.test(joined);
+    if (!flightLike && !hotelLike) return 'plan_holiday';
   }
-  if (/(^|\s)(2|svc_2|flight|flights|air ticket|airfare)(\s|$)/.test(joined)) {
+
+  // flights — fuzzy-match "flights", "flight", "airfare"
+  if (
+    /(^|\s)(2|svc_2|flight|flights|air ticket|airfare)(\s|$)/.test(joined) ||
+    fuzzyAny(text, ['flights', 'flight', 'airfare'])
+  ) {
     return 'flights';
   }
+
+  // hotels
   if (/(^|\s)(3|svc_3|hotel|hotels|stay|resort)(\s|$)/.test(joined)) {
     return 'hotels';
   }
+
+  // Multi-slot travel data → plan_holiday
   if (
     /(destination|travel month|travel date|travel dates|budget|package)/.test(joined) &&
     /(travellers|travelers|adults?|pax|nights?)/.test(joined)
@@ -713,10 +856,11 @@ export function detectWorkflowIntent(message: string, classifiedIntent?: string)
   if (/\bfrom\b.+\bto\b.+(\bpassengers?\b|\bpax\b|\badults?\b)/.test(joined)) {
     return 'flights';
   }
+
   if (/(airport transfer|transfer|pickup|drop)/.test(joined)) return 'transfer';
-  if (/(forex|currency exchange|money exchange)/.test(joined)) return 'forex';
-  if (/(visa|visas)/.test(joined)) return 'visa';
-  if (/(insurance|travel insurance)/.test(joined)) return 'insurance';
+  if (fuzzyAny(text, ['forex']) || /(currency exchange|money exchange)/.test(joined)) return 'forex';
+  if (fuzzyAny(text, ['visa'])) return 'visa';
+  if (fuzzyAny(text, ['insurance'])) return 'insurance';
   if (/(mice|corporate event|meetings incentives conferences exhibitions)/.test(joined)) return 'mice';
   if (/(booking status|status|pnr|reference|booking id)/.test(joined)) return 'booking_status';
   return 'unknown';
