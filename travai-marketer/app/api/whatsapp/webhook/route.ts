@@ -30,6 +30,7 @@ import {
 } from '@/lib/whatsapp-bot-routing';
 import {
   buildConversationMemoryBlock,
+  buildLeadNotes,
   buildWorkflowReply,
   detectWorkflowIntent,
   getGreetingMenuText,
@@ -436,6 +437,53 @@ async function sendAutoReply(params: {
     });
   }
   return queueBridgeReply(params);
+}
+
+async function saveLead(params: {
+  teamId: string;
+  phone: string;
+  customer: { $id: string; name?: string; email?: string };
+  slots: import('@/lib/whatsapp-workflow').WorkflowSlotMap;
+  intent: import('@/lib/whatsapp-workflow').WorkflowIntent;
+}) {
+  const { teamId, phone, customer, slots, intent } = params;
+  const name = slots.name || customer.name || null;
+  const email = slots.email || customer.email || null;
+
+  const existing = await listDocuments('leads', [
+    Query.equal('teamId', teamId),
+    Query.equal('phone', phone),
+    Query.orderDesc('$createdAt'),
+    Query.limit(1),
+  ]).catch(() => ({ documents: [] }));
+
+  const notes = buildLeadNotes(intent, slots);
+  const now = new Date().toISOString();
+
+  const existingLead = existing.documents[0] as { $id?: string; status?: string } | undefined;
+  if (existingLead?.$id) {
+    await updateDocument('leads', existingLead.$id, {
+      name: name || undefined,
+      email: email || undefined,
+      notes,
+      status: 'new',
+      lastContactedAt: now,
+      updatedAt: now,
+    }).catch(() => {});
+  } else {
+    await createDocument('leads', {
+      teamId,
+      phone,
+      name,
+      email,
+      source: 'whatsapp',
+      status: 'new',
+      notes,
+      lastContactedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    }).catch(() => {});
+  }
 }
 
 /**
@@ -888,9 +936,15 @@ async function generateAndSendResponse(
       workflowIntent === 'plan_holiday' || isPackageIntent(userMessage, intent);
 
     const deterministicWorkflowReply = buildWorkflowReply(workflowState);
+    // Use AI for personalized show_packages; deterministic for all other stages
+    const isPersonalizedShowPackages =
+      workflowState.stage === 'show_packages' &&
+      workflowState.slots.holiday_type === 'personalized';
     const shouldUseDeterministicWorkflow =
       workflowState.intent !== 'unknown' &&
+      workflowState.stage !== 'unknown' &&
       Boolean(deterministicWorkflowReply) &&
+      !isPersonalizedShowPackages &&
       (selectedService !== null ||
         looksLikeWorkflowDataMessage(userMessage) ||
         !process.env.OPENAI_API_KEY);
@@ -927,6 +981,17 @@ async function generateAndSendResponse(
         deliveryStatus: sendResult.success ? 'sent' : 'failed',
         createdAt: new Date().toISOString(),
       });
+
+      // Save lead to CRM when conversation is confirmed (callback collected)
+      if (workflowState.leadShouldBeSaved) {
+        saveLead({
+          teamId: resolvedTeamId,
+          phone,
+          customer,
+          slots: workflowState.slots,
+          intent: workflowState.intent,
+        }).catch((err) => console.error('[WhatsApp] Lead save failed:', err));
+      }
       return;
     }
 
@@ -973,11 +1038,11 @@ async function generateAndSendResponse(
 
       systemPrompt =
         `${businessConfig?.openaiSystemPrompt || ''}\n\n` +
-        `You are Traventions' WhatsApp assistant.
+        `You are Traventions' WhatsApp assistant named Sini.
 Mention Traventions in customer-facing replies.
 ${firstAssistantReply ? 'Start this reply with "Welcome to Traventions!".' : 'Do not repeat the welcome line on every reply.'}
 ${getBotRoutePolicyPromptBlock()}
-${getWorkflowSystemPromptBlock(workflowIntent)}
+${getWorkflowSystemPromptBlock(workflowIntent, workflowState.stage, workflowState.slots)}
 ${memoryBlock}
 For package/pricing questions:
 - First use database knowledge for exact known details.
@@ -1067,6 +1132,28 @@ ${safeWebsiteSnippets.length ? safeWebsiteSnippets.map((v, i) => `${i + 1}. ${v}
         console.log(`[OK] AI response sent to ${phone} via ${sendResult.mode}`);
       } else {
         console.error('Failed to send AI response');
+      }
+
+      // Save lead to CRM if workflow reached confirmed stage via AI path
+      if (workflowState.leadShouldBeSaved) {
+        saveLead({
+          teamId: resolvedTeamId,
+          phone,
+          customer,
+          slots: workflowState.slots,
+          intent: workflowState.intent,
+        }).catch((err) => console.error('[WhatsApp] Lead save failed:', err));
+      }
+
+      // Also save partial lead immediately when contact info is shared (ask_callback stage)
+      if (workflowState.stage === 'ask_callback' && workflowState.slots.name && workflowState.slots.phone) {
+        saveLead({
+          teamId: resolvedTeamId,
+          phone,
+          customer,
+          slots: workflowState.slots,
+          intent: workflowState.intent,
+        }).catch(() => {});
       }
     } finally {
       await typingKeepAlive.stop();

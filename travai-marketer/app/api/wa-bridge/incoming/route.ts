@@ -19,12 +19,15 @@ import {
 } from '@/lib/whatsapp-bot-routing';
 import {
   buildConversationMemoryBlock,
+  buildLeadNotes,
   buildWorkflowReply,
   detectWorkflowIntent,
   getGreetingMenuText,
   getWorkflowSystemPromptBlock,
   PRIMARY_QUICK_MENU_OPTIONS,
   resolveWorkflowState,
+  type WorkflowIntent,
+  type WorkflowSlotMap,
 } from '@/lib/whatsapp-workflow';
 
 const BRIDGE_SHARED_SECRET = process.env.BRIDGE_SHARED_SECRET || '';
@@ -135,6 +138,53 @@ async function findOrCreateCustomer(phone: string, teamId: string, name?: string
   });
 }
 
+async function saveLead(params: {
+  teamId: string;
+  phone: string;
+  customer: { $id: string; name?: string; email?: string };
+  slots: WorkflowSlotMap;
+  intent: WorkflowIntent;
+}) {
+  const { teamId, phone, customer, slots, intent } = params;
+  const name = slots.name || customer.name || null;
+  const email = slots.email || customer.email || null;
+
+  const existing = await listDocuments('leads', [
+    Query.equal('teamId', teamId),
+    Query.equal('phone', phone),
+    Query.orderDesc('$createdAt'),
+    Query.limit(1),
+  ]).catch(() => ({ documents: [] }));
+
+  const notes = buildLeadNotes(intent, slots);
+  const now = new Date().toISOString();
+  const existingLead = existing.documents[0] as { $id?: string } | undefined;
+
+  if (existingLead?.$id) {
+    await updateDocument('leads', existingLead.$id, {
+      name: name || undefined,
+      email: email || undefined,
+      notes,
+      status: 'new',
+      lastContactedAt: now,
+      updatedAt: now,
+    }).catch(() => {});
+  } else {
+    await createDocument('leads', {
+      teamId,
+      phone,
+      name,
+      email,
+      source: 'whatsapp',
+      status: 'new',
+      notes,
+      lastContactedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    }).catch(() => {});
+  }
+}
+
 async function buildReply(params: {
   teamId: string;
   customerId: string;
@@ -191,6 +241,8 @@ async function buildReply(params: {
       .map((row) => String(row.message || ''))
       .filter(Boolean),
   });
+  const wfStage = workflowState.stage;
+  const wfSlots = workflowState.slots;
   const memoryBlock = buildConversationMemoryBlock({
     state: workflowState,
     recentUserMessages: historyRows
@@ -223,7 +275,7 @@ Business name must appear as "Traventions" in customer-facing replies.
 ${firstAssistantReply ? 'Start this reply with: "Welcome to Traventions!".' : 'Do not repeat the welcome line again in every reply.'}
 Current intent: ${params.intent}.
 ${getBotRoutePolicyPromptBlock()}
-${getWorkflowSystemPromptBlock(workflowIntent)}
+${getWorkflowSystemPromptBlock(workflowIntent, wfStage, wfSlots)}
 ${memoryBlock}
 If user asks for packages/itineraries/pricing:
 - First use database knowledge below.
@@ -487,9 +539,14 @@ export async function POST(request: NextRequest) {
     });
 
     const deterministicWorkflowReply = buildWorkflowReply(workflowState);
+    const isPersonalizedShowPackages =
+      workflowState.stage === 'show_packages' &&
+      workflowState.slots.holiday_type === 'personalized';
     const shouldUseDeterministicWorkflow =
       workflowState.intent !== 'unknown' &&
+      workflowState.stage !== 'unknown' &&
       Boolean(deterministicWorkflowReply) &&
+      !isPersonalizedShowPackages &&
       (looksLikeWorkflowDataMessage(text) ||
         selectedIntent !== 'unknown' ||
         !process.env.OPENAI_API_KEY);
@@ -512,6 +569,25 @@ export async function POST(request: NextRequest) {
       quickMenuOptions: null as string[] | null,
     }));
     const reply = built.reply;
+
+    // Save lead to CRM when workflow is confirmed or contact info was just collected
+    if (workflowState.leadShouldBeSaved) {
+      saveLead({
+        teamId,
+        phone: from,
+        customer,
+        slots: workflowState.slots,
+        intent: workflowState.intent,
+      }).catch((err) => console.error('[WA Bridge] Lead save failed:', err));
+    } else if (workflowState.stage === 'ask_callback' && workflowState.slots.name && workflowState.slots.phone) {
+      saveLead({
+        teamId,
+        phone: from,
+        customer,
+        slots: workflowState.slots,
+        intent: workflowState.intent,
+      }).catch(() => {});
+    }
 
     // Fire-and-forget: never let a DB write failure block the reply to the customer.
     createDocument('conversations', {

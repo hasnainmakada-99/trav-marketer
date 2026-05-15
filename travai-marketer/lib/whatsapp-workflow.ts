@@ -10,6 +10,16 @@ export type WorkflowIntent =
   | 'booking_status'
   | 'unknown';
 
+export type WorkflowStage =
+  | 'ask_destination'
+  | 'ask_holiday_type'
+  | 'ask_travel_details'
+  | 'show_packages'          // deterministic (exclusive) or AI (personalized)
+  | 'collect_lead'           // ask name + phone + email
+  | 'ask_callback'           // ask preferred callback time
+  | 'confirmed'              // all done — save lead to CRM
+  | 'unknown';
+
 export const PRIMARY_QUICK_MENU_OPTIONS = [
   'Plan a Holiday',
   'Flights',
@@ -31,24 +41,28 @@ export type WorkflowSlotMap = Partial<
     | 'name'
     | 'phone'
     | 'email'
-    | 'callback_time',
+    | 'callback_time'
+    | 'holiday_type'          // 'exclusive' | 'personalized'
+    | 'hotel_preference'      // '3 star' | '4 star' | '5 star'
+    | 'post_package_action',  // 'get_details' | 'get_itinerary' | 'customize' | 'arrange_callback'
     string
   >
 >;
 
 export type WorkflowState = {
   intent: WorkflowIntent;
+  stage: WorkflowStage;
   source: 'locked_history' | 'selected_now' | 'detected_now';
   slots: WorkflowSlotMap;
   missingSlots: string[];
   complete: boolean;
+  leadShouldBeSaved: boolean;
 };
 
+// ─── helpers ────────────────────────────────────────────────────────────────
+
 function normalize(input: string) {
-  return String(input || '')
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, ' ');
+  return String(input || '').toLowerCase().trim().replace(/\s+/g, ' ');
 }
 
 function hasAny(text: string, words: string[]) {
@@ -61,11 +75,120 @@ function pick(regex: RegExp, text: string): string | null {
   return m[1].trim();
 }
 
-function parseGeneralSlots(message: string): WorkflowSlotMap {
+function detectHolidayType(raw: string): string | null {
+  const text = normalize(raw);
+  if (hasAny(text, ['personalized holidays', 'personalized holiday', 'personalized', 'personalised', 'customize holiday', 'custom holiday', 'customised'])) {
+    return 'personalized';
+  }
+  if (hasAny(text, ['exclusive holiday deals', 'exclusive holiday', 'exclusive deal', 'exclusive deals', 'exclusive'])) {
+    return 'exclusive';
+  }
+  return null;
+}
+
+function detectPostPackageAction(raw: string): string | null {
+  const text = normalize(raw);
+  if (hasAny(text, ['get package details', 'package details', 'get details', 'package detail'])) return 'get_details';
+  if (hasAny(text, ['get itinerary', 'itinerary details', 'itinerary detail', 'day wise', 'day-wise', 'daywise', 'get day'])) return 'get_itinerary';
+  if (hasAny(text, ['select an option', 'select option', '1️⃣', '2️⃣', '3️⃣'])) return 'get_details';
+  if (hasAny(text, ['modify this plan', 'modify plan', 'edit plan', 'change plan'])) return 'customize';
+  if (hasAny(text, ['customize holiday', 'customise holiday'])) return 'customize';
+  if (hasAny(text, ['arrange callback', 'arrange call back', 'arrange a callback'])) return 'arrange_callback';
+  return null;
+}
+
+function parseCallbackTime(raw: string): string | null {
+  const explicit = pick(
+    /\b(?:callback|call me|call back|preferred time|available at|prefer)\s*[:\-]?\s*([a-zA-Z0-9 :/-]{3,40})/i,
+    raw
+  );
+  if (explicit) return explicit;
+
+  const timeExpr = raw.match(
+    /\b(today|tomorrow|tonight|this\s+(?:morning|afternoon|evening)|monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+at\s+[\d:]+\s*(?:am|pm)?|\s+(?:morning|afternoon|evening|night))?\b/i
+  );
+  if (timeExpr) return timeExpr[0].trim();
+
+  const justTime = raw.match(/\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i);
+  if (justTime) return justTime[0].trim();
+
+  return null;
+}
+
+function parseHotelPreference(raw: string): string | null {
+  const text = normalize(raw);
+  if (/\b5\s*star\b/.test(text) || text.includes('five star')) return '5 star';
+  if (/\b4\s*star\b/.test(text) || text.includes('four star')) return '4 star';
+  if (/\b3\s*star\b/.test(text) || text.includes('three star')) return '3 star';
+  return null;
+}
+
+// Try to parse comma-separated holiday details: "2 Adults, July, Bangalore, 5 Nights"
+function tryParseCommaFormat(raw: string, intent: WorkflowIntent, existingSlots: WorkflowSlotMap): WorkflowSlotMap {
+  const parts = raw.split(',').map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 2) return {};
+
+  const slots: WorkflowSlotMap = {};
+  const monthRx = /^(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*(\s+\d{4})?$/i;
+  const nightsRx = /^(\d+)\s*nights?$/i;
+  const travellersRx = /^(\d+)\s*(adults?|children|kids?|pax|persons?)/i;
+  const dateRx = /\d{1,2}(?:st|nd|rd|th)?\s+\w+|\w+\s+\d{1,2}(?:st|nd|rd|th)?/i;
+  const hotelRx = /\d\s*star\s*(hotel)?|luxury|premium|budget/i;
+
+  let travellersAccum: string[] = [];
+  const unclassified: string[] = [];
+
+  for (const part of parts) {
+    const lp = normalize(part);
+    if (monthRx.test(lp)) {
+      if (!slots.travel_time) slots.travel_time = part;
+    } else if (nightsRx.test(lp)) {
+      const m = lp.match(/^(\d+)/);
+      if (m) slots.nights = m[1];
+    } else if (travellersRx.test(lp)) {
+      travellersAccum.push(part);
+    } else if (hotelRx.test(lp)) {
+      slots.hotel_preference = lp.replace(/\s*hotels?\s*/g, '').trim();
+    } else if (!slots.travel_time && dateRx.test(part) && /\d/.test(part)) {
+      slots.travel_time = part;
+    } else {
+      unclassified.push(part);
+    }
+  }
+
+  if (travellersAccum.length > 0) {
+    slots.travellers = travellersAccum.join(', ');
+  }
+
+  // Remaining unclassified strings are likely city names
+  if (intent === 'plan_holiday' && !existingSlots.departure_city) {
+    const cityPart = unclassified.find((p) => /^[a-zA-Z\s.'-]{2,30}$/.test(p));
+    if (cityPart) slots.departure_city = cityPart;
+  }
+  if (intent === 'flights') {
+    if (!existingSlots.from_city && unclassified[0]) slots.from_city = unclassified[0];
+    if (!existingSlots.to_city && unclassified[1]) slots.to_city = unclassified[1];
+  }
+
+  return slots;
+}
+
+function parseGeneralSlots(message: string, intent: WorkflowIntent = 'unknown'): WorkflowSlotMap {
   const raw = String(message || '').trim();
   const text = normalize(raw);
   const slots: WorkflowSlotMap = {};
 
+  // New slot types
+  const ht = detectHolidayType(raw);
+  if (ht) slots.holiday_type = ht;
+
+  const hp = parseHotelPreference(raw);
+  if (hp) slots.hotel_preference = hp;
+
+  const ppa = detectPostPackageAction(raw);
+  if (ppa) slots.post_package_action = ppa;
+
+  // from → to for flights
   const fromTo = raw.match(/\bfrom\s+([a-zA-Z .'-]+?)\s+to\s+([a-zA-Z .'-]+?)(?:\s|,|$)/i);
   if (fromTo?.[1] && fromTo?.[2]) {
     slots.from_city = fromTo[1].trim();
@@ -83,23 +206,49 @@ function parseGeneralSlots(message: string): WorkflowSlotMap {
     slots.destination = slots.to_city;
   }
 
+  // Month/date extraction — keyword-prefixed
   const travelTime = pick(
     /\b(?:travel month|travel date|travel dates|date|on|in)\s*[:\-]?\s*([a-zA-Z0-9 ,/-]{3,40})/i,
     raw
   );
   if (travelTime) slots.travel_time = travelTime;
 
-  const travellers = pick(
-    /\b(?:travellers|travelers|traveller count|traveler count|pax|passengers|adults?)\s*[:\-]?\s*([a-zA-Z0-9 ,/+]{1,30})/i,
-    raw
-  );
-  if (travellers) slots.travellers = travellers;
-  if (!slots.travellers) {
-    const pax = pick(/\b(\d+)\s*(?:pax|passengers?|adults?)\b/i, raw);
-    if (pax) slots.travellers = pax;
+  // Month/date extraction — standalone (e.g. "july", "10th July")
+  if (!slots.travel_time) {
+    const monthMatch = raw.match(
+      /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)(?:\s+\d{4})?\b/i
+    );
+    if (monthMatch) slots.travel_time = monthMatch[0].trim();
+  }
+  if (!slots.travel_time) {
+    const dateMatch = raw.match(
+      /\b(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2}(?:st|nd|rd|th)?)\b/i
+    );
+    if (dateMatch) slots.travel_time = dateMatch[0].trim();
   }
 
-  const departure = pick(/\b(?:departure city|departing from)\s*[:\-]?\s*([a-zA-Z .'-]{2,40})/i, raw);
+  // Travellers
+  const travFull = raw.match(
+    /\b(\d+\s*adults?\s*(?:,?\s*(?:and\s+)?\d+\s*(?:children|kids?|child))?)\b/i
+  );
+  if (travFull) {
+    slots.travellers = travFull[1].trim();
+  } else {
+    const travellers = pick(
+      /\b(?:travellers|travelers|traveller count|pax|passengers)\s*[:\-]?\s*([a-zA-Z0-9 ,/+]{1,30})/i,
+      raw
+    );
+    if (travellers) slots.travellers = travellers;
+    else {
+      const pax = pick(/\b(\d+)\s*(?:pax|passengers?|adults?)\b/i, raw);
+      if (pax) slots.travellers = pax;
+    }
+  }
+
+  const departure = pick(
+    /\b(?:departure city|departing from|from city)\s*[:\-]?\s*([a-zA-Z .'-]{2,40})/i,
+    raw
+  );
   if (departure) slots.departure_city = departure;
   if (!slots.departure_city && slots.from_city) {
     slots.departure_city = slots.from_city;
@@ -113,11 +262,15 @@ function parseGeneralSlots(message: string): WorkflowSlotMap {
   if (checkIn) slots.checkin = checkIn;
   if (checkOut) slots.checkout = checkOut;
 
-  const budget = pick(/\b(?:budget|approx budget)\s*[:\-]?\s*(?:₹|inr)?\s*([0-9., ]+\s*[kKmM]?)\b/i, raw);
+  const budget = pick(
+    /\b(?:budget|approx budget)\s*[:\-]?\s*(?:₹|inr)?\s*([0-9., ]+\s*[kKmM]?)\b/i,
+    raw
+  );
   if (budget) slots.budget_inr = budget.toUpperCase().replace(/\s+/g, ' ');
 
   const email = pick(/\b([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})\b/i, text);
   if (email) slots.email = email;
+
   const phone = pick(/\b(\+?\d[\d\s-]{7,14}\d)\b/, raw);
   if (phone) slots.phone = phone.replace(/\s+/g, '');
 
@@ -126,30 +279,89 @@ function parseGeneralSlots(message: string): WorkflowSlotMap {
     if (name) slots.name = name;
   }
 
-  const callback = pick(
-    /\b(?:callback|call me|call back|preferred time|time)\s*[:\-]?\s*([a-zA-Z0-9 :/-]{3,35})/i,
-    raw
-  );
-  if (callback) slots.callback_time = callback;
+  const callbackTime = parseCallbackTime(raw);
+  if (callbackTime) slots.callback_time = callbackTime;
 
-  return slots;
+  // Try comma-separated format if we still have missing common fields
+  const commaSlots = tryParseCommaFormat(raw, intent, slots);
+  return mergeSlots(slots, commaSlots);
 }
 
 function mergeSlots(base: WorkflowSlotMap, next: WorkflowSlotMap): WorkflowSlotMap {
-  return { ...base, ...next };
+  const merged = { ...base };
+  for (const [key, val] of Object.entries(next)) {
+    if (val && !merged[key as keyof WorkflowSlotMap]) {
+      (merged as Record<string, string>)[key] = val;
+    }
+  }
+  return merged;
 }
 
-function requiredSlots(intent: WorkflowIntent): string[] {
+// ─── stage resolution ────────────────────────────────────────────────────────
+
+function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowStage {
+  if (intent === 'unknown') return 'unknown';
+
   if (intent === 'plan_holiday') {
-    return ['destination', 'travellers', 'travel_time', 'departure_city', 'nights'];
+    if (!slots.destination) return 'ask_destination';
+    if (!slots.holiday_type) return 'ask_holiday_type';
+
+    const travelMissing =
+      !slots.travellers || !slots.travel_time || !slots.departure_city || !slots.nights;
+    const needsHotelPref = slots.holiday_type === 'personalized' && !slots.hotel_preference;
+
+    if (travelMissing || needsHotelPref) return 'ask_travel_details';
+
+    // Travel details complete — check if user selected a post-package action
+    const hasPostAction = Boolean(slots.post_package_action);
+    const hasContactStart = Boolean(slots.name || slots.phone);
+
+    if (hasPostAction || hasContactStart) {
+      const hasFullLead = Boolean(slots.name && slots.phone && slots.email);
+      if (hasFullLead) {
+        return slots.callback_time ? 'confirmed' : 'ask_callback';
+      }
+      return 'collect_lead';
+    }
+
+    return 'show_packages';
   }
+
   if (intent === 'flights') {
-    return ['from_city', 'to_city', 'travel_time', 'travellers'];
+    if (!slots.from_city || !slots.to_city || !slots.travel_time || !slots.travellers) {
+      return 'ask_travel_details';
+    }
+    const hasFullLead = Boolean(slots.name && slots.phone && slots.email);
+    if (hasFullLead) {
+      return slots.callback_time ? 'confirmed' : 'ask_callback';
+    }
+    return 'collect_lead';
   }
+
   if (intent === 'hotels') {
-    return ['destination', 'travellers', 'travel_time', 'nights'];
+    if (!slots.destination || !slots.travellers || !slots.travel_time || !slots.nights) {
+      return 'ask_travel_details';
+    }
+    const hasFullLead = Boolean(slots.name && slots.phone && slots.email);
+    if (hasFullLead) {
+      return slots.callback_time ? 'confirmed' : 'ask_callback';
+    }
+    return 'collect_lead';
   }
-  return ['name', 'phone', 'callback_time'];
+
+  // Other intents: transfer, forex, visa, insurance, mice, booking_status
+  const hasFullLead = Boolean(slots.name && slots.phone && slots.email);
+  if (hasFullLead) {
+    return slots.callback_time ? 'confirmed' : 'ask_callback';
+  }
+  return 'collect_lead';
+}
+
+// ─── public API ─────────────────────────────────────────────────────────────
+
+function shouldResetState(message: string): boolean {
+  const text = normalize(message);
+  return hasAny(text, ['start over', 'reset', 'new request', 'new enquiry', 'new inquiry']);
 }
 
 function findLockedIntentFromHistory(historyMessages: string[]): WorkflowIntent | null {
@@ -158,11 +370,6 @@ function findLockedIntentFromHistory(historyMessages: string[]): WorkflowIntent 
     if (intent !== 'unknown') return intent;
   }
   return null;
-}
-
-function shouldResetState(message: string): boolean {
-  const text = normalize(message);
-  return hasAny(text, ['start over', 'reset', 'new request', 'new enquiry', 'new inquiry']);
 }
 
 export function resolveWorkflowState(args: {
@@ -176,7 +383,7 @@ export function resolveWorkflowState(args: {
   const selected = args.selectedIntent && args.selectedIntent !== 'unknown' ? args.selectedIntent : null;
   const locked = shouldResetState(args.userMessage) ? null : findLockedIntentFromHistory(historyMessages);
 
-  const intent =
+  const intent: WorkflowIntent =
     selected || locked || (msgIntent !== 'unknown' ? msgIntent : 'unknown');
   const source: WorkflowState['source'] = selected
     ? 'selected_now'
@@ -185,143 +392,239 @@ export function resolveWorkflowState(args: {
       : 'detected_now';
 
   if (intent === 'unknown') {
-    return { intent, source, slots: {}, missingSlots: [], complete: false };
+    return { intent, stage: 'unknown', source, slots: {}, missingSlots: [], complete: false, leadShouldBeSaved: false };
   }
 
   let slots: WorkflowSlotMap = {};
   for (const item of historyMessages) {
-    slots = mergeSlots(slots, parseGeneralSlots(item));
+    slots = mergeSlots(slots, parseGeneralSlots(item, intent));
   }
-  slots = mergeSlots(slots, parseGeneralSlots(args.userMessage));
+  slots = mergeSlots(slots, parseGeneralSlots(args.userMessage, intent));
 
-  const required = requiredSlots(intent);
-  const missing = required.filter((key) => !slots[key as keyof WorkflowSlotMap]);
+  // If "customize" is selected as post_package_action, switch to personalized
+  if (slots.post_package_action === 'customize') {
+    slots.holiday_type = 'personalized';
+  }
 
-  return {
-    intent,
-    source,
-    slots,
-    missingSlots: missing,
-    complete: missing.length === 0,
-  };
+  const stage = resolveStage(intent, slots);
+  const complete = stage === 'confirmed';
+  const leadShouldBeSaved = complete;
+
+  // missingSlots kept for backward compat — list what's still needed
+  const missingSlots: string[] = [];
+  if (intent === 'plan_holiday') {
+    if (!slots.destination) missingSlots.push('destination');
+    if (!slots.holiday_type) missingSlots.push('holiday_type');
+    if (!slots.travellers) missingSlots.push('travellers');
+    if (!slots.travel_time) missingSlots.push('travel_time');
+    if (!slots.departure_city) missingSlots.push('departure_city');
+    if (!slots.nights) missingSlots.push('nights');
+  } else if (intent === 'flights') {
+    if (!slots.from_city) missingSlots.push('from_city');
+    if (!slots.to_city) missingSlots.push('to_city');
+    if (!slots.travel_time) missingSlots.push('travel_time');
+    if (!slots.travellers) missingSlots.push('travellers');
+  } else if (intent === 'hotels') {
+    if (!slots.destination) missingSlots.push('destination');
+    if (!slots.travellers) missingSlots.push('travellers');
+    if (!slots.travel_time) missingSlots.push('travel_time');
+    if (!slots.nights) missingSlots.push('nights');
+  }
+  if (!slots.name) missingSlots.push('name');
+  if (!slots.phone) missingSlots.push('phone');
+  if (!slots.email) missingSlots.push('email');
+  if (!slots.callback_time) missingSlots.push('callback_time');
+
+  return { intent, stage, source, slots, missingSlots, complete, leadShouldBeSaved };
 }
 
-function listMissingPrompt(intent: WorkflowIntent, missing: string[], slots: WorkflowSlotMap): string {
-  if (intent === 'plan_holiday') {
-    const lines: string[] = ['✨ Perfect! Please share:'];
-    if (missing.includes('travellers')) lines.push('👥 Number of Travellers');
-    if (missing.includes('travel_time')) lines.push('📅 Travel Month or Dates');
-    if (missing.includes('departure_city')) lines.push('🏙 Departure City');
-    if (missing.includes('nights')) lines.push('🌃 Number of Nights');
-    if (missing.includes('destination')) lines.push('📍 Destination');
-    lines.push('');
-    lines.push('Example: 2 Adults, July, Bangalore, 4 Nights');
-    return lines.join('\n');
-  }
-  if (intent === 'flights') {
-    const lines: string[] = ['✈️ Sure! Please share:'];
-    if (missing.includes('from_city')) lines.push('📍 Departure City');
-    if (missing.includes('to_city')) lines.push('📍 Destination');
-    if (missing.includes('travellers')) lines.push('👥 Number of Travellers');
-    if (missing.includes('travel_time')) lines.push('📅 Travel Date');
-    lines.push('');
-    lines.push('For Example: Bangalore to Dubai, 18 June, 2 Adults, Round Trip');
-    return lines.join('\n');
-  }
-  if (intent === 'hotels') {
-    const lines: string[] = ['🏨 Amazing! Please share:'];
-    if (missing.includes('destination')) lines.push('📍 Destination');
-    if (missing.includes('travellers')) lines.push('👥 Number of Travellers');
-    if (missing.includes('travel_time')) lines.push('📅 Travel Month or Dates');
-    if (missing.includes('nights')) lines.push('🌃 Number of Nights');
-    lines.push('');
-    lines.push('Example: Dubai, 2 Adults, July, 4 Nights');
-    return lines.join('\n');
-  }
-  const lines: string[] = ['✨ Sure! Please share the following details to continue:'];
-  if (missing.includes('name')) lines.push('👤 Full Name');
-  if (missing.includes('phone')) lines.push('📞 Contact Number');
-  if (missing.includes('callback_time')) lines.push('🕒 Preferred Callback Time');
-  if (missing.includes('email')) lines.push('📧 Email ID');
-  lines.push('');
-  lines.push('Example: Sini, +91 9876543210, Tomorrow at 5 PM');
-  return lines.join('\n');
+const TRAVENTIONS_WEBSITE =
+  (typeof process !== 'undefined' && process.env?.TRAVENTIONS_WEBSITE_URL) ||
+  'https://traventions-ai.vercel.app';
+
+// ─── reply builders ──────────────────────────────────────────────────────────
+
+const DESTINATION_TAGLINES: Record<string, string> = {
+  thailand: 'perfect for beaches, nightlife & relaxation 😊',
+  bali: 'a magical island paradise 🌴',
+  kashmir: 'truly paradise on earth ❄️🏔️',
+  dubai: 'a world of luxury and adventure 🏙️',
+  maldives: 'perfect for beaches and crystal waters 🏖️',
+  singapore: 'a vibrant city of culture and food 🌆',
+  europe: 'a dream destination for history lovers 🏰',
+  kerala: 'God\'s own country 🌿',
+  goa: 'India\'s beach paradise 🏖️',
+};
+
+function getDestinationTagline(destination: string): string {
+  const key = normalize(destination).split(' ')[0];
+  return DESTINATION_TAGLINES[key] || 'a wonderful destination 😊';
 }
 
 export function buildWorkflowReply(state: WorkflowState): string | null {
-  if (state.intent === 'unknown') return null;
-  if (!state.complete) {
-    return listMissingPrompt(state.intent, state.missingSlots, state.slots);
-  }
+  if (state.intent === 'unknown' || state.stage === 'unknown') return null;
 
-  if (state.intent === 'plan_holiday') {
+  const { stage, slots, intent } = state;
+
+  // ── ask_destination ──
+  if (stage === 'ask_destination') {
     return (
-      '✨ Perfect! I’ve got your holiday request:\n\n' +
-      `📍 Destination: ${state.slots.destination}\n` +
-      `👥 Travellers: ${state.slots.travellers}\n` +
-      `📅 Travel: ${state.slots.travel_time}\n` +
-      `🏙 Departure City: ${state.slots.departure_city}\n` +
-      `🌃 Nights: ${state.slots.nights}\n\n` +
-      'Searching the best holiday packages for you 😊'
+      '🌍 Amazing!\n\n' +
+      'Which destination are you planning to visit? 😊\n\n' +
+      'Example: Dubai, Bali, Kashmir, Thailand'
     );
   }
 
-  if (state.intent === 'flights') {
+  // ── ask_holiday_type ──
+  if (stage === 'ask_holiday_type') {
+    const dest = slots.destination || 'your chosen destination';
+    const tagline = getDestinationTagline(dest);
     return (
-      'AI CONFIRMATION\n\n' +
-      `🛫 ${state.slots.from_city} → ${state.slots.to_city}\n` +
-      `📅 ${state.slots.travel_time}\n` +
-      `👥 ${state.slots.travellers}\n\n` +
-      '✨ Great! Here are the best available flight options for your trip 😊'
+      `✨ Great choice! ${dest} is ${tagline}\n\n` +
+      'How would you like to plan your holiday? 😊\n\n' +
+      '🌟 Exclusive Holiday Deals\n' +
+      '✨ Personalized Holidays'
     );
   }
 
-  if (state.intent === 'hotels') {
+  // ── ask_travel_details ──
+  if (stage === 'ask_travel_details') {
+    if (intent === 'plan_holiday') {
+      if (slots.holiday_type === 'personalized') {
+        const dest = slots.destination || 'your destination';
+        return (
+          `✨ Wonderful! Let's create your personalized ${dest} holiday 😊\n\n` +
+          'Please share your travel preferences:\n\n' +
+          (!slots.travellers ? '👥 Number of Travellers\n' : '') +
+          (!slots.travel_time ? '📅 Travel Month or Dates\n' : '') +
+          (!slots.departure_city ? '🏙 Departure City\n' : '') +
+          (!slots.nights ? '🌃 Number of Nights\n' : '') +
+          (!slots.hotel_preference ? '🏨 Hotel Preference (3 / 4 / 5 Star)\n' : '') +
+          '\nExample:\n2 Adults, 10th July, Delhi, 5 Nights, 4 Star Hotels'
+        );
+      }
+      // exclusive
+      return (
+        '✨ Perfect! Please share:\n\n' +
+        (!slots.travellers ? '👥 Number of Travellers\n' : '') +
+        (!slots.travel_time ? '📅 Travel Month or Dates\n' : '') +
+        (!slots.departure_city ? '🏙 Departure City\n' : '') +
+        (!slots.nights ? '🌃 Number of Nights\n' : '') +
+        '\nExample:\n2 Adults, July, Bangalore, 5 Nights'
+      );
+    }
+
+    if (intent === 'flights') {
+      return (
+        '✈️ Sure! Please share:\n\n' +
+        (!slots.from_city ? '🛫 Departure City\n' : '') +
+        (!slots.to_city ? '🛬 Destination City\n' : '') +
+        (!slots.travel_time ? '📅 Travel Date\n' : '') +
+        (!slots.travellers ? '👥 Number of Travellers\n' : '') +
+        '\nExample:\nDelhi to Mumbai, 25th June, 2 Adults'
+      );
+    }
+
+    if (intent === 'hotels') {
+      return (
+        '🏨 Amazing! Please share:\n\n' +
+        (!slots.destination ? '📍 Destination\n' : '') +
+        (!slots.travellers ? '👥 Number of Travellers\n' : '') +
+        (!slots.travel_time ? '📅 Travel Month or Dates\n' : '') +
+        (!slots.nights ? '🌃 Number of Nights\n' : '') +
+        '\nExample:\nDubai, 2 Adults, July, 4 Nights'
+      );
+    }
+
+    // Other intents
     return (
-      '✨ Great! I’ve got your hotel requirement:\n\n' +
-      `📍 Destination: ${state.slots.destination}\n` +
-      `👥 Travellers: ${state.slots.travellers}\n` +
-      `📅 Travel: ${state.slots.travel_time}\n` +
-      `🌃 Nights: ${state.slots.nights}\n\n` +
-      'Searching the best hotel options for you 😊'
+      '✨ Sure! Please share the following details:\n\n' +
+      '👤 Full Name\n📞 Contact Number\n🕒 Preferred Callback Time\n\n' +
+      'Example: Sini, +91 9876543210, Tomorrow at 5 PM'
     );
   }
 
-  return (
-    `✨ Thank you${state.slots.name ? `, ${state.slots.name}` : ''}! Your request has been successfully received 😊\n\n` +
-    `📞 Contact: ${state.slots.phone}\n` +
-    `🕒 Preferred Callback Time: ${state.slots.callback_time}\n\n` +
-    'Our support team will contact you shortly.'
-  );
+  // ── show_packages (exclusive only — personalized handled by AI) ──
+  if (stage === 'show_packages') {
+    if (intent === 'plan_holiday' && slots.holiday_type !== 'personalized') {
+      const dest = slots.destination || 'your destination';
+      return (
+        '✨ Perfect! I\'ve got your holiday request 😊\n\n' +
+        `📍 Destination: ${dest}\n` +
+        `👥 Travellers: ${slots.travellers || '-'}\n` +
+        `📅 Travel: ${slots.travel_time || '-'}\n` +
+        `🏙 Departure City: ${slots.departure_city || '-'}\n` +
+        `🌃 Duration: ${slots.nights || '-'} Nights\n\n` +
+        'Searching the best holiday packages for you 😊\n\n' +
+        `✨ Here are the available exclusive holiday packages:\n\n` +
+        `🌐 ${dest} Holiday Packages\n\n` +
+        `Website:\nTraventions Holidays — ${TRAVENTIONS_WEBSITE}/holidays\n\n` +
+        'Would you like to:\n\n' +
+        '📄 Get Package Details\n' +
+        '✨ Customize Holiday\n' +
+        '📞 Arrange Callback'
+      );
+    }
+    // personalized — return null so caller lets AI generate the 5 options
+    return null;
+  }
+
+  // ── collect_lead ──
+  if (stage === 'collect_lead') {
+    const action = slots.post_package_action;
+    const context =
+      action === 'get_itinerary'
+        ? 'the complete day-wise itinerary'
+        : action === 'arrange_callback'
+          ? 'schedule your callback'
+          : 'complete package details';
+
+    return (
+      `✨ Sure! To share ${context}, let\'s proceed quickly 😊\n\n` +
+      '✨ Step 1: Lead Collection\n\n' +
+      'Please share your details:\n\n' +
+      '👤 Full Name (as per Passport/Government ID)\n' +
+      '📞 Contact Number\n' +
+      '📧 Email ID\n\n' +
+      'Example:\nSini, +91 9876543210, sini@gmail.com\n\n' +
+      'Once shared, we\'ll schedule your callback and provide full details ✨'
+    );
+  }
+
+  // ── ask_callback ──
+  if (stage === 'ask_callback') {
+    const name = slots.name ? `, ${slots.name}` : '';
+    return (
+      `✨ Thank you${name}! Your details have been received successfully 😊\n\n` +
+      '✨ Step 2: Callback Collection\n\n' +
+      '📞 Please share your preferred callback time\n\n' +
+      'Example:\nToday at 5 PM\nTomorrow Morning\n\n' +
+      'Once shared, we\'ll confirm your callback ✨'
+    );
+  }
+
+  // ── confirmed ──
+  if (stage === 'confirmed') {
+    const name = slots.name ? `, ${slots.name}` : '';
+    const callbackTime = slots.callback_time || 'at the earliest';
+    const context =
+      intent === 'plan_holiday'
+        ? 'assist you with complete package details'
+        : intent === 'flights'
+          ? 'assist you with the best flight options'
+          : 'assist you with your travel requirement';
+
+    return (
+      `✨ Perfect${name}! Your callback has been scheduled successfully 😊\n\n` +
+      `📞 Our travel expert will contact you *${callbackTime}* and ${context}.\n\n` +
+      'Looking forward to planning your holiday ✨'
+    );
+  }
+
+  return null;
 }
 
-export function buildConversationMemoryBlock(args: {
-  state: WorkflowState;
-  recentUserMessages?: string[];
-}): string {
-  const recent = (args.recentUserMessages || []).filter(Boolean).slice(-6);
-  const slotPairs = Object.entries(args.state.slots || {}).filter(([, v]) => Boolean(v));
-  const slotText =
-    slotPairs.length > 0
-      ? slotPairs.map(([k, v]) => `${k}=${v}`).join(', ')
-      : 'none';
-  const recentText =
-    recent.length > 0
-      ? recent.map((v, i) => `${i + 1}. ${v}`).join('\n')
-      : 'none';
-
-  return [
-    'CONVERSATION MEMORY (must be respected):',
-    `- Active workflow: ${args.state.intent}`,
-    `- Captured user details: ${slotText}`,
-    `- Missing details: ${
-      args.state.missingSlots.length ? args.state.missingSlots.join(', ') : 'none'
-    }`,
-    '- Recent user messages:',
-    recentText,
-    '- Do not ask for already captured details again unless user explicitly edits them.',
-  ].join('\n');
-}
+// ─── intent detection ─────────────────────────────────────────────────────────
 
 export function detectWorkflowIntent(message: string, classifiedIntent?: string): WorkflowIntent {
   const text = normalize(message);
@@ -350,95 +653,96 @@ export function detectWorkflowIntent(message: string, classifiedIntent?: string)
   if (/\bfrom\b.+\bto\b.+(\bpassengers?\b|\bpax\b|\badults?\b)/.test(joined)) {
     return 'flights';
   }
-  if (/(airport transfer|transfer|pickup|drop)/.test(joined)) {
-    return 'transfer';
-  }
-  if (/(forex|currency exchange|money exchange)/.test(joined)) {
-    return 'forex';
-  }
-  if (/(visa|visas)/.test(joined)) {
-    return 'visa';
-  }
-  if (/(insurance|travel insurance)/.test(joined)) {
-    return 'insurance';
-  }
-  if (/(mice|corporate event|meetings incentives conferences exhibitions)/.test(joined)) {
-    return 'mice';
-  }
-  if (/(booking status|status|pnr|reference|booking id)/.test(joined)) {
-    return 'booking_status';
-  }
+  if (/(airport transfer|transfer|pickup|drop)/.test(joined)) return 'transfer';
+  if (/(forex|currency exchange|money exchange)/.test(joined)) return 'forex';
+  if (/(visa|visas)/.test(joined)) return 'visa';
+  if (/(insurance|travel insurance)/.test(joined)) return 'insurance';
+  if (/(mice|corporate event|meetings incentives conferences exhibitions)/.test(joined)) return 'mice';
+  if (/(booking status|status|pnr|reference|booking id)/.test(joined)) return 'booking_status';
   return 'unknown';
 }
 
-export function getWorkflowStarterReply(intent: WorkflowIntent): string | null {
-  if (intent === 'plan_holiday') {
-    return (
-      'Great choice. I can help plan your holiday.\n' +
-      'Please share:\n' +
-      '1. Destination\n' +
-      '2. Travel month or dates\n' +
-      '3. Number of travellers\n' +
-      '4. Approx budget in INR'
-    );
+// ─── system prompt helpers ───────────────────────────────────────────────────
+
+export function buildConversationMemoryBlock(args: {
+  state: WorkflowState;
+  recentUserMessages?: string[];
+}): string {
+  const recent = (args.recentUserMessages || []).filter(Boolean).slice(-6);
+  const slotPairs = Object.entries(args.state.slots || {}).filter(([, v]) => Boolean(v));
+  const slotText =
+    slotPairs.length > 0
+      ? slotPairs.map(([k, v]) => `${k}=${v}`).join(', ')
+      : 'none';
+  const recentText =
+    recent.length > 0
+      ? recent.map((v, i) => `${i + 1}. ${v}`).join('\n')
+      : 'none';
+
+  return [
+    'CONVERSATION MEMORY (must be respected):',
+    `- Active workflow: ${args.state.intent}`,
+    `- Current stage: ${args.state.stage}`,
+    `- Captured user details: ${slotText}`,
+    `- Missing details: ${args.state.missingSlots.length ? args.state.missingSlots.join(', ') : 'none'}`,
+    '- Recent user messages:',
+    recentText,
+    '- Do not ask for already captured details again unless user explicitly edits them.',
+  ].join('\n');
+}
+
+export function getWorkflowSystemPromptBlock(intent: WorkflowIntent, stage?: WorkflowStage, slots?: WorkflowSlotMap): string {
+  const intentLabel = intent === 'unknown' ? 'not yet identified' : intent.replace('_', ' ');
+  const stageLabel = stage || 'unknown';
+
+  let packageGenBlock = '';
+  if (stage === 'show_packages' && slots?.holiday_type === 'personalized') {
+    const dest = slots?.destination || 'the destination';
+    const nights = slots?.nights || '5';
+    const hotelPref = slots?.hotel_preference || '4 star';
+    const travellers = slots?.travellers || '';
+    const travelTime = slots?.travel_time || '';
+    const departureCity = slots?.departure_city || '';
+
+    packageGenBlock = `
+PERSONALIZED PACKAGE GENERATION — REQUIRED:
+The customer wants a personalized holiday to ${dest} for ${travellers || 'the given travellers'}, ${travelTime || 'on the given dates'}, departing ${departureCity || 'from their city'}, ${nights} nights, ${hotelPref} hotels.
+Generate exactly 5 package options with these names in order: Classic Explorer, Scenic & Relaxation, Premium Experience, Budget Friendly, Luxury Touch.
+Use this exact format for each:
+
+🌟 Option [N]: [Name]
+🏨 ${hotelPref} Hotels
+🌃 ${nights} Nights / ${String(parseInt(nights) + 1)} Days
+💰 ₹[realistic price per person in INR]  PP
+
+✨ Included Highlights:
+✔ [highlight 1]
+✔ [highlight 2]
+✔ [highlight 3]
+✔ [highlight 4]
+✔ [highlight 5]
+
+After all 5 options, always end with exactly:
+✨ Would you like to:
+
+1️⃣ Select an option
+📄 Get Day-wise Itinerary
+✏️ Modify This Plan
+📞 Arrange Callback
+
+Use realistic INR pricing. Keep highlights specific to ${dest} — real sightseeing spots, activities. Do not mention USD or $.
+`;
   }
-  if (intent === 'flights') {
-    return (
-      'Perfect. I can help with flight options.\n' +
-      'Please share:\n' +
-      '1. From city\n' +
-      '2. To city\n' +
-      '3. Travel date(s)\n' +
-      '4. Traveller count'
-    );
-  }
-  if (intent === 'hotels') {
-    return (
-      'Great. I can help with hotel options.\n' +
-      'Please share:\n' +
-      '1. City\n' +
-      '2. Check-in and check-out dates\n' +
-      '3. Adults and children\n' +
-      '4. Budget per night in INR'
-    );
-  }
-  if (intent === 'transfer') {
-    return (
-      'Sure, I can help with airport transfer.\n' +
-      'Please share pickup city/airport, date, time, and passenger count.'
-    );
-  }
-  if (intent === 'forex') {
-    return (
-      'Sure, I can help with forex support.\n' +
-      'Please share travel destination, travel date, and approximate amount needed.'
-    );
-  }
-  if (intent === 'visa') {
-    return (
-      'Sure, I can help with visa assistance.\n' +
-      'Please share destination country, travel month, and traveller nationality.'
-    );
-  }
-  if (intent === 'insurance') {
-    return (
-      'Sure, I can help with travel insurance.\n' +
-      'Please share destination, travel dates, and traveller count/ages.'
-    );
-  }
-  if (intent === 'mice') {
-    return (
-      'Sure, I can help with MICE requirements.\n' +
-      'Please share city, event dates, approx attendees, and event type.'
-    );
-  }
-  if (intent === 'booking_status') {
-    return (
-      'Sure, I can help check booking status.\n' +
-      'Please share booking reference and registered phone/email.'
-    );
-  }
-  return null;
+
+  return `
+WHATSAPP SALES WORKFLOW:
+- Current intent: ${intentLabel}
+- Current stage: ${stageLabel}
+- Follow a warm, friendly, emoji-rich tone like a knowledgeable travel advisor.
+- Ask only missing details; never repeat already-provided information.
+- Use INR only for all pricing.
+${packageGenBlock}
+`.trim();
 }
 
 export function getGreetingMenuText(customerName?: string | null): string {
@@ -454,56 +758,23 @@ export function getGreetingMenuText(customerName?: string | null): string {
   );
 }
 
-function requiredFieldsText(intent: WorkflowIntent): string {
-  if (intent === 'plan_holiday') {
-    return 'destination, travel dates or month, travellers, budget INR, holiday type (exclusive deal or personalized).';
-  }
-  if (intent === 'flights') {
-    return 'origin city, destination city, travel date(s), trip type, traveller count.';
-  }
-  if (intent === 'hotels') {
-    return 'city, check-in, check-out, adults/children, room preference, budget per night INR.';
-  }
-  if (intent === 'transfer') {
-    return 'pickup and drop details, date/time, passenger count.';
-  }
-  if (intent === 'forex') {
-    return 'destination country, travel date, amount/currency need.';
-  }
-  if (intent === 'visa') {
-    return 'destination country, nationality, travel month/date.';
-  }
-  if (intent === 'insurance') {
-    return 'destination, travel dates, traveller count/ages.';
-  }
-  if (intent === 'mice') {
-    return 'event city, event dates, attendee count, event type.';
-  }
-  if (intent === 'booking_status') {
-    return 'booking reference and registered phone/email.';
-  }
-  return 'Clarify which service the customer needs before asking details.';
+// buildLeadNotes — creates a summary string for CRM notes field
+export function buildLeadNotes(intent: WorkflowIntent, slots: WorkflowSlotMap): string {
+  const parts: string[] = [`Source: WhatsApp AI`, `Intent: ${intent.replace('_', ' ')}`];
+  if (slots.destination) parts.push(`Destination: ${slots.destination}`);
+  if (slots.from_city && slots.to_city) parts.push(`Route: ${slots.from_city} → ${slots.to_city}`);
+  if (slots.travellers) parts.push(`Travellers: ${slots.travellers}`);
+  if (slots.travel_time) parts.push(`Travel Date: ${slots.travel_time}`);
+  if (slots.departure_city) parts.push(`Departure City: ${slots.departure_city}`);
+  if (slots.nights) parts.push(`Nights: ${slots.nights}`);
+  if (slots.holiday_type) parts.push(`Holiday Type: ${slots.holiday_type}`);
+  if (slots.hotel_preference) parts.push(`Hotel Preference: ${slots.hotel_preference}`);
+  if (slots.post_package_action) parts.push(`Interested In: ${slots.post_package_action.replace('_', ' ')}`);
+  if (slots.callback_time) parts.push(`Callback Time: ${slots.callback_time}`);
+  return parts.join(' | ');
 }
 
-export function getWorkflowSystemPromptBlock(intent: WorkflowIntent): string {
-  const intentLabel = intent === 'unknown' ? 'not yet identified' : intent.replace('_', ' ');
-  return `
-WHATSAPP SALES WORKFLOW MODE:
-- Active workflow intent: ${intentLabel}
-- Follow this style: short, clear, actionable messages.
-- Ask only missing details; do not ask already provided details again.
-- Ask in grouped bullets (max 4 points).
-- For pricing or budgets, always use INR only.
-- If user message is unclear, ask one clarification question.
-- When enough details are collected, send a concise "Callback Confirmation" summary in this format:
-  *Service:* <service>
-  *Name:* <name or "Not provided">
-  *Phone:* <phone>
-  *Key Details:* <single-line summary>
-  *Preferred Callback Time:* <if provided else "Earliest available">
-- After confirmation, respond with:
-  "Your request has been submitted successfully. Our support team will contact you shortly."
-- Never promise instant ticket issuance or guaranteed prices.
-- Required details for current intent: ${requiredFieldsText(intent)}
-`.trim();
+// Legacy export kept for backward compatibility
+export function getWorkflowStarterReply(intent: WorkflowIntent): string | null {
+  return buildWorkflowReply({ intent, stage: 'ask_travel_details', source: 'detected_now', slots: {}, missingSlots: [], complete: false, leadShouldBeSaved: false });
 }
