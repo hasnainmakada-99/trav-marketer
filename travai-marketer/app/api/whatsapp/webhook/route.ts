@@ -810,7 +810,7 @@ async function generateAndSendResponse(
         Query.limit(10),
       ]);
 
-    const historyRows = convos.documents as Array<{ role?: string; message?: string }>;
+    const historyRows = convos.documents as Array<{ role?: string; message?: string; sentBy?: string }>;
     const history = historyRows
       .slice(0, 12)
       .reverse()
@@ -921,7 +921,10 @@ async function generateAndSendResponse(
     }
 
     const selectedService = detectServiceSelection(userMessage);
+    // Only use CUSTOMER messages for slot extraction — bot messages contain menus/examples
+    // that would otherwise pollute slot values (e.g. "Forex" from the service menu)
     const historyMessages = historyRows
+      .filter((row) => row.role === 'user' || row.sentBy === 'customer')
       .slice(0, 20)
       .reverse()
       .map((row) => String(row.message || ''))

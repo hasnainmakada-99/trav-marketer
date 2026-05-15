@@ -236,6 +236,7 @@ async function buildReply(params: {
     classifiedIntent: params.intent,
     selectedIntent: workflowIntent === 'unknown' ? null : workflowIntent,
     historyMessages: historyRows
+      .filter((row) => row.role === 'user')
       .slice(0, 20)
       .reverse()
       .map((row) => String(row.message || ''))
@@ -525,8 +526,10 @@ export async function POST(request: NextRequest) {
       Query.equal('customerId', customer.$id),
       Query.orderDesc('$createdAt'),
       Query.limit(20),
-    ]).catch(() => ({ documents: [] as Array<{ message?: string | null }> }));
-    const historyMessages = (recentConversations.documents as Array<{ message?: string | null }>)
+    ]).catch(() => ({ documents: [] as Array<{ role?: string; sentBy?: string; message?: string | null }> }));
+    // Only customer messages — bot messages contain menus/examples that pollute slot extraction
+    const historyMessages = (recentConversations.documents as Array<{ role?: string; sentBy?: string; message?: string | null }>)
+      .filter((row) => row.role === 'user' || row.sentBy === 'customer')
       .slice(0, 20)
       .reverse()
       .map((row) => String(row.message || ''))

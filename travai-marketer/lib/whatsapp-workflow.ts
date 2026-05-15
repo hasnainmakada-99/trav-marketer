@@ -75,12 +75,23 @@ function pick(regex: RegExp, text: string): string | null {
   return m[1].trim();
 }
 
+// Common typos for "exclusive": exlcusive, exculsive, exclusvie, exclsuive
+const EXCLUSIVE_VARIANTS = [
+  'exclusive', 'exlcusive', 'exclusvie', 'exculsive', 'exclsuive', 'exlusice', 'exclisive',
+];
+const PERSONALIZED_VARIANTS = [
+  'personalized', 'personalised', 'personilized', 'personalzied', 'peronalized',
+];
+
 function detectHolidayType(raw: string): string | null {
   const text = normalize(raw);
-  if (hasAny(text, ['personalized holidays', 'personalized holiday', 'personalized', 'personalised', 'customize holiday', 'custom holiday', 'customised'])) {
+  if (
+    PERSONALIZED_VARIANTS.some((v) => text.includes(v)) ||
+    hasAny(text, ['personalized holidays', 'personalized holiday', 'customize holiday', 'custom holiday', 'customised'])
+  ) {
     return 'personalized';
   }
-  if (hasAny(text, ['exclusive holiday deals', 'exclusive holiday', 'exclusive deal', 'exclusive deals', 'exclusive'])) {
+  if (EXCLUSIVE_VARIANTS.some((v) => text.includes(v))) {
     return 'exclusive';
   }
   return null;
@@ -123,7 +134,18 @@ function parseHotelPreference(raw: string): string | null {
   return null;
 }
 
-// Try to parse comma-separated holiday details: "2 Adults, July, Bangalore, 5 Nights"
+// Words that must NOT be treated as city names (bot menu text, service names, etc.)
+const NON_CITY_WORDS = new Set([
+  'forex', 'visa', 'insurance', 'transfer', 'mice', 'flight', 'flights',
+  'hotel', 'hotels', 'holiday', 'holidays', 'booking', 'status', 'or', 'and',
+  'the', 'type', 'service', 'plan', 'package', 'packages', 'exclusive',
+  'personalized', 'personalised', 'itinerary', 'traventions', 'details',
+  'sini', 'example', 'callback', 'contact',
+]);
+
+// Try to parse comma-separated inputs:
+// Travel: "2 Adults, July, Bangalore, 5 Nights"
+// Lead:   "Sini, +91 9876543210, sini@gmail.com"
 function tryParseCommaFormat(raw: string, intent: WorkflowIntent, existingSlots: WorkflowSlotMap): WorkflowSlotMap {
   const parts = raw.split(',').map((p) => p.trim()).filter(Boolean);
   if (parts.length < 2) return {};
@@ -133,14 +155,20 @@ function tryParseCommaFormat(raw: string, intent: WorkflowIntent, existingSlots:
   const nightsRx = /^(\d+)\s*nights?$/i;
   const travellersRx = /^(\d+)\s*(adults?|children|kids?|pax|persons?)/i;
   const dateRx = /\d{1,2}(?:st|nd|rd|th)?\s+\w+|\w+\s+\d{1,2}(?:st|nd|rd|th)?/i;
-  const hotelRx = /\d\s*star\s*(hotel)?|luxury|premium|budget/i;
+  const hotelRx = /\d\s*star\s*(hotel)?|luxury|premium/i;
+  const emailRx = /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i;
+  const phoneRx = /^\+?\d[\d\s-]{6,14}\d$/;
 
   let travellersAccum: string[] = [];
   const unclassified: string[] = [];
 
   for (const part of parts) {
     const lp = normalize(part);
-    if (monthRx.test(lp)) {
+    if (emailRx.test(lp)) {
+      if (!slots.email) slots.email = part.trim().toLowerCase();
+    } else if (phoneRx.test(part.trim())) {
+      if (!slots.phone) slots.phone = part.trim().replace(/\s+/g, '');
+    } else if (monthRx.test(lp)) {
       if (!slots.travel_time) slots.travel_time = part;
     } else if (nightsRx.test(lp)) {
       const m = lp.match(/^(\d+)/);
@@ -160,14 +188,28 @@ function tryParseCommaFormat(raw: string, intent: WorkflowIntent, existingSlots:
     slots.travellers = travellersAccum.join(', ');
   }
 
-  // Remaining unclassified strings are likely city names
+  // If email or phone were extracted, treat a short alpha unclassified part as the name
+  if ((slots.email || slots.phone) && !existingSlots.name) {
+    const namePart = unclassified.find(
+      (p) => /^[a-zA-Z .'-]{2,40}$/.test(p) && !NON_CITY_WORDS.has(normalize(p))
+    );
+    if (namePart) slots.name = namePart;
+  }
+
+  // Remaining unclassified strings may be city names — apply blocklist
+  const safeCityPart = (candidate: string) => {
+    const key = normalize(candidate).trim();
+    return /^[a-zA-Z\s.'-]{2,30}$/.test(candidate) && !NON_CITY_WORDS.has(key);
+  };
+
   if (intent === 'plan_holiday' && !existingSlots.departure_city) {
-    const cityPart = unclassified.find((p) => /^[a-zA-Z\s.'-]{2,30}$/.test(p));
+    const cityPart = unclassified.find(safeCityPart);
     if (cityPart) slots.departure_city = cityPart;
   }
   if (intent === 'flights') {
-    if (!existingSlots.from_city && unclassified[0]) slots.from_city = unclassified[0];
-    if (!existingSlots.to_city && unclassified[1]) slots.to_city = unclassified[1];
+    const cities = unclassified.filter(safeCityPart);
+    if (!existingSlots.from_city && cities[0]) slots.from_city = cities[0];
+    if (!existingSlots.to_city && cities[1]) slots.to_city = cities[1];
   }
 
   return slots;
@@ -196,14 +238,31 @@ function parseGeneralSlots(message: string, intent: WorkflowIntent = 'unknown'):
   }
 
   if (!slots.destination) {
+    // Require colon/dash after "destination" to avoid capturing question phrases
     const destination = pick(
-      /\b(?:destination|going to|visit|trip to|holiday to|for hotels in)\s*[:\-]?\s*([a-zA-Z .'-]{2,40})/i,
+      /\b(?:going to|visit|trip to|holiday to|for hotels in|destination\s*[:\-])\s*([a-zA-Z .'-]{2,40})/i,
       raw
     );
     if (destination) slots.destination = destination;
   }
   if (!slots.destination && slots.to_city) {
     slots.destination = slots.to_city;
+  }
+
+  // Short standalone response (1-3 alpha words) is likely a destination when in plan_holiday context
+  if (intent === 'plan_holiday' && !slots.destination) {
+    const words = raw.trim().split(/\s+/);
+    const isShortAlpha = words.length <= 3 && words.every((w) => /^[a-zA-Z.'-]+$/.test(w));
+    const NOT_DESTINATIONS = new Set([
+      'plan a holiday', 'plan holiday', 'flights', 'hotels', 'exclusive', 'personalized',
+      'personalised', 'yes', 'no', 'ok', 'okay', 'hi', 'hello', 'hey',
+    ]);
+    const hasTravelSlots =
+      Boolean(slots.travellers) || Boolean(slots.travel_time) ||
+      Boolean(slots.departure_city) || Boolean(slots.nights);
+    if (isShortAlpha && !hasTravelSlots && !NOT_DESTINATIONS.has(normalize(raw))) {
+      slots.destination = raw.trim();
+    }
   }
 
   // Month/date extraction — keyword-prefixed
@@ -275,9 +334,10 @@ function parseGeneralSlots(message: string, intent: WorkflowIntent = 'unknown'):
   if (phone) slots.phone = phone.replace(/\s+/g, '');
 
   if (!slots.name) {
-    const name = pick(/\b(?:name|full name)\s*[:\-]?\s*([a-zA-Z .'-]{2,40})/i, raw);
+    const name = pick(/\b(?:name|full name|i am|i'm|my name is)\s*[:\-]?\s*([a-zA-Z .'-]{2,40})/i, raw);
     if (name) slots.name = name;
   }
+  // Name from comma format is handled in tryParseCommaFormat
 
   const callbackTime = parseCallbackTime(raw);
   if (callbackTime) slots.callback_time = callbackTime;
