@@ -10,7 +10,7 @@ const NAV_ITEMS = [
   { href: '/dashboard/gbp', label: 'Google Business', icon: '🌐' },
   { href: '/dashboard/whatsapp', label: 'WhatsApp', icon: '💬' },
   { href: '/dashboard/campaigns', label: 'Campaigns', icon: '📢', comingSoon: true },
-  { href: '/dashboard/leads', label: 'Leads', icon: '🎯', comingSoon: true },
+  { href: '/dashboard/leads', label: 'Leads CRM', icon: '🎯' },
 ];
 
 interface AppwriteUser {

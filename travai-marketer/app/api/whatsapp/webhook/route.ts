@@ -12,31 +12,20 @@ import {
   sendYCloudReplyButtonsMessage,
   showYCloudTypingIndicator,
 } from '@/lib/whatsapp-ycloud';
-import { getChatResponse, classifyIntent, extractCustomerInfo, preprocessMessage } from '@/lib/openai';
+import { getChatResponse, extractCustomerInfo, preprocessMessage } from '@/lib/openai';
 import { createDocument, listDocuments, updateDocument } from '@/lib/appwrite';
 import { normalizeToWhatsAppMarkdown } from '@/lib/whatsapp-format';
 import { createHmac, timingSafeEqual } from 'crypto';
-import {
-  buildRuleBasedItinerary,
-  isPackageIntent,
-  loadTravelKnowledge,
-} from '@/lib/travel-knowledge';
+import { loadTravelKnowledge } from '@/lib/travel-knowledge';
 import {
   enforceSafeUrlsInReply,
   getBotRoutePolicyPromptBlock,
-  resolveSafeRouteChoice,
   sanitizeWebsiteSnippetsForBot,
   sanitizeWebsiteUrlForBot,
 } from '@/lib/whatsapp-bot-routing';
 import {
-  buildConversationMemoryBlock,
-  buildLeadNotes,
-  buildWorkflowReply,
-  detectWorkflowIntent,
   getGreetingMenuText,
-  getWorkflowSystemPromptBlock,
   PRIMARY_QUICK_MENU_OPTIONS,
-  resolveWorkflowState,
 } from '@/lib/whatsapp-workflow';
 
 // Verify webhook token from Meta
@@ -67,17 +56,6 @@ function isGreetingMessage(text: string) {
   const normalized = text.trim().toLowerCase();
   return /^(hi|hello|hey|hlo|helo|namaste|yo|good morning|good afternoon|good evening)$/.test(
     normalized
-  );
-}
-
-function detectServiceSelection(text: string) {
-  const detected = detectWorkflowIntent(text);
-  return detected === 'unknown' ? null : detected;
-}
-
-function looksLikeWorkflowDataMessage(text: string) {
-  return /(from|to|destination|travel|date|travellers|travelers|passengers|adults|nights|budget|check-?in|check-?out|callback|\+?\d[\d -]{7,})/i.test(
-    text
   );
 }
 
@@ -443,12 +421,12 @@ async function saveLead(params: {
   teamId: string;
   phone: string;
   customer: { $id: string; name?: string; email?: string };
-  slots: import('@/lib/whatsapp-workflow').WorkflowSlotMap;
-  intent: import('@/lib/whatsapp-workflow').WorkflowIntent;
+  intent?: string;
+  notes?: string;
 }) {
-  const { teamId, phone, customer, slots, intent } = params;
-  const name = slots.name || customer.name || null;
-  const email = slots.email || customer.email || null;
+  const { teamId, phone, customer, intent, notes } = params;
+  const name = customer.name || null;
+  const email = customer.email || null;
 
   const existing = await listDocuments('leads', [
     Query.equal('teamId', teamId),
@@ -457,15 +435,14 @@ async function saveLead(params: {
     Query.limit(1),
   ]).catch(() => ({ documents: [] }));
 
-  const notes = buildLeadNotes(intent, slots);
   const now = new Date().toISOString();
+  const existingLead = existing.documents[0] as { $id?: string } | undefined;
 
-  const existingLead = existing.documents[0] as { $id?: string; status?: string } | undefined;
   if (existingLead?.$id) {
     await updateDocument('leads', existingLead.$id, {
       name: name || undefined,
       email: email || undefined,
-      notes,
+      notes: notes || undefined,
       status: 'new',
       lastContactedAt: now,
       updatedAt: now,
@@ -478,7 +455,7 @@ async function saveLead(params: {
       email,
       source: 'whatsapp',
       status: 'new',
-      notes,
+      notes: notes || (intent ? `Service interest: ${intent}` : null),
       lastContactedAt: now,
       createdAt: now,
       updatedAt: now,
@@ -709,17 +686,13 @@ async function processIncomingMessage(
       );
     } else {
       // Route complaints to staff
-      await createDocument('leads', {
+      saveLead({
         teamId,
-        phone: phone,
-        name: customer.name,
-        email: customer.email,
-        source: 'whatsapp',
-        status: 'new',
+        phone,
+        customer,
+        intent: 'complaint',
         notes: `Customer complaint: ${text}`,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
+      }).catch(() => {});
     }
   } catch (error) {
     console.error('[WhatsApp] Error processing message:', error);
@@ -859,8 +832,6 @@ async function generateAndSendResponse(
     const businessConfig = businessConfigResult.documents[0] as
       | { businessName?: string; openaiSystemPrompt?: string }
       | undefined;
-    const workflowIntent = detectWorkflowIntent(correctedText, intent);
-
     if (isGreetingMessage(correctedText)) {
       const mode = resolveOutboundMode();
       const greetingMenu = getGreetingMenuText(customer.name || null);
@@ -929,119 +900,75 @@ async function generateAndSendResponse(
       return;
     }
 
-    const selectedService = detectServiceSelection(correctedText);
-    // Only use CUSTOMER messages for slot extraction — bot messages contain menus/examples
-    // that would otherwise pollute slot values (e.g. "Forex" from the service menu)
-    const historyMessages = historyRows
-      .filter((row) => row.role === 'user' || row.sentBy === 'customer')
-      .slice(0, 20)
-      .reverse()
-      .map((row) => String(row.message || ''))
-      .filter(Boolean);
-    const workflowState = resolveWorkflowState({
-      userMessage: correctedText,
-      classifiedIntent: intent,
-      selectedIntent: selectedService,
-      historyMessages,
-    });
-    const packageIntent =
-      workflowIntent === 'plan_holiday' || isPackageIntent(correctedText, intent);
-
-    // Deterministic reply is used as a STRUCTURAL TEMPLATE fed into the AI prompt,
-    // not sent directly. AI generates the final response every time.
-    const deterministicWorkflowReply = buildWorkflowReply(workflowState);
-
-    // Fire-and-forget lead saves — happen before response generation
-    if (workflowState.leadShouldBeSaved) {
+    // Save lead in background whenever customer has a name (phone always available)
+    if (customer.name) {
       saveLead({
-        teamId: resolvedTeamId, phone, customer,
-        slots: workflowState.slots, intent: workflowState.intent,
-      }).catch((err) => console.error('[WhatsApp] Lead save failed:', err));
-    } else if (workflowState.stage === 'ask_callback' && workflowState.slots.name && workflowState.slots.phone) {
-      saveLead({
-        teamId: resolvedTeamId, phone, customer,
-        slots: workflowState.slots, intent: workflowState.intent,
+        teamId: resolvedTeamId,
+        phone,
+        customer,
+        intent,
+        notes: `WhatsApp conversation. Last message: ${correctedText.slice(0, 200)}`,
       }).catch(() => {});
     }
 
-    // Load knowledge for package/pricing stages; skip for simple conversational stages
-    const needsKnowledge = workflowState.stage === 'unknown' ||
-      workflowState.stage === 'show_packages' ||
-      workflowState.stage === 'ask_travel_details' ||
-      packageIntent;
-    let knowledge: Awaited<ReturnType<typeof loadTravelKnowledge>> = {
-      databaseSnippets: [] as string[],
-      hasPackageData: false,
-      bestWebsiteUrl: sanitizeWebsiteUrlForBot(WEBSITE_FALLBACK_URL),
-      bestWebsiteTitle: 'Traventions',
-      websiteSnippets: [] as string[],
-      diagnostics: {
-        collectionsScanned: [] as string[],
-        collectionDocCounts: {} as Record<string, number>,
-        crawledPages: 0,
-      },
-    };
-    if (needsKnowledge && process.env.OPENAI_API_KEY) {
-      knowledge = await loadTravelKnowledgeFast(resolvedTeamId, correctedText);
-    }
+    // Load knowledge for AI context
+    const knowledge = await loadTravelKnowledgeFast(resolvedTeamId, correctedText);
     const safeWebsiteSnippets = sanitizeWebsiteSnippetsForBot(knowledge.websiteSnippets);
-    const routeChoice = resolveSafeRouteChoice({
-      message: correctedText,
-      classifiedIntent: intent,
-      websiteUrlHint: knowledge.bestWebsiteUrl,
-    });
-    const safeBestWebsiteUrl = sanitizeWebsiteUrlForBot(knowledge.bestWebsiteUrl);
-
-    const memoryBlock = buildConversationMemoryBlock({
-      state: workflowState,
-      recentUserMessages: historyRows
-        .filter((row) => row.role === 'user')
-        .slice(0, 12)
-        .reverse()
-        .map((row) => String(row.message || ''))
-        .filter(Boolean),
-    });
-
-    // Build system prompt — workflow stage instructions + optional deterministic template
-    const systemPrompt = (
-      `${businessConfig?.openaiSystemPrompt || ''}\n\n` +
-      `You are Traventions' WhatsApp assistant named Sini.
-${firstAssistantReply ? 'Start this reply with "Welcome to Traventions!".' : 'Do not repeat the welcome greeting on every reply.'}
-${getBotRoutePolicyPromptBlock()}
-${getWorkflowSystemPromptBlock(workflowIntent, workflowState.stage, workflowState.slots, deterministicWorkflowReply)}
-${memoryBlock}
-${needsKnowledge ? `DATABASE KNOWLEDGE:
-${knowledge.databaseSnippets.length ? knowledge.databaseSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : 'No relevant snippets found.'}
-WEBSITE PAGE INDEX:
-${safeWebsiteSnippets.length ? safeWebsiteSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : `1. Traventions - ${WEBSITE_FALLBACK_URL}`}
-Best safe website page: ${knowledge.bestWebsiteTitle} (${safeBestWebsiteUrl})` : ''}`.trim()
+    const safeBestWebsiteUrl = sanitizeWebsiteUrlForBot(
+      knowledge.bestWebsiteUrl || WEBSITE_FALLBACK_URL
     );
+
+    const systemPrompt = [
+      businessConfig?.openaiSystemPrompt || '',
+      `You are Sini, a warm and knowledgeable travel assistant for Traventions (a full-service travel agency in India).`,
+      firstAssistantReply
+        ? 'Start this reply with "Welcome to Traventions!".'
+        : 'Do not repeat the welcome greeting.',
+      getBotRoutePolicyPromptBlock(),
+      `
+YOUR ROLE:
+Help customers with: holidays, flights, hotels, transfers, forex, visa, insurance, and MICE.
+Converse naturally — ask one or two questions at a time, never overwhelm.
+
+CONVERSATION APPROACH:
+- First understand what the customer needs (holiday, flight, hotel, etc.)
+- For holidays: ask destination, travel month, number of travellers, number of nights, budget range
+- For flights: ask origin city, destination city, travel date, number of passengers
+- For hotels: ask city, check-in & check-out dates, star preference
+- Once you have enough details, collect: customer name, WhatsApp number, preferred callback time
+- Confirm: "Our team will call you back shortly to finalise everything!"
+
+RULES:
+- All amounts in INR only — never USD or $
+- Do NOT use markdown links [text](url) — WhatsApp cannot render them. Use plain URLs only.
+- Keep replies concise (under 180 words)
+- Never invent specific prices — say "our team will share the exact quote"
+- Website & packages: ${safeBestWebsiteUrl}`,
+      knowledge.databaseSnippets.length
+        ? `\nPACKAGE KNOWLEDGE:\n${knowledge.databaseSnippets.slice(0, 6).map((v, i) => `${i + 1}. ${v}`).join('\n')}`
+        : '',
+      safeWebsiteSnippets.length
+        ? `\nWEBSITE PAGES:\n${safeWebsiteSnippets.slice(0, 4).map((v, i) => `${i + 1}. ${v}`).join('\n')}`
+        : '',
+    ]
+      .filter(Boolean)
+      .join('\n')
+      .trim();
 
     let response: string;
     if (process.env.OPENAI_API_KEY) {
       try {
         response = await getChatResponse(correctedText, systemPrompt, history);
         response = enforceSafeUrlsInReply(response);
-      } catch (error) {
-        console.error('[WhatsApp] OpenAI reply generation failed, using fallback:', error);
-        // Fall back to deterministic if AI fails
-        response = deterministicWorkflowReply ||
-          'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
+      } catch (err) {
+        console.error('[WhatsApp] OpenAI reply failed:', err);
+        response = 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
       }
     } else {
-      // No API key: use deterministic or rule-based
-      response = deterministicWorkflowReply ||
-        (packageIntent ? buildRuleBasedItinerary(correctedText)
-          : 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.');
+      response = 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
     }
 
-    const preferredUrl = routeChoice.url || safeBestWebsiteUrl || sanitizeWebsiteUrlForBot(WEBSITE_FALLBACK_URL);
-    const responseWithFallback =
-      packageIntent && !response.includes(preferredUrl)
-        ? `${response}\n\nFor latest packages, visit ${preferredUrl}`
-        : response;
-    const safeResponse = enforceSafeUrlsInReply(responseWithFallback);
-    const waFormattedResponse = normalizeToWhatsAppMarkdown(safeResponse);
+    const waFormattedResponse = normalizeToWhatsAppMarkdown(enforceSafeUrlsInReply(response));
     if (
       recentAiText === normalizeTextForDedupe(waFormattedResponse) &&
       Number.isFinite(recentAiTs) &&

@@ -5,29 +5,16 @@ export const maxDuration = 60;
 import { preprocessMessage, extractCustomerInfo, getChatResponse } from '@/lib/openai';
 import { createDocument, listDocuments, updateDocument } from '@/lib/appwrite';
 import { normalizeToWhatsAppMarkdown } from '@/lib/whatsapp-format';
-import {
-  buildRuleBasedItinerary,
-  isPackageIntent,
-  loadTravelKnowledge,
-} from '@/lib/travel-knowledge';
+import { loadTravelKnowledge } from '@/lib/travel-knowledge';
 import {
   enforceSafeUrlsInReply,
   getBotRoutePolicyPromptBlock,
-  resolveSafeRouteChoice,
   sanitizeWebsiteSnippetsForBot,
   sanitizeWebsiteUrlForBot,
 } from '@/lib/whatsapp-bot-routing';
 import {
-  buildConversationMemoryBlock,
-  buildLeadNotes,
-  buildWorkflowReply,
-  detectWorkflowIntent,
   getGreetingMenuText,
-  getWorkflowSystemPromptBlock,
   PRIMARY_QUICK_MENU_OPTIONS,
-  resolveWorkflowState,
-  type WorkflowIntent,
-  type WorkflowSlotMap,
 } from '@/lib/whatsapp-workflow';
 
 const BRIDGE_SHARED_SECRET = process.env.BRIDGE_SHARED_SECRET || '';
@@ -60,24 +47,6 @@ function isGreetingMessage(text: string) {
   );
 }
 
-function mapQuickMenuSelectionToIntentText(text: string) {
-  const detected = detectWorkflowIntent(text);
-  const starter = buildWorkflowReply(
-    resolveWorkflowState({
-      userMessage: text,
-      selectedIntent: detected === 'unknown' ? null : detected,
-      historyMessages: [],
-    })
-  );
-  return starter || null;
-}
-
-function looksLikeWorkflowDataMessage(text: string) {
-  return /(from|to|destination|travel|date|travellers|travelers|passengers|adults|nights|budget|check-?in|check-?out|callback|\+?\d[\d -]{7,})/i.test(
-    text
-  );
-}
-
 function enforceInrReply(text: string) {
   let out = text;
   out = out.replace(/\bUSD\b/gi, 'INR');
@@ -105,8 +74,6 @@ function unauthorized() {
 async function hasHumanTakeover(teamId: string, phone: string) {
   void teamId;
   void phone;
-  // Bridge bot must keep responding continuously in production.
-  // Manual handover suppression can be reintroduced later behind explicit controls.
   return false;
 }
 
@@ -142,12 +109,12 @@ async function saveLead(params: {
   teamId: string;
   phone: string;
   customer: { $id: string; name?: string; email?: string };
-  slots: WorkflowSlotMap;
-  intent: WorkflowIntent;
+  intent?: string;
+  notes?: string;
 }) {
-  const { teamId, phone, customer, slots, intent } = params;
-  const name = slots.name || customer.name || null;
-  const email = slots.email || customer.email || null;
+  const { teamId, phone, customer, intent, notes } = params;
+  const name = customer.name || null;
+  const email = customer.email || null;
 
   const existing = await listDocuments('leads', [
     Query.equal('teamId', teamId),
@@ -156,7 +123,6 @@ async function saveLead(params: {
     Query.limit(1),
   ]).catch(() => ({ documents: [] }));
 
-  const notes = buildLeadNotes(intent, slots);
   const now = new Date().toISOString();
   const existingLead = existing.documents[0] as { $id?: string } | undefined;
 
@@ -164,7 +130,7 @@ async function saveLead(params: {
     await updateDocument('leads', existingLead.$id, {
       name: name || undefined,
       email: email || undefined,
-      notes,
+      notes: notes || undefined,
       status: 'new',
       lastContactedAt: now,
       updatedAt: now,
@@ -177,7 +143,7 @@ async function saveLead(params: {
       email,
       source: 'whatsapp',
       status: 'new',
-      notes,
+      notes: notes || (intent ? `Service interest: ${intent}` : null),
       lastContactedAt: now,
       createdAt: now,
       updatedAt: now,
@@ -189,10 +155,9 @@ async function buildReply(params: {
   teamId: string;
   customerId: string;
   userMessage: string;
+  correctedText: string;
   intent: string;
   customerName?: string;
-  workflowState?: ReturnType<typeof resolveWorkflowState>;
-  deterministicTemplate?: string | null;
 }) {
   const [historyResult, businessConfigResult] = await Promise.all([
     listDocuments('conversations', [
@@ -212,7 +177,7 @@ async function buildReply(params: {
   }>;
 
   const history = historyRows
-    .slice(0, 12)
+    .slice(0, 14)
     .reverse()
     .map((row) => ({
       role: (row.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
@@ -225,114 +190,72 @@ async function buildReply(params: {
     | { openaiSystemPrompt?: string }
     | undefined;
 
-  const workflowState = params.workflowState ?? resolveWorkflowState({
-    userMessage: params.userMessage,
-    classifiedIntent: params.intent,
-    selectedIntent: (() => {
-      const d = detectWorkflowIntent(params.userMessage, params.intent);
-      return d === 'unknown' ? null : d;
-    })(),
-    historyMessages: historyRows
-      .filter((row) => row.role === 'user')
-      .slice(0, 20)
-      .reverse()
-      .map((row) => String(row.message || ''))
-      .filter(Boolean),
-  });
-  const workflowIntent = workflowState.intent === 'unknown'
-    ? detectWorkflowIntent(params.userMessage, params.intent)
-    : workflowState.intent;
+  const knowledge = await loadTravelKnowledge(params.teamId, params.correctedText).catch(() => ({
+    databaseSnippets: [] as string[],
+    hasPackageData: false,
+    bestWebsiteUrl: sanitizeWebsiteUrlForBot(WEBSITE_FALLBACK_URL),
+    bestWebsiteTitle: 'Traventions',
+    websiteSnippets: [] as string[],
+  }));
 
-  const memoryBlock = buildConversationMemoryBlock({
-    state: workflowState,
-    recentUserMessages: historyRows
-      .filter((row) => row.role === 'user')
-      .slice(0, 12)
-      .reverse()
-      .map((row) => String(row.message || ''))
-      .filter(Boolean),
-  });
-
-  // Load knowledge only for stages that need package/pricing data
-  const needsKnowledge = workflowState.stage === 'unknown' ||
-    workflowState.stage === 'show_packages' ||
-    workflowState.stage === 'ask_travel_details' ||
-    isPackageIntent(params.userMessage, params.intent);
-
-  const knowledge = needsKnowledge
-    ? await loadTravelKnowledge(params.teamId, params.userMessage).catch(() => ({
-        databaseSnippets: [] as string[],
-        hasPackageData: false,
-        bestWebsiteUrl: sanitizeWebsiteUrlForBot(WEBSITE_FALLBACK_URL),
-        bestWebsiteTitle: 'Traventions',
-        websiteSnippets: [] as string[],
-        diagnostics: { collectionsScanned: [] as string[], collectionDocCounts: {} as Record<string, number>, crawledPages: 0 },
-      }))
-    : {
-        databaseSnippets: [] as string[], hasPackageData: false,
-        bestWebsiteUrl: sanitizeWebsiteUrlForBot(WEBSITE_FALLBACK_URL),
-        bestWebsiteTitle: 'Traventions', websiteSnippets: [] as string[],
-        diagnostics: { collectionsScanned: [] as string[], collectionDocCounts: {} as Record<string, number>, crawledPages: 0 },
-      };
-
-  const safeWebsiteSnippets = sanitizeWebsiteSnippetsForBot(knowledge.websiteSnippets);
-  const routeChoice = resolveSafeRouteChoice({
-    message: params.userMessage,
-    classifiedIntent: params.intent,
-    websiteUrlHint: knowledge.bestWebsiteUrl,
-  });
-  const safeBestWebsiteUrl = sanitizeWebsiteUrlForBot(knowledge.bestWebsiteUrl);
+  const safeWebsiteUrl = sanitizeWebsiteUrlForBot(knowledge.bestWebsiteUrl || WEBSITE_FALLBACK_URL);
+  const safeSnippets = sanitizeWebsiteSnippetsForBot(knowledge.websiteSnippets);
 
   if (!process.env.OPENAI_API_KEY) {
-    const det = params.deterministicTemplate;
     return {
-      reply: normalizeToWhatsAppMarkdown(
-        det || buildRuleBasedItinerary(params.userMessage)
-      ),
+      reply: 'Welcome to Traventions! Our team will get back to you shortly.',
       quickMenu: false,
       quickMenuOptions: null,
     };
   }
 
-  const systemPrompt = (
-    `${businessConfig?.openaiSystemPrompt || ''}\n\n` +
-    `You are Traventions' WhatsApp assistant named Sini.
-${firstAssistantReply ? 'Start this reply with "Welcome to Traventions!".' : 'Do not repeat the welcome greeting on every reply.'}
-${getBotRoutePolicyPromptBlock()}
-${getWorkflowSystemPromptBlock(workflowIntent, workflowState.stage, workflowState.slots, params.deterministicTemplate ?? null)}
-${memoryBlock}
-${needsKnowledge ? `DATABASE KNOWLEDGE:
-${knowledge.databaseSnippets.length ? knowledge.databaseSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : 'No relevant snippets found.'}
-WEBSITE PAGE INDEX:
-${safeWebsiteSnippets.length ? safeWebsiteSnippets.map((v, i) => `${i + 1}. ${v}`).join('\n') : `1. Traventions Home - ${WEBSITE_FALLBACK_URL}`}
-Best safe website page: ${knowledge.bestWebsiteTitle} (${safeBestWebsiteUrl})` : ''}`.trim()
-  );
+  const systemPrompt = [
+    businessConfig?.openaiSystemPrompt || '',
+    `You are Sini, a warm and knowledgeable travel assistant for Traventions (a full-service travel agency in India).`,
+    firstAssistantReply
+      ? 'Start this reply with "Welcome to Traventions!".'
+      : 'Do not repeat the welcome greeting.',
+    getBotRoutePolicyPromptBlock(),
+    `
+YOUR ROLE:
+Help customers with: holidays, flights, hotels, transfers, forex, visa, insurance, and MICE.
+Converse naturally — ask one or two questions at a time, never overwhelm.
 
-  const response = await getChatResponse(params.userMessage, systemPrompt, history);
-  const safeResponse = enforceSafeUrlsInReply(enforceInrReply(response));
-  const packageIntent = isPackageIntent(params.userMessage, params.intent);
-  if (packageIntent) {
-    const preferredUrl = routeChoice.url || safeBestWebsiteUrl || sanitizeWebsiteUrlForBot(WEBSITE_FALLBACK_URL);
-    if (!safeResponse.includes(preferredUrl)) {
-      return {
-        reply: normalizeToWhatsAppMarkdown(`${safeResponse}\n\nFor latest packages, visit ${preferredUrl}`),
-        quickMenu: false,
-        quickMenuOptions: null,
-      };
-    }
-  }
+CONVERSATION APPROACH:
+- First understand what the customer needs (holiday, flight, hotel, etc.)
+- For holidays: ask destination, travel month, number of travellers, number of nights, budget range
+- For flights: ask origin city, destination city, travel date, number of passengers
+- For hotels: ask city, check-in & check-out dates, star preference
+- Once you have enough details, collect: customer name, WhatsApp number, preferred callback time
+- Confirm: "Our team will call you back shortly to finalise everything!"
+
+RULES:
+- All amounts in INR only — never USD or $
+- Do NOT use markdown links [text](url) — WhatsApp cannot render them. Use plain URLs only.
+- Keep replies concise (under 180 words)
+- Never invent specific prices — say "our team will share the exact quote"
+- Website & packages: ${safeWebsiteUrl}`,
+    knowledge.databaseSnippets.length
+      ? `\nPACKAGE KNOWLEDGE:\n${knowledge.databaseSnippets.slice(0, 6).map((v, i) => `${i + 1}. ${v}`).join('\n')}`
+      : '',
+    safeSnippets.length
+      ? `\nWEBSITE PAGES:\n${safeSnippets.slice(0, 4).map((v, i) => `${i + 1}. ${v}`).join('\n')}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+
+  const response = await getChatResponse(params.correctedText, systemPrompt, history);
+  const safe = enforceSafeUrlsInReply(enforceInrReply(response));
+
   return {
-    reply: normalizeToWhatsAppMarkdown(safeResponse),
+    reply: normalizeToWhatsAppMarkdown(safe),
     quickMenu: false,
     quickMenuOptions: null,
   };
 }
 
-/**
- * POST /api/wa-bridge/incoming
- * Receives incoming WhatsApp-Web messages from a local/oracle bridge.
- * Returns AI reply text; bridge is responsible for sending it back on WhatsApp.
- */
 export async function POST(request: NextRequest) {
   try {
     if (!BRIDGE_SHARED_SECRET) {
@@ -359,10 +282,7 @@ export async function POST(request: NextRequest) {
     const eventType = body.eventType || 'incoming_message';
 
     if (!from) {
-      return NextResponse.json(
-        { error: 'Missing required field: from' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Missing required field: from' }, { status: 400 });
     }
 
     const teamId = resolveTeamId(body.teamId);
@@ -399,10 +319,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (!text) {
-      return NextResponse.json(
-        { error: 'Missing required field: message' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Missing required field: message' }, { status: 400 });
     }
 
     await createDocument('conversations', {
@@ -429,7 +346,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Fast path: greeting messages never need AI classification or website crawl.
+    // Fast path: greeting — no AI needed
     if (isGreetingMessage(text)) {
       const greetingReply = normalizeToWhatsAppMarkdown(
         getGreetingMenuText(customer.name || body.name || null)
@@ -458,24 +375,35 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Non-critical: extract name/email in background — never block the reply path.
+    // Background: extract name/email and update customer + save lead
     if (process.env.OPENAI_API_KEY) {
       extractCustomerInfo(text)
-        .then(async (extractedInfo) => {
-          if (extractedInfo?.name && !customer.name) {
-            const validEmail = isValidEmail(extractedInfo.email)
-              ? extractedInfo.email
-              : customer.email || null;
+        .then(async (info) => {
+          const updates: Record<string, string> = {};
+          if (info?.name && !customer.name) updates.name = info.name;
+          if (info?.email && isValidEmail(info.email) && !customer.email) updates.email = info.email;
+          if (Object.keys(updates).length) {
             await updateDocument('customers', customer.$id, {
-              name: extractedInfo.name,
-              email: validEmail,
+              ...updates,
               updatedAt: new Date().toISOString(),
             }).catch(() => {});
+            customer = { ...customer, ...updates };
+          }
+          // Save lead whenever we have a name (phone always available as `from`)
+          if (customer.name || info?.name) {
+            await saveLead({
+              teamId,
+              phone: from,
+              customer: { ...customer, name: customer.name || info?.name },
+              intent: 'inquiry',
+              notes: `WhatsApp conversation. Last message: ${text.slice(0, 200)}`,
+            });
           }
         })
         .catch(() => {});
     }
 
+    // Preprocess: typo correction
     let intent = 'other';
     let correctedText = text;
     if (process.env.OPENAI_API_KEY) {
@@ -487,64 +415,22 @@ export async function POST(request: NextRequest) {
         console.log(`[WA Bridge] Typo corrected: "${text}" → "${correctedText}"`);
       }
     }
-    const selectedIntent = detectWorkflowIntent(correctedText);
-    const recentConversations = await listDocuments('conversations', [
-      Query.equal('teamId', teamId),
-      Query.equal('customerId', customer.$id),
-      Query.orderDesc('$createdAt'),
-      Query.limit(20),
-    ]).catch(() => ({ documents: [] as Array<{ role?: string; sentBy?: string; message?: string | null }> }));
-    // Only customer messages — bot messages contain menus/examples that pollute slot extraction
-    const historyMessages = (recentConversations.documents as Array<{ role?: string; sentBy?: string; message?: string | null }>)
-      .filter((row) => row.role === 'user' || row.sentBy === 'customer')
-      .slice(0, 20)
-      .reverse()
-      .map((row) => String(row.message || ''))
-      .filter(Boolean);
-    const workflowState = resolveWorkflowState({
-      userMessage: correctedText,
-      classifiedIntent: intent,
-      selectedIntent: selectedIntent === 'unknown' ? null : selectedIntent,
-      historyMessages,
-    });
-
-    const deterministicWorkflowReply = buildWorkflowReply(workflowState);
-
-    // Save lead to CRM before generating response (fire-and-forget)
-    if (workflowState.leadShouldBeSaved) {
-      saveLead({
-        teamId,
-        phone: from,
-        customer,
-        slots: workflowState.slots,
-        intent: workflowState.intent,
-      }).catch((err) => console.error('[WA Bridge] Lead save failed:', err));
-    } else if (workflowState.stage === 'ask_callback' && workflowState.slots.name && workflowState.slots.phone) {
-      saveLead({
-        teamId,
-        phone: from,
-        customer,
-        slots: workflowState.slots,
-        intent: workflowState.intent,
-      }).catch(() => {});
-    }
 
     const built = await buildReply({
       teamId,
       customerId: customer.$id,
-      userMessage: correctedText,
+      userMessage: text,
+      correctedText,
       intent,
       customerName: customer.name || body.name || undefined,
-      workflowState,
-      deterministicTemplate: deterministicWorkflowReply,
     }).catch(() => ({
       reply: 'Welcome to Traventions! Our team will get back to you shortly.',
       quickMenu: false,
       quickMenuOptions: null as string[] | null,
     }));
+
     const reply = built.reply;
 
-    // Fire-and-forget: never let a DB write failure block the reply to the customer.
     createDocument('conversations', {
       teamId,
       customerId: customer.$id,
@@ -572,9 +458,6 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error('[WA Bridge Incoming] Error:', error);
-    return NextResponse.json(
-      { error: 'Failed to process bridge message' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to process bridge message' }, { status: 500 });
   }
 }
