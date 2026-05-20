@@ -229,11 +229,19 @@ CONVERSATION APPROACH:
 - Once you have enough details, collect: customer name, WhatsApp number, preferred callback time
 - Confirm: "Our team will call you back shortly to finalise everything!"
 
+ITINERARY GENERATION (very important):
+- When the customer has shared BOTH a destination AND a duration (e.g. "Dubai, 5 nights"), generate a day-by-day sample itinerary immediately — do not wait for pricing.
+- Format: Day 1: ..., Day 2: ..., etc. Keep each day to one line.
+- After the itinerary, add: "Budget range: INR X – Y (approx, per person, flights extra)" — estimate based on typical market rates for that destination and duration.
+- Then ask: "Would you like to customise this, or shall we proceed with booking?"
+- If the customer gives a budget, tailor the suggestion (budget = local stays, mid = 3–4 star, premium = 5 star).
+- Never say you cannot create an itinerary. Always give your best sample based on the destination and duration provided.
+
 RULES:
 - All amounts in INR only — never USD or $
 - Do NOT use markdown links [text](url) — WhatsApp cannot render them. Use plain URLs only.
-- Keep replies concise (under 180 words)
-- Never invent specific prices — say "our team will share the exact quote"
+- Keep replies concise (under 220 words)
+- Never invent exact flight or hotel prices — use ranges like "INR 45,000–65,000 approx"
 - Website & packages: ${safeWebsiteUrl}`,
     knowledge.databaseSnippets.length
       ? `\nPACKAGE KNOWLEDGE:\n${knowledge.databaseSnippets.slice(0, 6).map((v, i) => `${i + 1}. ${v}`).join('\n')}`
@@ -400,16 +408,15 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Save lead synchronously whenever we have a name (phone always available as `from`)
-    if (customer.name) {
-      await saveLead({
-        teamId,
-        phone: from,
-        customer,
-        intent,
-        notes: `WhatsApp inquiry. ${correctedText.slice(0, 300)}`,
-      }).catch(() => {});
-    }
+    // Save/update lead on every non-greeting inbound message.
+    // Phone (`from`) is always the identifier — name is optional.
+    await saveLead({
+      teamId,
+      phone: from,
+      customer,
+      intent,
+      notes: correctedText.slice(0, 300),
+    }).catch(() => {});
 
     const built = await buildReply({
       teamId,
