@@ -69,6 +69,8 @@ function GbpPageInner() {
   const [accounts, setAccounts] = useState<GbpAccount[]>([]);
   const [locationsLoading, setLocationsLoading] = useState(false);
   const [locationsError, setLocationsError] = useState<string | null>(null);
+  const [locationsLoaded, setLocationsLoaded] = useState(false);
+  const [manualLocationId, setManualLocationId] = useState('');
 
   // UI
   const [tab, setTab] = useState<Tab>('posts');
@@ -136,7 +138,7 @@ function GbpPageInner() {
 
   useEffect(() => { if (teamId) checkStatus(teamId); }, [teamId, checkStatus]);
 
-  // ── Load Google locations (only when connected, separate from connection check) ──
+  // ── Load Google locations (called on-demand, not on mount, to avoid quota hits) ──
   const loadGoogleLocations = useCallback(async (tid: string) => {
     setLocationsLoading(true);
     setLocationsError(null);
@@ -144,7 +146,14 @@ function GbpPageInner() {
       const res = await fetch(`/api/gbp/locations?teamId=${encodeURIComponent(tid)}`);
       const data = await res.json();
       setAccounts(data.accounts || []);
-      if (data.error) setLocationsError(data.reason || data.error);
+      setLocationsLoaded(true);
+      if (data.error) {
+        if (data.error === 'quota_exceeded') {
+          setLocationsError('quota_exceeded');
+        } else {
+          setLocationsError(data.reason || data.error);
+        }
+      }
     } catch (e) {
       setLocationsError(String(e));
     } finally {
@@ -152,7 +161,7 @@ function GbpPageInner() {
     }
   }, []);
 
-  useEffect(() => { if (teamId && connected) loadGoogleLocations(teamId); }, [teamId, connected, loadGoogleLocations]);
+  // Don't auto-load locations — user clicks "Load" to avoid hitting Google API quota on every page view.
 
   // ── Posts ──
   const loadPosts = useCallback(async () => {
@@ -415,29 +424,44 @@ function GbpPageInner() {
           <>
             {/* Location picker banner */}
             {!hasLocation && (
-              <div className="mb-5 bg-amber-50 border border-amber-200 rounded-xl p-4">
-                <div className="flex items-start justify-between gap-3 mb-2">
-                  <p className="text-sm font-semibold text-amber-800">Select your Google Business location</p>
-                  <button onClick={() => loadGoogleLocations(teamId)} disabled={locationsLoading}
-                    className="flex-shrink-0 text-xs text-amber-700 hover:text-amber-900 underline disabled:opacity-50">
-                    {locationsLoading ? 'Loading…' : 'Retry'}
-                  </button>
+              <div className="mb-5 bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-amber-800">Select your Google Business location</p>
+                    <p className="text-xs text-amber-600 mt-0.5">Required to publish posts and sync reviews from Google.</p>
+                  </div>
+                  {!locationsLoaded && (
+                    <button onClick={() => loadGoogleLocations(teamId)} disabled={locationsLoading}
+                      className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50">
+                      {locationsLoading
+                        ? <><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin inline-block" /> Loading…</>
+                        : 'Load my locations'}
+                    </button>
+                  )}
                 </div>
-                <p className="text-xs text-amber-600 mb-3">
-                  Select your business location to enable publishing posts and syncing reviews from Google.
-                </p>
-                {locationsLoading ? (
-                  <div className="flex items-center gap-2 text-xs text-amber-600">
-                    <span className="w-3 h-3 border-2 border-amber-500 border-t-transparent rounded-full animate-spin inline-block" />
-                    Loading locations from Google…
+
+                {/* Quota error */}
+                {locationsError === 'quota_exceeded' && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700 space-y-1">
+                    <p className="font-semibold">Google API quota exceeded — too many requests this minute.</p>
+                    <p>Wait 1–2 minutes then click <button onClick={() => { setLocationsError(null); setLocationsLoaded(false); }} className="underline font-medium">Retry</button>, or paste your location ID below.</p>
                   </div>
-                ) : locationsError ? (
-                  <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                    <p className="font-semibold mb-0.5">Could not load locations:</p>
+                )}
+
+                {/* Other errors */}
+                {locationsError && locationsError !== 'quota_exceeded' && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700 space-y-1">
+                    <p className="font-semibold">Could not load locations from Google:</p>
                     <p className="font-mono break-all">{locationsError}</p>
-                    <p className="mt-1 text-red-600">If your Google token expired, <button onClick={handleConnect} className="underline font-medium">reconnect with Google</button>.</p>
+                    <p>
+                      <button onClick={() => { setLocationsError(null); setLocationsLoaded(false); }} className="underline mr-2">Retry</button>
+                      <button onClick={handleConnect} className="underline">Reconnect with Google</button>
+                    </p>
                   </div>
-                ) : allLocations.length > 0 ? (
+                )}
+
+                {/* Locations loaded successfully */}
+                {locationsLoaded && !locationsError && allLocations.length > 0 && (
                   <div className="flex flex-wrap gap-2">
                     {allLocations.map((loc, i) => (
                       <button key={i} onClick={() => handleSelectLocation(loc.v4LocationName)}
@@ -446,13 +470,38 @@ function GbpPageInner() {
                       </button>
                     ))}
                   </div>
-                ) : (
+                )}
+
+                {locationsLoaded && !locationsError && allLocations.length === 0 && (
                   <p className="text-xs text-amber-700">
-                    No locations found on this Google account. Make sure your Google account is connected to a{' '}
-                    <a href="https://business.google.com" target="_blank" rel="noreferrer" className="underline">Google Business Profile</a>.
-                    You can still create draft posts without a location.
+                    No locations found. Make sure your Google account has a{' '}
+                    <a href="https://business.google.com" target="_blank" rel="noreferrer" className="underline">verified Business Profile</a>.
+                    Or paste your location ID below.
                   </p>
                 )}
+
+                {/* Manual entry fallback — always available */}
+                <div className="border-t border-amber-200 pt-3">
+                  <p className="text-xs text-amber-700 font-medium mb-1.5">Or enter your location ID manually:</p>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={manualLocationId}
+                      onChange={e => setManualLocationId(e.target.value)}
+                      placeholder="accounts/123456789/locations/987654321"
+                      className="flex-1 border border-amber-300 bg-white rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    />
+                    <button
+                      onClick={() => { if (manualLocationId.trim()) handleSelectLocation(manualLocationId.trim()); }}
+                      disabled={!manualLocationId.trim()}
+                      className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-medium disabled:opacity-50 transition-colors">
+                      Use this
+                    </button>
+                  </div>
+                  <p className="text-xs text-amber-600 mt-1">
+                    Find it in <a href="https://business.google.com/dashboard" target="_blank" rel="noreferrer" className="underline">Business Profile Manager</a> → the URL contains your location ID.
+                  </p>
+                </div>
               </div>
             )}
 
@@ -632,22 +681,29 @@ function GbpPageInner() {
 
                 {/* Location selector */}
                 <div className="bg-white rounded-xl border border-gray-200 p-5">
-                  <h3 className="text-sm font-semibold text-gray-700 mb-1">Google Business Location</h3>
+                  <div className="flex items-center justify-between mb-1">
+                    <h3 className="text-sm font-semibold text-gray-700">Google Business Location</h3>
+                    <button onClick={() => loadGoogleLocations(teamId)} disabled={locationsLoading}
+                      className="text-xs text-indigo-600 hover:text-indigo-800 underline disabled:opacity-50">
+                      {locationsLoading ? 'Loading…' : 'Load from Google'}
+                    </button>
+                  </div>
                   <p className="text-xs text-gray-400 mb-3">Select which location to use for publishing posts and syncing reviews.</p>
                   {locationsLoading ? (
                     <p className="text-sm text-gray-400">Loading locations from Google…</p>
-                  ) : locationsError ? (
+                  ) : locationsError && locationsError !== 'quota_exceeded' ? (
                     <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">
-                      <p className="font-medium mb-1">Error loading locations</p>
-                      <p className="text-xs font-mono break-all mb-2">{locationsError}</p>
-                      <button onClick={() => loadGoogleLocations(teamId)} className="text-xs underline mr-3">Retry</button>
+                      <p className="font-medium mb-1">Error: {locationsError === 'quota_exceeded' ? 'Quota exceeded — wait 1–2 min and retry' : locationsError}</p>
+                      <button onClick={() => { setLocationsError(null); setLocationsLoaded(false); }} className="text-xs underline mr-3">Retry</button>
                       <button onClick={handleConnect} className="text-xs underline">Reconnect with Google</button>
                     </div>
-                  ) : allLocations.length === 0 ? (
+                  ) : allLocations.length === 0 && locationsLoaded ? (
                     <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
                       No locations found. Make sure your Google account is linked to a{' '}
                       <a href="https://business.google.com" target="_blank" rel="noreferrer" className="underline">Google Business Profile</a>.
                     </div>
+                  ) : allLocations.length === 0 ? (
+                    <p className="text-xs text-gray-400">Click "Load from Google" to fetch your business locations.</p>
                   ) : (
                     <div className="space-y-2">
                       {allLocations.map((loc, i) => (

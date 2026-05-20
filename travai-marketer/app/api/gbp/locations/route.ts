@@ -6,71 +6,78 @@ import {
   toV4LocationName,
 } from '@/lib/gbp';
 
+type LocationRow = { resourceName: string; v4LocationName: string; title?: string };
+type AccountRow = { accountName: string; accountDisplayName?: string; locations: LocationRow[] };
+
+async function fetchAccounts(teamId: string, forceRefresh = false): Promise<AccountRow[]> {
+  const accessToken = await getAccessTokenForTeam(teamId, { forceRefresh });
+  const accounts = await listGoogleAccounts(accessToken);
+
+  const result: AccountRow[] = [];
+  for (const account of accounts) {
+    if (!account.name) continue;
+    const locations = await listGoogleLocations(accessToken, account.name);
+    result.push({
+      accountName: account.name,
+      accountDisplayName: account.accountName,
+      locations: locations
+        .filter(l => typeof l.name === 'string')
+        .map(l => ({
+          resourceName: l.name,
+          v4LocationName: toV4LocationName(account.name, l.name),
+          title: l.title,
+        })),
+    });
+  }
+  return result;
+}
+
 /**
  * GET /api/gbp/locations?teamId=...
  * Lists Google Business Profile accounts and locations for the connected team.
+ * On 401 (expired token) automatically refreshes and retries once.
  */
 export async function GET(request: NextRequest) {
+  const { searchParams } = new URL(request.url);
+  const teamId = searchParams.get('teamId');
+
+  if (!teamId) {
+    return NextResponse.json({ error: 'Missing teamId parameter' }, { status: 400 });
+  }
+
   try {
-    const { searchParams } = new URL(request.url);
-    const teamId = searchParams.get('teamId');
-
-    if (!teamId) {
-      return NextResponse.json({ error: 'Missing teamId parameter' }, { status: 400 });
-    }
-
-    const accessToken = await getAccessTokenForTeam(teamId);
-    const accounts = await listGoogleAccounts(accessToken);
-
-    const result: Array<{
-      accountName: string;
-      accountDisplayName?: string;
-      locations: Array<{
-        resourceName: string;
-        v4LocationName: string;
-        title?: string;
-      }>;
-    }> = [];
-
-    for (const account of accounts) {
-      if (!account.name) {
-        continue;
+    let result: AccountRow[];
+    try {
+      result = await fetchAccounts(teamId, false);
+    } catch (firstErr) {
+      const msg = firstErr instanceof Error ? firstErr.message : String(firstErr);
+      // On 401/auth errors, force-refresh the token and retry once.
+      const isAuth = msg.includes('401') || /unauthorized|unauthenticated|invalid.credentials/i.test(msg);
+      if (isAuth) {
+        result = await fetchAccounts(teamId, true);
+      } else {
+        throw firstErr;
       }
-
-      const locations = await listGoogleLocations(accessToken, account.name);
-      result.push({
-        accountName: account.name,
-        accountDisplayName: account.accountName,
-        locations: locations
-          .filter((location) => typeof location.name === 'string')
-          .map((location) => ({
-            resourceName: location.name,
-            v4LocationName: toV4LocationName(account.name, location.name),
-            title: location.title,
-          })),
-      });
     }
-
     return NextResponse.json({ teamId, accounts: result }, { status: 200 });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
 
-    // Not-connected state should not be treated as a hard server error by the UI.
     if (
       message.includes('No business configuration found') ||
       message.includes('Google access is not connected')
     ) {
-      return NextResponse.json(
-        { teamId: null, accounts: [], connected: false, reason: message },
-        { status: 200 }
-      );
+      return NextResponse.json({ accounts: [], connected: false, reason: message }, { status: 200 });
     }
 
+    const isQuota = /quota|rate.limit|QPM|QPD/i.test(message);
     console.error('[GBP Locations] Error:', error);
-    // Return 200 with empty accounts + reason so the UI can surface the error
-    // instead of silently showing "No locations found".
     return NextResponse.json(
-      { accounts: [], error: 'Failed to fetch locations', reason: message },
+      {
+        accounts: [],
+        error: isQuota ? 'quota_exceeded' : 'fetch_failed',
+        reason: message,
+      },
       { status: 200 }
     );
   }
