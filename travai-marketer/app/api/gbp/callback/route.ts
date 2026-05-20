@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   decodeState,
   exchangeCodeForTokens,
+  getBusinessConfigByTeamId,
   listGoogleAccounts,
   listGoogleLocations,
   saveGoogleConnection,
@@ -62,33 +63,79 @@ export async function GET(request: NextRequest) {
     let cachedAccounts: CachedAccount[] = [];
     let autoSelectedLocationId: string | undefined;
 
+    // ── Strategy 1: googleLocations:search ─────────────────────────────────
+    // When the connected user IS the admin of a location, the search returns
+    // name: "accounts/{accountId}/locations/{locationId}" instead of
+    // name: "googleLocations/{placeId}".  This works without any GBP API
+    // quota approval — it uses a separate quota bucket.
     try {
-      const accounts = await listGoogleAccounts(tokens.access_token);
-      for (const account of accounts) {
-        if (!account.name) continue;
-        const locations = await listGoogleLocations(tokens.access_token, account.name);
-        const mappedLocations: CachedLocation[] = locations
-          .filter(l => typeof l.name === 'string')
-          .map(l => ({
-            resourceName: l.name,
-            v4LocationName: toV4LocationName(account.name, l.name),
-            title: l.title,
-          }));
-        cachedAccounts.push({
-          accountName: account.name,
-          accountDisplayName: account.accountName,
-          locations: mappedLocations,
-        });
+      const businessConfig = await getBusinessConfigByTeamId(parsedState.teamId);
+      const businessName = businessConfig?.businessName || '';
+      if (businessName) {
+        const searchRes = await fetch(
+          'https://mybusinessbusinessinformation.googleapis.com/v1/googleLocations:search',
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${tokens.access_token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ query: businessName, pageSize: 5 }),
+          }
+        );
+        const searchData: { googleLocations?: Array<{ name?: string; location?: { title?: string } }> } =
+          await searchRes.json();
+        for (const loc of searchData.googleLocations || []) {
+          // Only the admin's token returns the full accounts/.../locations/... path
+          if (loc.name?.startsWith('accounts/')) {
+            const v4Location = loc.name;
+            const accountPart = v4Location.split('/locations/')[0];
+            const title = loc.location?.title || businessName;
+            cachedAccounts = [{
+              accountName: accountPart,
+              accountDisplayName: title,
+              locations: [{ resourceName: v4Location, v4LocationName: v4Location, title }],
+            }];
+            autoSelectedLocationId = v4Location;
+            console.log('[GBP Callback] Location auto-detected via search:', v4Location);
+            break;
+          }
+        }
       }
+    } catch (searchErr) {
+      console.warn('[GBP Callback] googleLocations:search failed:', searchErr);
+    }
 
-      // Auto-select when there is exactly one location across all accounts.
-      const allLocations = cachedAccounts.flatMap(a => a.locations);
-      if (allLocations.length === 1) {
-        autoSelectedLocationId = allLocations[0].v4LocationName;
+    // ── Strategy 2: Account Management API (quota-gated, may return 429) ──
+    if (cachedAccounts.length === 0) {
+      try {
+        const accounts = await listGoogleAccounts(tokens.access_token);
+        for (const account of accounts) {
+          if (!account.name) continue;
+          const locations = await listGoogleLocations(tokens.access_token, account.name);
+          const mappedLocations: CachedLocation[] = locations
+            .filter(l => typeof l.name === 'string')
+            .map(l => ({
+              resourceName: l.name,
+              v4LocationName: toV4LocationName(account.name, l.name),
+              title: l.title,
+            }));
+          cachedAccounts.push({
+            accountName: account.name,
+            accountDisplayName: account.accountName,
+            locations: mappedLocations,
+          });
+        }
+
+        // Auto-select when there is exactly one location across all accounts.
+        const allLocations = cachedAccounts.flatMap(a => a.locations);
+        if (allLocations.length === 1) {
+          autoSelectedLocationId = allLocations[0].v4LocationName;
+        }
+      } catch (locationErr) {
+        console.warn('[GBP Callback] Location discovery via Account Management API failed (quota?):', locationErr);
+        // Continue — tokens are still saved; user can refresh later.
       }
-    } catch (locationErr) {
-      console.warn('[GBP Callback] Location discovery failed (quota?):', locationErr);
-      // Continue — tokens are still saved; user can refresh later.
     }
 
     const locationsJson =

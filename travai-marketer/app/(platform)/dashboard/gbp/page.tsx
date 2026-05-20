@@ -156,8 +156,10 @@ function GbpPageInner() {
     }
   }, []);
 
-  // Auto-load locations on connect — safe because the route serves from DB cache, not Google API.
-  useEffect(() => { if (teamId && connected) loadGoogleLocations(teamId); }, [teamId, connected, loadGoogleLocations]);
+  // Load locations from cache on connect — reads DB only, no Google API call.
+  useEffect(() => {
+    if (teamId && connected) loadGoogleLocations(teamId, false);
+  }, [teamId, connected, loadGoogleLocations]);
 
   // ── Posts ──
   const loadPosts = useCallback(async () => {
@@ -442,9 +444,17 @@ function GbpPageInner() {
 
                 {/* Quota error */}
                 {!locationsLoading && locationsError === 'quota_exceeded' && (
-                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700">
-                    <p className="font-semibold mb-1">Google API quota exceeded (too many requests this minute).</p>
-                    <p>Wait 60 seconds then click <button onClick={() => loadGoogleLocations(teamId, true)} className="underline font-medium">Refresh from Google</button>, or paste your location ID in the field below.</p>
+                  <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 text-xs text-orange-800">
+                    <p className="font-semibold mb-1">Google Business Profile API not yet enabled for this project</p>
+                    <p className="mb-2">
+                      This is a one-time setup issue. Either{' '}
+                      <strong>reconnect with the correct owner Gmail account</strong> (location will auto-detect),
+                      or enter the location ID manually below.
+                    </p>
+                    <button onClick={handleConnect}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg font-medium transition-colors">
+                      ↻ Reconnect with the correct Google account
+                    </button>
                   </div>
                 )}
 
@@ -470,15 +480,29 @@ function GbpPageInner() {
                 )}
 
                 {!locationsLoading && !locationsError && locationsLoaded && allLocations.length === 0 && (
-                  <p className="text-xs text-amber-700">
-                    No locations found on this Google account. Use the manual entry below or{' '}
-                    <button onClick={handleConnect} className="underline">reconnect</button>.
-                  </p>
+                  <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 text-xs text-orange-800">
+                    <p className="font-semibold mb-1">Wrong Google account connected</p>
+                    <p className="mb-2">
+                      The connected Google account does not manage any Google Business Profile.
+                      You need to reconnect using the Gmail account that is listed as the{' '}
+                      <strong>owner or manager</strong> of your business on Google.
+                    </p>
+                    <button onClick={handleConnect}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg font-medium transition-colors">
+                      ↻ Reconnect with the correct Google account
+                    </button>
+                  </div>
                 )}
 
                 {/* Manual entry — always visible */}
                 <div className="border-t border-amber-200 pt-3">
-                  <p className="text-xs text-amber-700 font-medium mb-1.5">Or enter your location ID manually:</p>
+                  <p className="text-xs text-amber-700 font-medium mb-1">Enter location ID manually (advanced):</p>
+                  <p className="text-xs text-amber-600 mb-1.5">
+                    Open <a href="https://business.google.com" target="_blank" rel="noreferrer" className="underline font-medium">business.google.com</a>,
+                    click your business, and copy the numbers from the URL:{' '}
+                    <span className="font-mono bg-amber-100 px-1 rounded">…/n/<strong>ACCOUNT_ID</strong>/location/<strong>LOCATION_ID</strong>/…</span>{' '}
+                    then enter <span className="font-mono bg-amber-100 px-1 rounded">accounts/ACCOUNT_ID/locations/LOCATION_ID</span> below.
+                  </p>
                   <div className="flex gap-2">
                     <input type="text" value={manualLocationId} onChange={e => setManualLocationId(e.target.value)}
                       placeholder="accounts/123456789/locations/987654321"
@@ -489,9 +513,6 @@ function GbpPageInner() {
                       Use this
                     </button>
                   </div>
-                  <p className="text-xs text-amber-600 mt-1">
-                    Find it in <a href="https://business.google.com" target="_blank" rel="noreferrer" className="underline">Business Profile Manager</a> — the URL shows your location ID.
-                  </p>
                 </div>
               </div>
             )}
