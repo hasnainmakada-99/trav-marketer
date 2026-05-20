@@ -53,6 +53,8 @@ export default function LeadsPage() {
   const [updating, setUpdating] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [expandedNotes, setExpandedNotes] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<{ created: number; updated: number } | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -81,6 +83,21 @@ export default function LeadsPage() {
     pollRef.current = setInterval(() => fetchLeads(true), POLL_MS);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [fetchLeads]);
+
+  async function syncFromWhatsApp() {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const res = await fetch('/api/leads/backfill', { method: 'POST' });
+      const data = await res.json();
+      setSyncResult({ created: data.created || 0, updated: data.updated || 0 });
+      await fetchLeads();
+    } catch {
+      setSyncResult({ created: 0, updated: 0 });
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   async function updateStatus(id: string, status: LeadStatus) {
     setUpdating(id);
@@ -122,12 +139,33 @@ export default function LeadsPage() {
               {lastRefresh && ` · updated ${lastRefresh.toLocaleTimeString('en-IN', { timeStyle: 'short' })}`}
             </p>
           </div>
-          <button
-            onClick={() => fetchLeads()}
-            className="self-start sm:self-auto px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 transition-colors"
-          >
-            Refresh
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            {syncResult && (
+              <span className="text-xs text-emerald-600 font-medium bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-200">
+                ✓ {syncResult.created} new · {syncResult.updated} updated
+              </span>
+            )}
+            <button
+              onClick={syncFromWhatsApp}
+              disabled={syncing}
+              className="px-4 py-2 bg-green-600 text-white rounded-xl text-sm font-semibold hover:bg-green-700 transition-colors disabled:opacity-60 flex items-center gap-2"
+            >
+              {syncing ? (
+                <>
+                  <span className="animate-spin inline-block w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full" />
+                  Syncing…
+                </>
+              ) : (
+                'Sync from WhatsApp'
+              )}
+            </button>
+            <button
+              onClick={() => fetchLeads()}
+              className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 transition-colors"
+            >
+              Refresh
+            </button>
+          </div>
         </div>
 
         {/* Stat chips */}
@@ -190,8 +228,15 @@ export default function LeadsPage() {
             <p className="text-4xl mb-3">🎯</p>
             <p className="font-semibold text-gray-700 text-lg">No leads yet</p>
             <p className="text-sm text-gray-400 mt-1">
-              When customers share their name on WhatsApp, leads appear here automatically.
+              When customers message on WhatsApp, they appear here automatically.
             </p>
+            <button
+              onClick={syncFromWhatsApp}
+              disabled={syncing}
+              className="mt-4 px-5 py-2.5 bg-green-600 text-white rounded-xl text-sm font-semibold hover:bg-green-700 transition-colors disabled:opacity-60"
+            >
+              {syncing ? 'Syncing…' : 'Sync existing WhatsApp contacts'}
+            </button>
           </div>
         ) : (
           /* Desktop table */
