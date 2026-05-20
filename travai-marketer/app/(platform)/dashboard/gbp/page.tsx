@@ -4,699 +4,505 @@ import { useState, useEffect, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getCurrentUser } from '@/lib/appwrite-client';
 
-// ─── Types ───────────────────────────────────────────────────────────────────
-
-interface AppwriteUser {
-  $id: string;
-  name: string;
-  email: string;
-}
-
+interface AppwriteUser { $id: string; name: string; email: string }
 interface GbpPost {
-  $id: string;
-  teamId: string;
-  title: string;
-  content: string;
-  status: 'draft' | 'posted' | 'failed';
-  googlePostId: string | null;
-  postedAt: string | null;
-  type: string;
-  createdBy: string;
-  createdAt: string;
+  $id: string; teamId: string; title: string; content: string;
+  status: 'draft' | 'posted' | 'failed'; googlePostId: string | null;
+  postedAt: string | null; type: string; createdBy: string; createdAt: string;
 }
-
 interface GbpReview {
-  $id?: string;
-  name?: string;
-  reviewId?: string;
-  googleReviewId?: string;
-  reviewer: string;
-  rating: number;
-  reviewText: string;
-  reply: string | null;
-  replyStatus: 'pending' | 'replied';
-  createdAt: string;
+  $id?: string; name?: string; reviewId?: string; googleReviewId?: string;
+  reviewer: string; rating: number; reviewText: string;
+  reply: string | null; replyStatus: 'pending' | 'replied'; createdAt: string;
 }
-
-interface GbpLocation {
-  accountName: string;
-  accountDisplayName?: string;
-  locations: Array<{
-    resourceName: string;
-    v4LocationName: string;
-    title?: string;
-  }>;
+interface GbpAccountLocation {
+  resourceName: string; v4LocationName: string; title?: string;
 }
-
-type ActiveTab = 'posts' | 'reviews' | 'setup';
-
-// ─── Star Rating Component ────────────────────────────────────────────────────
+interface GbpAccount {
+  accountName: string; accountDisplayName?: string; locations: GbpAccountLocation[];
+}
 
 function StarRating({ rating }: { rating: number }) {
   return (
-    <div className="flex items-center gap-0.5">
-      {[1, 2, 3, 4, 5].map((star) => (
-        <svg
-          key={star}
-          className={`w-4 h-4 ${star <= rating ? 'text-yellow-400' : 'text-gray-200'}`}
-          fill="currentColor"
-          viewBox="0 0 20 20"
-        >
-          <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+    <div className="flex gap-0.5">
+      {[1,2,3,4,5].map(s => (
+        <svg key={s} className={`w-4 h-4 ${s <= rating ? 'text-yellow-400' : 'text-gray-200'}`} fill="currentColor" viewBox="0 0 20 20">
+          <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
         </svg>
       ))}
     </div>
   );
 }
 
-// ─── Status Badge ─────────────────────────────────────────────────────────────
-
-function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
+function Badge({ status }: { status: string }) {
+  const map: Record<string, string> = {
     draft: 'bg-yellow-50 text-yellow-700 border-yellow-200',
     posted: 'bg-green-50 text-green-700 border-green-200',
     failed: 'bg-red-50 text-red-700 border-red-200',
     pending: 'bg-orange-50 text-orange-700 border-orange-200',
     replied: 'bg-green-50 text-green-700 border-green-200',
   };
-  const labels: Record<string, string> = {
-    draft: 'Draft',
-    posted: 'Posted',
-    failed: 'Failed',
-    pending: 'Needs Reply',
-    replied: 'Replied',
-  };
+  const labels: Record<string, string> = { draft: 'Draft', posted: 'Live', failed: 'Failed', pending: 'Needs Reply', replied: 'Replied' };
   return (
-    <span
-      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${
-        styles[status] || 'bg-gray-50 text-gray-600 border-gray-200'
-      }`}
-    >
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${map[status] || 'bg-gray-50 text-gray-600 border-gray-200'}`}>
       {labels[status] || status}
     </span>
   );
 }
 
-// ─── Main Page ────────────────────────────────────────────────────────────────
+type Tab = 'posts' | 'reviews' | 'setup';
 
 function GbpPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  // Auth & team
   const [user, setUser] = useState<AppwriteUser | null>(null);
-  const [teamId, setTeamId] = useState<string>('');
+  const [teamId, setTeamId] = useState('');
 
-  // Connection state
-  const [isConnected, setIsConnected] = useState(false);
-  const [connectionLoading, setConnectionLoading] = useState(true);
-  const [locations, setLocations] = useState<GbpLocation[]>([]);
+  // Connection
+  const [connected, setConnected] = useState(false);
+  const [hasLocation, setHasLocation] = useState(false);
+  const [savedLocationId, setSavedLocationId] = useState<string | null>(null);
+  const [statusLoading, setStatusLoading] = useState(true);
 
-  // UI state
-  const [activeTab, setActiveTab] = useState<ActiveTab>('posts');
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  // Locations from Google API
+  const [accounts, setAccounts] = useState<GbpAccount[]>([]);
+  const [locationsLoading, setLocationsLoading] = useState(false);
 
-  // Posts state
+  // UI
+  const [tab, setTab] = useState<Tab>('posts');
+  const [toast, setToast] = useState<{msg: string; ok: boolean} | null>(null);
+
+  // Posts
   const [posts, setPosts] = useState<GbpPost[]>([]);
   const [postsLoading, setPostsLoading] = useState(false);
   const [showPostModal, setShowPostModal] = useState(false);
-  const [postForm, setPostForm] = useState({
-    title: '',
-    content: '',
-    keywords: '',
-    autoGenerate: true,
-    publishNow: false,
-  });
+  const [postForm, setPostForm] = useState({ title: '', content: '', keywords: '', autoGenerate: true, publishNow: false });
   const [postSubmitting, setPostSubmitting] = useState(false);
 
-  // Reviews state
+  // Auto-generate single post
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiPostPreview, setAiPostPreview] = useState('');
+
+  // Reviews
   const [reviews, setReviews] = useState<GbpReview[]>([]);
   const [reviewsLoading, setReviewsLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [autoReplying, setAutoReplying] = useState(false);
-  const [replyModal, setReplyModal] = useState<{
-    review: GbpReview;
-    mode: 'ai' | 'custom';
-    text: string;
-    loading: boolean;
-  } | null>(null);
+  const [replyModal, setReplyModal] = useState<{review: GbpReview; text: string; loading: boolean} | null>(null);
 
-  // ─── Utilities ──────────────────────────────────────────────────────────────
-
-  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
+  const flash = (msg: string, ok = true) => {
+    setToast({ msg, ok });
+    setTimeout(() => setToast(null), 4500);
   };
 
-  // ─── Auth ────────────────────────────────────────────────────────────────────
-
+  // ── Auth ──
   useEffect(() => {
-    getCurrentUser().then((u) => {
-      if (!u) {
-        router.push('/login');
-        return;
-      }
-      const userData = u as AppwriteUser;
-      setUser(userData);
-      setTeamId(userData.$id);
+    getCurrentUser().then(u => {
+      if (!u) { router.push('/login'); return; }
+      const ud = u as AppwriteUser;
+      setUser(ud);
+      setTeamId(ud.$id);
     });
   }, [router]);
 
-  // ─── Handle OAuth callback params ────────────────────────────────────────────
-
+  // ── OAuth callback toast ──
   useEffect(() => {
-    const connected = searchParams.get('connected');
-    if (connected === 'true') {
-      showToast('Google Business Profile connected successfully!', 'success');
-    } else if (connected === 'false') {
-      const reason = searchParams.get('reason');
-      showToast(`Connection failed: ${reason || 'Unknown error'}`, 'error');
-    }
+    const c = searchParams.get('connected');
+    if (c === 'true') flash('Google Business Profile connected!');
+    else if (c === 'false') flash(`Connection failed: ${searchParams.get('reason') || 'Unknown error'}`, false);
   }, [searchParams]);
 
-  // ─── Check Connection ────────────────────────────────────────────────────────
-
-  const checkConnection = useCallback(async (tid: string) => {
-    setConnectionLoading(true);
+  // ── Status check (DB only, fast) ──
+  const checkStatus = useCallback(async (tid: string) => {
+    setStatusLoading(true);
     try {
-      const res = await fetch(`/api/gbp/locations?teamId=${encodeURIComponent(tid)}`);
-      if (res.ok) {
-        const data = await res.json();
-        const accounts: GbpLocation[] = data.accounts || [];
-        const hasLocations = accounts.some((a) => a.locations.length > 0);
-        setLocations(accounts);
-        setIsConnected(hasLocations);
-      } else {
-        setIsConnected(false);
-      }
+      const res = await fetch(`/api/gbp/status?teamId=${encodeURIComponent(tid)}`);
+      const data = await res.json();
+      setConnected(!!data.connected);
+      setHasLocation(!!data.hasLocation);
+      setSavedLocationId(data.googleLocationId || null);
     } catch {
-      setIsConnected(false);
+      setConnected(false);
     } finally {
-      setConnectionLoading(false);
+      setStatusLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    if (teamId) {
-      checkConnection(teamId);
+  useEffect(() => { if (teamId) checkStatus(teamId); }, [teamId, checkStatus]);
+
+  // ── Load Google locations (only when connected, separate from connection check) ──
+  const loadGoogleLocations = useCallback(async (tid: string) => {
+    setLocationsLoading(true);
+    try {
+      const res = await fetch(`/api/gbp/locations?teamId=${encodeURIComponent(tid)}`);
+      const data = await res.json();
+      setAccounts(data.accounts || []);
+    } catch { /* ignore */ } finally {
+      setLocationsLoading(false);
     }
-  }, [teamId, checkConnection]);
+  }, []);
 
-  // ─── Load Posts ───────────────────────────────────────────────────────────────
+  useEffect(() => { if (teamId && connected) loadGoogleLocations(teamId); }, [teamId, connected, loadGoogleLocations]);
 
+  // ── Posts ──
   const loadPosts = useCallback(async () => {
     if (!teamId) return;
     setPostsLoading(true);
     try {
       const res = await fetch(`/api/gbp/posts?teamId=${encodeURIComponent(teamId)}&limit=50`);
-      if (res.ok) {
-        const data = await res.json();
-        setPosts(data.documents || []);
-      }
-    } catch (e) {
-      console.error('Failed to load posts:', e);
-    } finally {
-      setPostsLoading(false);
-    }
+      if (res.ok) { const d = await res.json(); setPosts(d.documents || []); }
+    } finally { setPostsLoading(false); }
   }, [teamId]);
 
-  // ─── Load Reviews ─────────────────────────────────────────────────────────────
-
+  // ── Reviews ──
   const loadReviews = useCallback(async () => {
     if (!teamId) return;
     setReviewsLoading(true);
     try {
       const res = await fetch(`/api/gbp/reviews?teamId=${encodeURIComponent(teamId)}&limit=50`);
-      if (res.ok) {
-        const data = await res.json();
-        setReviews(data.documents || []);
-      }
-    } catch (e) {
-      console.error('Failed to load reviews:', e);
-    } finally {
-      setReviewsLoading(false);
-    }
+      if (res.ok) { const d = await res.json(); setReviews(d.documents || []); }
+    } finally { setReviewsLoading(false); }
   }, [teamId]);
 
-  // Load data when tab changes
   useEffect(() => {
-    if (!teamId || !isConnected) return;
-    if (activeTab === 'posts') loadPosts();
-    if (activeTab === 'reviews') loadReviews();
-  }, [activeTab, teamId, isConnected, loadPosts, loadReviews]);
-
-  // ─── Connect GBP ─────────────────────────────────────────────────────────────
+    if (!teamId || !connected) return;
+    if (tab === 'posts') loadPosts();
+    if (tab === 'reviews') loadReviews();
+  }, [tab, teamId, connected, loadPosts, loadReviews]);
 
   const handleConnect = () => {
     if (!teamId) return;
-    const url = `/api/gbp/connect?teamId=${encodeURIComponent(teamId)}&redirectTo=/dashboard/gbp`;
-    window.location.href = url;
+    window.location.href = `/api/gbp/connect?teamId=${encodeURIComponent(teamId)}&redirectTo=/dashboard/gbp`;
   };
 
-  // ─── Create Post ─────────────────────────────────────────────────────────────
-
-  const handleCreatePost = async () => {
-    if (!teamId || !user) return;
-    if (!postForm.autoGenerate && !postForm.content.trim()) {
-      showToast('Please enter post content or enable AI generation.', 'error');
-      return;
-    }
-
-    setPostSubmitting(true);
+  // ── Select & save location ──
+  const handleSelectLocation = async (v4LocationName: string) => {
     try {
-      const body: Record<string, unknown> = {
-        teamId,
-        title: postForm.title || 'GBP Post',
-        content: postForm.content,
-        type: postForm.autoGenerate ? 'auto_generated' : 'manual',
-        createdBy: user.$id,
-        autoGenerate: postForm.autoGenerate,
-        keywords: postForm.keywords
-          .split(',')
-          .map((k) => k.trim())
-          .filter(Boolean),
-        publishNow: postForm.publishNow,
-      };
-
-      const res = await fetch('/api/gbp/posts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        showToast(
-          postForm.publishNow
-            ? 'Post published to Google Business Profile!'
-            : 'Post saved as draft.',
-          'success'
-        );
-        setShowPostModal(false);
-        setPostForm({ title: '', content: '', keywords: '', autoGenerate: true, publishNow: false });
-        setPosts((prev) => [data, ...prev]);
-      } else {
-        const err = await res.json();
-        showToast(err.error || 'Failed to create post.', 'error');
-      }
-    } catch (e) {
-      showToast('Network error while creating post.', 'error');
-    } finally {
-      setPostSubmitting(false);
-    }
-  };
-
-  // ─── Publish Draft Post ───────────────────────────────────────────────────────
-
-  const handlePublishDraft = async (post: GbpPost) => {
-    if (!teamId) return;
-    try {
-      const res = await fetch('/api/gbp/posts', {
+      await fetch('/api/gbp/status', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ postId: post.$id, status: 'posted', publishNow: true }),
+        body: JSON.stringify({ teamId, googleLocationId: v4LocationName }),
       });
+      setSavedLocationId(v4LocationName);
+      setHasLocation(true);
+      flash('Location saved! Posts and reviews will now use this location.');
+    } catch {
+      flash('Failed to save location', false);
+    }
+  };
+
+  // ── AI Generate post preview ──
+  const handleAiGeneratePreview = async () => {
+    setAiGenerating(true);
+    setAiPostPreview('');
+    try {
+      const body = {
+        teamId, title: postForm.title || 'AI Travel Post',
+        content: '', type: 'auto_generated', createdBy: user?.$id,
+        autoGenerate: true,
+        keywords: postForm.keywords.split(',').map(k => k.trim()).filter(Boolean),
+        publishNow: false,
+      };
+      const res = await fetch('/api/gbp/posts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       if (res.ok) {
-        showToast('Post published successfully!', 'success');
+        const d = await res.json();
+        setAiPostPreview(d.content || '');
+        setPostForm(p => ({ ...p, content: d.content || '', autoGenerate: false }));
+        flash('AI content generated! Edit if needed, then post.');
         loadPosts();
       } else {
-        const err = await res.json();
-        showToast(err.error || 'Failed to publish post.', 'error');
+        const e = await res.json();
+        flash(e.error || 'AI generation failed', false);
       }
-    } catch {
-      showToast('Network error.', 'error');
-    }
+    } finally { setAiGenerating(false); }
   };
 
-  // ─── Delete Post ─────────────────────────────────────────────────────────────
-
-  const handleDeletePost = async (postId: string) => {
-    if (!confirm('Delete this post? This cannot be undone.')) return;
+  // ── Create post ──
+  const handleCreatePost = async () => {
+    if (!user) return;
+    if (!postForm.autoGenerate && !postForm.content.trim()) { flash('Enter content or use AI Generate', false); return; }
+    setPostSubmitting(true);
     try {
-      const res = await fetch(`/api/gbp/posts?postId=${encodeURIComponent(postId)}`, {
-        method: 'DELETE',
-      });
+      const body = {
+        teamId, title: postForm.title || 'GBP Post', content: postForm.content,
+        type: postForm.autoGenerate ? 'auto_generated' : 'manual', createdBy: user.$id,
+        autoGenerate: postForm.autoGenerate,
+        keywords: postForm.keywords.split(',').map(k => k.trim()).filter(Boolean),
+        publishNow: postForm.publishNow,
+        googleLocationName: savedLocationId,
+      };
+      const res = await fetch('/api/gbp/posts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       if (res.ok) {
-        showToast('Post deleted.', 'success');
-        setPosts((prev) => prev.filter((p) => p.$id !== postId));
+        flash(postForm.publishNow ? 'Post published to Google!' : 'Post saved as draft.');
+        setShowPostModal(false);
+        setPostForm({ title: '', content: '', keywords: '', autoGenerate: true, publishNow: false });
+        setAiPostPreview('');
+        loadPosts();
       } else {
-        showToast('Failed to delete post.', 'error');
+        const e = await res.json();
+        flash(e.error || 'Failed to create post', false);
       }
-    } catch {
-      showToast('Network error.', 'error');
-    }
+    } finally { setPostSubmitting(false); }
   };
 
-  // ─── Sync Reviews from Google ─────────────────────────────────────────────────
+  // ── Publish draft ──
+  const handlePublishDraft = async (post: GbpPost) => {
+    try {
+      const res = await fetch('/api/gbp/posts', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ postId: post.$id, status: 'posted', publishNow: true }),
+      });
+      if (res.ok) { flash('Published!'); loadPosts(); }
+      else { const e = await res.json(); flash(e.error || 'Failed', false); }
+    } catch { flash('Network error', false); }
+  };
 
+  // ── Delete post ──
+  const handleDeletePost = async (postId: string) => {
+    if (!confirm('Delete this post?')) return;
+    try {
+      const res = await fetch(`/api/gbp/posts?postId=${encodeURIComponent(postId)}`, { method: 'DELETE' });
+      if (res.ok) { flash('Deleted.'); setPosts(p => p.filter(x => x.$id !== postId)); }
+    } catch { flash('Network error', false); }
+  };
+
+  // ── Sync reviews ──
   const handleSyncReviews = async () => {
-    if (!teamId) return;
     setSyncing(true);
     try {
-      const res = await fetch(
-        `/api/gbp/reviews?teamId=${encodeURIComponent(teamId)}&syncFromGoogle=true`
-      );
+      const res = await fetch(`/api/gbp/reviews?teamId=${encodeURIComponent(teamId)}&syncFromGoogle=true`);
       if (res.ok) {
-        const data = await res.json();
-        showToast(`Synced ${data.reviews?.length || 0} reviews from Google.`, 'success');
+        const d = await res.json();
+        flash(`Synced ${d.reviews?.length || 0} reviews from Google.`);
         loadReviews();
       } else {
-        const err = await res.json();
-        showToast(err.error || 'Failed to sync reviews.', 'error');
+        const e = await res.json();
+        flash(e.error || 'Sync failed', false);
       }
-    } catch {
-      showToast('Network error.', 'error');
-    } finally {
-      setSyncing(false);
-    }
+    } finally { setSyncing(false); }
   };
 
-  // ─── Auto-Reply All Pending Reviews ───────────────────────────────────────────
-
+  // ── Auto-reply all ──
   const handleAutoReplyAll = async () => {
-    const pending = reviews.filter((r) => r.replyStatus === 'pending');
-    if (pending.length === 0) {
-      showToast('No pending reviews to reply to.', 'error');
-      return;
-    }
-    if (!confirm(`Auto-generate and publish AI replies for ${pending.length} pending review(s)?`)) {
-      return;
-    }
+    const pending = reviews.filter(r => r.replyStatus === 'pending');
+    if (!pending.length) { flash('No pending reviews.', false); return; }
+    if (!confirm(`Auto-generate and publish AI replies for ${pending.length} review(s)?`)) return;
     setAutoReplying(true);
     try {
       const res = await fetch('/api/gbp/reviews', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ teamId, autoReplyAll: true }),
       });
       if (res.ok) {
-        const data = await res.json();
-        showToast(`AI replies sent to ${data.replied || 0} reviews!`, 'success');
+        const d = await res.json();
+        flash(`AI replied to ${d.replied || 0} reviews!`);
         loadReviews();
       } else {
-        const err = await res.json();
-        showToast(err.error || 'Auto-reply failed.', 'error');
+        const e = await res.json();
+        flash(e.error || 'Auto-reply failed', false);
       }
-    } catch {
-      showToast('Network error.', 'error');
-    } finally {
-      setAutoReplying(false);
-    }
+    } finally { setAutoReplying(false); }
   };
 
-  // ─── Open Reply Modal ─────────────────────────────────────────────────────────
-
-  const openReplyModal = (review: GbpReview) => {
-    setReplyModal({
-      review,
-      mode: 'ai',
-      text: '',
-      loading: false,
-    });
-  };
-
-  // ─── Generate AI Reply ────────────────────────────────────────────────────────
-
+  // ── Generate single AI reply ──
   const handleGenerateAiReply = async () => {
-    if (!replyModal || !teamId) return;
-    setReplyModal((prev) => prev && { ...prev, loading: true });
+    if (!replyModal) return;
+    setReplyModal(p => p && ({ ...p, loading: true }));
     try {
       const res = await fetch('/api/gbp/reviews', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          reviewId: replyModal.review.$id || replyModal.review.reviewId,
-          teamId,
-          autoGenerate: true,
-          publishNow: false,
-        }),
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reviewId: replyModal.review.$id || replyModal.review.reviewId, teamId, autoGenerate: true, publishNow: false }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        setReplyModal((prev) => prev && { ...prev, text: data.reply || '', loading: false });
-      } else {
-        const err = await res.json();
-        showToast(err.error || 'Failed to generate reply.', 'error');
-        setReplyModal((prev) => prev && { ...prev, loading: false });
-      }
-    } catch {
-      showToast('Network error.', 'error');
-      setReplyModal((prev) => prev && { ...prev, loading: false });
-    }
+      if (res.ok) { const d = await res.json(); setReplyModal(p => p && ({ ...p, text: d.reply || '', loading: false })); }
+      else { flash('Failed to generate reply', false); setReplyModal(p => p && ({ ...p, loading: false })); }
+    } catch { setReplyModal(p => p && ({ ...p, loading: false })); }
   };
 
-  // ─── Submit Reply ─────────────────────────────────────────────────────────────
-
+  // ── Submit reply ──
   const handleSubmitReply = async () => {
-    if (!replyModal || !replyModal.text.trim() || !teamId) return;
-    setReplyModal((prev) => prev && { ...prev, loading: true });
+    if (!replyModal?.text.trim()) return;
+    setReplyModal(p => p && ({ ...p, loading: true }));
     try {
       const res = await fetch('/api/gbp/reviews', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          reviewId: replyModal.review.$id || replyModal.review.reviewId,
-          teamId,
-          autoGenerate: false,
-          customReply: replyModal.text,
-          publishNow: true,
-        }),
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reviewId: replyModal.review.$id || replyModal.review.reviewId, teamId, autoGenerate: false, customReply: replyModal.text, publishNow: true }),
       });
-      if (res.ok) {
-        showToast('Reply published to Google!', 'success');
-        setReplyModal(null);
-        loadReviews();
-      } else {
-        const err = await res.json();
-        showToast(err.error || 'Failed to publish reply.', 'error');
-        setReplyModal((prev) => prev && { ...prev, loading: false });
-      }
-    } catch {
-      showToast('Network error.', 'error');
-      setReplyModal((prev) => prev && { ...prev, loading: false });
-    }
+      if (res.ok) { flash('Reply published to Google!'); setReplyModal(null); loadReviews(); }
+      else { const e = await res.json(); flash(e.error || 'Failed', false); setReplyModal(p => p && ({ ...p, loading: false })); }
+    } catch { setReplyModal(p => p && ({ ...p, loading: false })); }
   };
 
-  // ─── Derived stats ────────────────────────────────────────────────────────────
+  const allLocations = accounts.flatMap(a => a.locations.map(l => ({ ...l, accountName: a.accountName })));
+  const postStats = { total: posts.length, live: posts.filter(p => p.status === 'posted').length, drafts: posts.filter(p => p.status === 'draft').length };
+  const reviewStats = { total: reviews.length, pending: reviews.filter(r => r.replyStatus === 'pending').length, avg: reviews.length ? (reviews.reduce((s, r) => s + (r.rating || 0), 0) / reviews.length).toFixed(1) : '—' };
 
-  const postStats = {
-    total: posts.length,
-    posted: posts.filter((p) => p.status === 'posted').length,
-    drafts: posts.filter((p) => p.status === 'draft').length,
-  };
-
-  const reviewStats = {
-    total: reviews.length,
-    pending: reviews.filter((r) => r.replyStatus === 'pending').length,
-    avgRating:
-      reviews.length > 0
-        ? (reviews.reduce((sum, r) => sum + (r.rating || 0), 0) / reviews.length).toFixed(1)
-        : '—',
-  };
-
-  const connectedLocation =
-    locations.flatMap((a) => a.locations)[0];
-
-  // ─── Loading skeleton ─────────────────────────────────────────────────────────
-
-  if (!user || connectionLoading) {
+  if (!user || statusLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-50">
         <div className="text-center">
           <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600 mb-4" />
-          <p className="text-sm text-gray-500">Loading Google Business Profile...</p>
+          <p className="text-sm text-gray-500">Loading Google Business Profile…</p>
         </div>
       </div>
     );
   }
 
-  // ─── Render ───────────────────────────────────────────────────────────────────
-
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Toast */}
       {toast && (
-        <div
-          className={`fixed top-4 right-4 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg text-sm font-medium transition-all ${
-            toast.type === 'success'
-              ? 'bg-green-600 text-white'
-              : 'bg-red-600 text-white'
-          }`}
-        >
-          <span>{toast.type === 'success' ? '✓' : '✕'}</span>
-          <span>{toast.message}</span>
+        <div className={`fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg text-sm font-medium ${toast.ok ? 'bg-green-600 text-white' : 'bg-red-600 text-white'}`}>
+          {toast.ok ? '✓' : '✕'} {toast.msg}
         </div>
       )}
 
-      {/* Page Header */}
+      {/* Header */}
       <div className="bg-white border-b border-gray-200 px-6 py-4">
-        <div className="max-w-6xl mx-auto">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-                <span>🌐</span> Google Business Profile
-              </h1>
-              <p className="text-sm text-gray-500 mt-0.5">
-                Manage posts, reviews, and SEO for your Google listing
-              </p>
-            </div>
-            {isConnected && connectedLocation && (
-              <div className="hidden sm:flex items-center gap-2 text-sm bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded-full">
-                <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
-                <span className="truncate max-w-xs">{connectedLocation.title || connectedLocation.v4LocationName}</span>
-              </div>
-            )}
+        <div className="max-w-6xl mx-auto flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-bold text-gray-900">Google Business Profile</h1>
+            <p className="text-sm text-gray-500 mt-0.5">AI-powered posts, reviews & local SEO</p>
           </div>
+          {connected && (
+            <div className="flex items-center gap-2 text-xs bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded-full">
+              <span className="w-2 h-2 rounded-full bg-green-500" />
+              Connected
+              {hasLocation && <span className="text-green-500">· Location set</span>}
+            </div>
+          )}
         </div>
       </div>
 
       <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
-        {/* ── Not Connected Banner ── */}
-        {!isConnected && (
-          <div className="bg-white rounded-2xl border border-dashed border-gray-300 p-10 text-center mb-6">
-            <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mx-auto mb-4">
-              <span className="text-3xl">🌐</span>
-            </div>
-            <h2 className="text-xl font-semibold text-gray-900 mb-2">
-              Connect your Google Business Profile
-            </h2>
+
+        {/* ── NOT CONNECTED ── */}
+        {!connected && (
+          <div className="bg-white rounded-2xl border border-dashed border-gray-300 p-12 text-center">
+            <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">🌐</div>
+            <h2 className="text-xl font-semibold text-gray-900 mb-2">Connect Google Business Profile</h2>
             <p className="text-sm text-gray-500 max-w-md mx-auto mb-6">
-              Connect your Google account to start managing posts, replying to reviews, and
-              boosting your local SEO — all from one place.
+              Connect your Google account to publish AI posts, auto-reply to reviews, and boost your local SEO — all from one place.
             </p>
-            <button
-              onClick={handleConnect}
-              className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-medium text-sm shadow transition-colors"
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none">
-                <path d="M21.35 11.1H12v2.8h5.35C16.85 16.35 14.65 18 12 18c-3.3 0-6-2.7-6-6s2.7-6 6-6c1.55 0 2.95.6 4.05 1.55L18 5.6C16.35 4.05 14.3 3 12 3 7.03 3 3 7.03 3 12s4.03 9 9 9c5.14 0 8.75-3.6 8.75-8.9 0-.6-.06-1.15-.15-1.7l.75-.3z" fill="#4285F4"/>
-              </svg>
+            <button onClick={handleConnect} className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-medium text-sm shadow transition-colors">
+              <svg className="w-4 h-4" viewBox="0 0 24 24"><path d="M21.35 11.1H12v2.8h5.35C16.85 16.35 14.65 18 12 18c-3.3 0-6-2.7-6-6s2.7-6 6-6c1.55 0 2.95.6 4.05 1.55L18 5.6C16.35 4.05 14.3 3 12 3 7.03 3 3 7.03 3 12s4.03 9 9 9c5.14 0 8.75-3.6 8.75-8.9 0-.6-.06-1.15-.15-1.7l.75-.3z" fill="#4285F4"/></svg>
               Connect with Google
             </button>
           </div>
         )}
 
-        {/* ── Connected View ── */}
-        {isConnected && (
+        {/* ── CONNECTED ── */}
+        {connected && (
           <>
-            {/* Stats Row */}
+            {/* Location picker banner */}
+            {!hasLocation && (
+              <div className="mb-5 bg-amber-50 border border-amber-200 rounded-xl p-4">
+                <p className="text-sm font-semibold text-amber-800 mb-1">Select your Google Business location</p>
+                <p className="text-xs text-amber-600 mb-3">
+                  Select your business location to enable publishing posts and syncing reviews from Google.
+                  {locationsLoading && ' Loading locations from Google…'}
+                </p>
+                {allLocations.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {allLocations.map((loc, i) => (
+                      <button key={i} onClick={() => handleSelectLocation(loc.v4LocationName)}
+                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-medium transition-colors">
+                        {loc.title || loc.v4LocationName}
+                      </button>
+                    ))}
+                  </div>
+                ) : !locationsLoading ? (
+                  <p className="text-xs text-amber-700">
+                    No locations found on this Google account. Make sure your Google account is connected to a{' '}
+                    <a href="https://business.google.com" target="_blank" rel="noreferrer" className="underline">Google Business Profile</a>.
+                    You can still create draft posts without a location.
+                  </p>
+                ) : null}
+              </div>
+            )}
+
+            {/* Stats row */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-              <div className="bg-white rounded-xl border border-gray-200 p-4">
-                <p className="text-xs text-gray-500 uppercase tracking-wide">Total Posts</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">{postStats.total}</p>
-                <p className="text-xs text-gray-400 mt-1">{postStats.posted} live</p>
-              </div>
-              <div className="bg-white rounded-xl border border-gray-200 p-4">
-                <p className="text-xs text-gray-500 uppercase tracking-wide">Draft Posts</p>
-                <p className="text-2xl font-bold text-yellow-600 mt-1">{postStats.drafts}</p>
-                <p className="text-xs text-gray-400 mt-1">Awaiting publish</p>
-              </div>
-              <div className="bg-white rounded-xl border border-gray-200 p-4">
-                <p className="text-xs text-gray-500 uppercase tracking-wide">Avg. Rating</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">{reviewStats.avgRating}</p>
-                <p className="text-xs text-gray-400 mt-1">out of 5 stars</p>
-              </div>
-              <div className="bg-white rounded-xl border border-gray-200 p-4">
-                <p className="text-xs text-gray-500 uppercase tracking-wide">Pending Replies</p>
-                <p className="text-2xl font-bold text-orange-600 mt-1">{reviewStats.pending}</p>
-                <p className="text-xs text-gray-400 mt-1">Need response</p>
-              </div>
+              {[
+                { label: 'Total Posts', value: postStats.total, sub: `${postStats.live} live`, color: 'text-gray-900' },
+                { label: 'Draft Posts', value: postStats.drafts, sub: 'Awaiting publish', color: 'text-yellow-600' },
+                { label: 'Avg. Rating', value: reviewStats.avg, sub: 'out of 5 stars', color: 'text-gray-900' },
+                { label: 'Pending Replies', value: reviewStats.pending, sub: 'Need response', color: 'text-orange-600' },
+              ].map(({ label, value, sub, color }) => (
+                <div key={label} className="bg-white rounded-xl border border-gray-200 p-4">
+                  <p className="text-xs text-gray-500 uppercase tracking-wide">{label}</p>
+                  <p className={`text-2xl font-bold mt-1 ${color}`}>{value}</p>
+                  <p className="text-xs text-gray-400 mt-1">{sub}</p>
+                </div>
+              ))}
             </div>
 
-            {/* Tab Navigation */}
+            {/* Tabs */}
             <div className="flex border-b border-gray-200 mb-6 bg-white rounded-t-xl overflow-hidden">
-              {(['posts', 'reviews', 'setup'] as ActiveTab[]).map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={`px-6 py-3.5 text-sm font-medium capitalize transition-colors border-b-2 -mb-px ${
-                    activeTab === tab
-                      ? 'border-indigo-600 text-indigo-600 bg-indigo-50/50'
-                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                  }`}
-                >
-                  {tab === 'posts' && '📝 '}
-                  {tab === 'reviews' && '⭐ '}
-                  {tab === 'setup' && '⚙️ '}
-                  {tab.charAt(0).toUpperCase() + tab.slice(1)}
+              {(['posts', 'reviews', 'setup'] as Tab[]).map(t => (
+                <button key={t} onClick={() => setTab(t)}
+                  className={`px-6 py-3.5 text-sm font-medium capitalize transition-colors border-b-2 -mb-px ${tab === t ? 'border-indigo-600 text-indigo-600 bg-indigo-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                  {t === 'posts' ? '📝 ' : t === 'reviews' ? '⭐ ' : '⚙️ '}
+                  {t.charAt(0).toUpperCase() + t.slice(1)}
                 </button>
               ))}
             </div>
 
-            {/* ─────────────────── POSTS TAB ─────────────────── */}
-            {activeTab === 'posts' && (
+            {/* ── POSTS TAB ── */}
+            {tab === 'posts' && (
               <div>
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-base font-semibold text-gray-900">GBP Posts</h2>
-                  <button
-                    onClick={() => setShowPostModal(true)}
-                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium shadow-sm transition-colors"
-                  >
-                    <span>+</span> New Post
+                {/* AI automation bar */}
+                <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-100 rounded-xl p-4 mb-5 flex flex-col sm:flex-row sm:items-center gap-3">
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-indigo-900">AI Post Generator</p>
+                    <p className="text-xs text-indigo-600 mt-0.5">Enter keywords → AI writes an SEO-optimized GBP post in seconds</p>
+                  </div>
+                  <button onClick={() => setShowPostModal(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium shadow-sm transition-colors flex-shrink-0">
+                    🤖 Generate AI Post
                   </button>
                 </div>
 
                 {postsLoading ? (
                   <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
                     <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
-                    <p className="text-sm text-gray-400 mt-3">Loading posts...</p>
+                    <p className="text-sm text-gray-400 mt-3">Loading posts…</p>
                   </div>
                 ) : posts.length === 0 ? (
                   <div className="bg-white rounded-xl border border-dashed border-gray-300 p-10 text-center">
                     <span className="text-4xl block mb-3">📝</span>
-                    <p className="text-gray-500 text-sm font-medium mb-1">No posts yet</p>
-                    <p className="text-gray-400 text-xs mb-4">
-                      Create your first AI-powered GBP post to boost local SEO
-                    </p>
-                    <button
-                      onClick={() => setShowPostModal(true)}
-                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors"
-                    >
-                      Create First Post
+                    <p className="font-medium text-gray-700 mb-1">No posts yet</p>
+                    <p className="text-xs text-gray-400 mb-4">Create your first AI-powered GBP post to boost local SEO</p>
+                    <button onClick={() => setShowPostModal(true)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium">
+                      Generate First Post
                     </button>
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {posts.map((post) => (
-                      <div
-                        key={post.$id}
-                        className="bg-white rounded-xl border border-gray-200 p-4 flex items-start justify-between gap-4"
-                      >
+                    {posts.map(post => (
+                      <div key={post.$id} className="bg-white rounded-xl border border-gray-200 p-4 flex items-start justify-between gap-4">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1">
-                            <StatusBadge status={post.status} />
-                            <span className="text-xs text-gray-400">
-                              {post.type === 'auto_generated' ? '🤖 AI Generated' : '✍️ Manual'}
-                            </span>
+                            <Badge status={post.status} />
+                            <span className="text-xs text-gray-400">{post.type === 'auto_generated' ? '🤖 AI' : '✍️ Manual'}</span>
                           </div>
-                          <p className="text-sm font-medium text-gray-900 mb-1">
-                            {post.title}
-                          </p>
-                          <p className="text-sm text-gray-500 line-clamp-2">
-                            {post.content}
-                          </p>
+                          <p className="text-sm font-medium text-gray-900 mb-1">{post.title}</p>
+                          <p className="text-sm text-gray-500 line-clamp-2">{post.content}</p>
                           <p className="text-xs text-gray-400 mt-2">
-                            {post.postedAt
-                              ? `Posted ${new Date(post.postedAt).toLocaleDateString()}`
-                              : `Created ${new Date(post.createdAt).toLocaleDateString()}`}
+                            {post.postedAt ? `Published ${new Date(post.postedAt).toLocaleDateString('en-IN')}` : `Draft · ${new Date(post.createdAt).toLocaleDateString('en-IN')}`}
                           </p>
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
                           {post.status === 'draft' && (
-                            <button
-                              onClick={() => handlePublishDraft(post)}
-                              className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-medium transition-colors"
-                            >
+                            <button onClick={() => handlePublishDraft(post)}
+                              className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-medium transition-colors">
                               Publish
                             </button>
                           )}
-                          <button
-                            onClick={() => handleDeletePost(post.$id)}
-                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                            title="Delete post"
-                          >
+                          <button onClick={() => handleDeletePost(post.$id)}
+                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                             </svg>
                           </button>
                         </div>
@@ -707,35 +513,20 @@ function GbpPageInner() {
               </div>
             )}
 
-            {/* ─────────────────── REVIEWS TAB ─────────────────── */}
-            {activeTab === 'reviews' && (
+            {/* ── REVIEWS TAB ── */}
+            {tab === 'reviews' && (
               <div>
                 <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
                   <h2 className="text-base font-semibold text-gray-900">Customer Reviews</h2>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={handleSyncReviews}
-                      disabled={syncing}
-                      className="flex items-center gap-1.5 px-3 py-2 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-xl text-sm font-medium transition-colors disabled:opacity-60"
-                    >
-                      {syncing ? (
-                        <span className="inline-block w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-                      ) : (
-                        <span>🔄</span>
-                      )}
-                      Sync from Google
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button onClick={handleSyncReviews} disabled={syncing || !hasLocation}
+                      className="flex items-center gap-1.5 px-3 py-2 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-xl text-sm font-medium disabled:opacity-50 transition-colors"
+                      title={!hasLocation ? 'Set a location first' : ''}>
+                      {syncing ? <span className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin inline-block" /> : '🔄'} Sync from Google
                     </button>
-                    <button
-                      onClick={handleAutoReplyAll}
-                      disabled={autoReplying || reviewStats.pending === 0}
-                      className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-60"
-                    >
-                      {autoReplying ? (
-                        <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      ) : (
-                        <span>🤖</span>
-                      )}
-                      Auto-Reply Pending ({reviewStats.pending})
+                    <button onClick={handleAutoReplyAll} disabled={autoReplying || reviewStats.pending === 0}
+                      className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium disabled:opacity-50 transition-colors">
+                      {autoReplying ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin inline-block" /> : '🤖'} Auto-Reply All ({reviewStats.pending})
                     </button>
                   </div>
                 </div>
@@ -743,69 +534,50 @@ function GbpPageInner() {
                 {reviewsLoading ? (
                   <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
                     <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
-                    <p className="text-sm text-gray-400 mt-3">Loading reviews...</p>
+                    <p className="text-sm text-gray-400 mt-3">Loading reviews…</p>
                   </div>
                 ) : reviews.length === 0 ? (
                   <div className="bg-white rounded-xl border border-dashed border-gray-300 p-10 text-center">
                     <span className="text-4xl block mb-3">⭐</span>
-                    <p className="text-gray-500 text-sm font-medium mb-1">No reviews synced yet</p>
-                    <p className="text-gray-400 text-xs mb-4">
-                      Click &ldquo;Sync from Google&rdquo; to import your latest reviews
-                    </p>
-                    <button
-                      onClick={handleSyncReviews}
-                      disabled={syncing}
-                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-60"
-                    >
-                      Sync Reviews Now
-                    </button>
+                    <p className="font-medium text-gray-700 mb-1">No reviews synced yet</p>
+                    <p className="text-xs text-gray-400 mb-4">{hasLocation ? 'Click "Sync from Google" to import reviews' : 'Set a business location first, then sync'}</p>
+                    {hasLocation && (
+                      <button onClick={handleSyncReviews} disabled={syncing} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium disabled:opacity-60">
+                        Sync Reviews Now
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-3">
                     {reviews.map((review, idx) => (
-                      <div
-                        key={review.$id || review.reviewId || idx}
-                        className="bg-white rounded-xl border border-gray-200 p-4"
-                      >
+                      <div key={review.$id || review.reviewId || idx} className="bg-white rounded-xl border border-gray-200 p-4">
                         <div className="flex items-start justify-between gap-3">
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-3 mb-1">
-                              <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-sm font-bold text-gray-600 flex-shrink-0">
+                            <div className="flex items-center gap-3 mb-2">
+                              <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
                                 {review.reviewer?.[0]?.toUpperCase() || '?'}
                               </div>
                               <div>
-                                <p className="text-sm font-medium text-gray-900">
-                                  {review.reviewer || 'Anonymous'}
-                                </p>
+                                <p className="text-sm font-medium text-gray-900">{review.reviewer || 'Anonymous'}</p>
                                 <div className="flex items-center gap-2">
                                   <StarRating rating={review.rating || 0} />
-                                  <span className="text-xs text-gray-400">
-                                    {new Date(review.createdAt).toLocaleDateString()}
-                                  </span>
+                                  <span className="text-xs text-gray-400">{new Date(review.createdAt).toLocaleDateString('en-IN')}</span>
                                 </div>
                               </div>
                             </div>
-                            <p className="text-sm text-gray-600 mt-2 ml-11">
-                              {review.reviewText || 'No review text'}
-                            </p>
-
-                            {/* Reply if exists */}
+                            <p className="text-sm text-gray-600 ml-12">{review.reviewText || 'No text'}</p>
                             {review.reply && (
-                              <div className="mt-3 ml-11 bg-gray-50 border border-gray-200 rounded-lg p-3">
-                                <p className="text-xs font-semibold text-gray-500 mb-1">
-                                  Your reply:
-                                </p>
+                              <div className="mt-3 ml-12 bg-indigo-50 border border-indigo-100 rounded-lg p-3">
+                                <p className="text-xs font-semibold text-indigo-600 mb-1">Your reply:</p>
                                 <p className="text-sm text-gray-700">{review.reply}</p>
                               </div>
                             )}
                           </div>
-                          <div className="flex items-center gap-2 flex-shrink-0">
-                            <StatusBadge status={review.replyStatus || 'pending'} />
+                          <div className="flex flex-col items-end gap-2 flex-shrink-0">
+                            <Badge status={review.replyStatus || 'pending'} />
                             {review.replyStatus === 'pending' && (
-                              <button
-                                onClick={() => openReplyModal(review)}
-                                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium transition-colors"
-                              >
+                              <button onClick={() => setReplyModal({ review, text: '', loading: false })}
+                                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium">
                                 Reply
                               </button>
                             )}
@@ -818,40 +590,40 @@ function GbpPageInner() {
               </div>
             )}
 
-            {/* ─────────────────── SETUP TAB ─────────────────── */}
-            {activeTab === 'setup' && (
+            {/* ── SETUP TAB ── */}
+            {tab === 'setup' && (
               <div className="space-y-4">
-                <h2 className="text-base font-semibold text-gray-900">GBP Connection Settings</h2>
+                <h2 className="text-base font-semibold text-gray-900">Connection Settings</h2>
 
-                {/* Connected account info */}
+                {/* Location selector */}
                 <div className="bg-white rounded-xl border border-gray-200 p-5">
-                  <h3 className="text-sm font-semibold text-gray-700 mb-3">Connected Accounts</h3>
-                  {locations.length === 0 ? (
-                    <p className="text-sm text-gray-400">No accounts connected.</p>
+                  <h3 className="text-sm font-semibold text-gray-700 mb-1">Google Business Location</h3>
+                  <p className="text-xs text-gray-400 mb-3">Select which location to use for publishing posts and syncing reviews.</p>
+                  {locationsLoading ? (
+                    <p className="text-sm text-gray-400">Loading locations from Google…</p>
+                  ) : allLocations.length === 0 ? (
+                    <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
+                      No locations found. Make sure your Google account is linked to a{' '}
+                      <a href="https://business.google.com" target="_blank" rel="noreferrer" className="underline">Google Business Profile</a>.
+                    </div>
                   ) : (
-                    <div className="space-y-4">
-                      {locations.map((account, ai) => (
-                        <div key={ai}>
-                          <p className="text-sm font-medium text-gray-800 mb-2">
-                            {account.accountDisplayName || account.accountName}
-                          </p>
-                          <div className="space-y-2 pl-4 border-l-2 border-indigo-100">
-                            {account.locations.map((loc, li) => (
-                              <div
-                                key={li}
-                                className="flex items-center justify-between text-sm py-1.5"
-                              >
-                                <div>
-                                  <p className="font-medium text-gray-700">{loc.title || 'Unnamed Location'}</p>
-                                  <p className="text-xs text-gray-400 font-mono">{loc.v4LocationName}</p>
-                                </div>
-                                <span className="flex items-center gap-1 text-xs bg-green-50 text-green-700 border border-green-200 px-2 py-0.5 rounded-full">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                                  Active
-                                </span>
-                              </div>
-                            ))}
+                    <div className="space-y-2">
+                      {allLocations.map((loc, i) => (
+                        <div key={i} className={`flex items-center justify-between p-3 rounded-lg border transition-colors ${savedLocationId === loc.v4LocationName ? 'border-indigo-400 bg-indigo-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                          <div>
+                            <p className="text-sm font-medium text-gray-900">{loc.title || 'Unnamed Location'}</p>
+                            <p className="text-xs text-gray-400 font-mono mt-0.5">{loc.v4LocationName}</p>
                           </div>
+                          {savedLocationId === loc.v4LocationName ? (
+                            <span className="flex items-center gap-1 text-xs bg-green-50 text-green-700 border border-green-200 px-2 py-0.5 rounded-full">
+                              <span className="w-1.5 h-1.5 rounded-full bg-green-500" /> Active
+                            </span>
+                          ) : (
+                            <button onClick={() => handleSelectLocation(loc.v4LocationName)}
+                              className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium">
+                              Select
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -861,29 +633,16 @@ function GbpPageInner() {
                 {/* Reconnect */}
                 <div className="bg-white rounded-xl border border-gray-200 p-5">
                   <h3 className="text-sm font-semibold text-gray-700 mb-1">Reconnect Account</h3>
-                  <p className="text-xs text-gray-400 mb-3">
-                    If your Google token has expired or you want to connect a different account,
-                    reconnect here.
-                  </p>
-                  <button
-                    onClick={handleConnect}
-                    className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-xl text-sm font-medium transition-colors"
-                  >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none">
-                      <path d="M21.35 11.1H12v2.8h5.35C16.85 16.35 14.65 18 12 18c-3.3 0-6-2.7-6-6s2.7-6 6-6c1.55 0 2.95.6 4.05 1.55L18 5.6C16.35 4.05 14.3 3 12 3 7.03 3 3 7.03 3 12s4.03 9 9 9c5.14 0 8.75-3.6 8.75-8.9 0-.6-.06-1.15-.15-1.7l.75-.3z" fill="#4285F4"/>
-                    </svg>
+                  <p className="text-xs text-gray-400 mb-3">Reconnect if your token expired or you want to switch accounts.</p>
+                  <button onClick={handleConnect} className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-xl text-sm font-medium transition-colors">
+                    <svg className="w-4 h-4" viewBox="0 0 24 24"><path d="M21.35 11.1H12v2.8h5.35C16.85 16.35 14.65 18 12 18c-3.3 0-6-2.7-6-6s2.7-6 6-6c1.55 0 2.95.6 4.05 1.55L18 5.6C16.35 4.05 14.3 3 12 3 7.03 3 3 7.03 3 12s4.03 9 9 9c5.14 0 8.75-3.6 8.75-8.9 0-.6-.06-1.15-.15-1.7l.75-.3z" fill="#4285F4"/></svg>
                     Reconnect with Google
                   </button>
                 </div>
 
-                {/* Webhook / Integration info */}
                 <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
-                  <h3 className="text-sm font-semibold text-blue-800 mb-1">About Google Permissions</h3>
                   <p className="text-xs text-blue-600">
-                    TravAI uses the{' '}
-                    <code className="bg-blue-100 px-1 rounded">business.manage</code> scope to read
-                    locations, publish posts, list and reply to reviews on your behalf. We never
-                    modify your business settings or billing information.
+                    TravAI uses the <code className="bg-blue-100 px-1 rounded">business.manage</code> scope to read locations, publish posts, and reply to reviews on your behalf. We never modify billing or account settings.
                   </p>
                 </div>
               </div>
@@ -892,245 +651,112 @@ function GbpPageInner() {
         )}
       </div>
 
-      {/* ─────────────── CREATE POST MODAL ─────────────── */}
+      {/* ── CREATE POST MODAL ── */}
       {showPostModal && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 sticky top-0 bg-white z-10">
               <h2 className="text-base font-semibold text-gray-900">Create GBP Post</h2>
-              <button
-                onClick={() => setShowPostModal(false)}
-                className="p-1 text-gray-400 hover:text-gray-600 rounded"
-              >
-                ✕
-              </button>
+              <button onClick={() => { setShowPostModal(false); setAiPostPreview(''); }} className="p-1 text-gray-400 hover:text-gray-600 rounded">✕</button>
             </div>
 
             <div className="px-6 py-5 space-y-4">
-              {/* Post title */}
+              {/* Title */}
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Post Title (optional)</label>
+                <input type="text" value={postForm.title} onChange={e => setPostForm(p => ({ ...p, title: e.target.value }))}
+                  placeholder="e.g. Dubai Package Offer — Best Deals"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
+
+              {/* Keywords */}
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">SEO Keywords (comma-separated)</label>
+                <input type="text" value={postForm.keywords} onChange={e => setPostForm(p => ({ ...p, keywords: e.target.value }))}
+                  placeholder="e.g. Dubai holiday, travel packages, family tour India"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
+
+              {/* AI Generate button */}
+              <button onClick={handleAiGeneratePreview} disabled={aiGenerating}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-60">
+                {aiGenerating ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin inline-block" /> : '✨'}
+                {aiGenerating ? 'Generating AI content…' : 'Generate with AI'}
+              </button>
+
+              {/* Content preview / manual */}
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">
-                  Post Title (optional)
+                  Post Content {aiPostPreview ? '(AI generated — edit if needed)' : '(or write manually)'}
                 </label>
-                <input
-                  type="text"
-                  value={postForm.title}
-                  onChange={(e) => setPostForm((p) => ({ ...p, title: e.target.value }))}
-                  placeholder="e.g. Special Weekend Offer"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
+                <textarea value={postForm.content} onChange={e => setPostForm(p => ({ ...p, content: e.target.value, autoGenerate: false }))}
+                  rows={6} maxLength={1500}
+                  placeholder="AI-generated content will appear here, or write your own…"
+                  className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none ${aiPostPreview ? 'border-purple-300 bg-purple-50/30' : 'border-gray-300'}`} />
+                <p className="text-xs text-gray-400 mt-1 text-right">{postForm.content.length}/1500</p>
               </div>
 
-              {/* AI vs Manual toggle */}
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setPostForm((p) => ({ ...p, autoGenerate: true }))}
-                  className={`flex-1 py-2 text-sm rounded-lg font-medium border transition-colors ${
-                    postForm.autoGenerate
-                      ? 'bg-indigo-600 text-white border-indigo-600'
-                      : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
-                  }`}
-                >
-                  🤖 AI Generate
-                </button>
-                <button
-                  onClick={() => setPostForm((p) => ({ ...p, autoGenerate: false }))}
-                  className={`flex-1 py-2 text-sm rounded-lg font-medium border transition-colors ${
-                    !postForm.autoGenerate
-                      ? 'bg-indigo-600 text-white border-indigo-600'
-                      : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
-                  }`}
-                >
-                  ✍️ Write Manually
-                </button>
-              </div>
-
-              {/* AI keywords */}
-              {postForm.autoGenerate && (
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
-                    SEO Keywords (comma-separated)
-                  </label>
-                  <input
-                    type="text"
-                    value={postForm.keywords}
-                    onChange={(e) => setPostForm((p) => ({ ...p, keywords: e.target.value }))}
-                    placeholder="e.g. travel, Goa, beach, family holiday"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                  <p className="text-xs text-gray-400 mt-1">
-                    AI will craft an SEO-optimized post using these keywords.
-                  </p>
-                </div>
-              )}
-
-              {/* Manual content */}
-              {!postForm.autoGenerate && (
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
-                    Post Content <span className="text-red-500">*</span>
-                  </label>
-                  <textarea
-                    value={postForm.content}
-                    onChange={(e) => setPostForm((p) => ({ ...p, content: e.target.value }))}
-                    rows={5}
-                    maxLength={1500}
-                    placeholder="Write your Google Business post here... (150-300 chars recommended)"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
-                  />
-                  <p className="text-xs text-gray-400 mt-1 text-right">
-                    {postForm.content.length}/1500
-                  </p>
-                </div>
-              )}
-
-              {/* Publish now toggle */}
+              {/* Publish toggle */}
               <label className="flex items-center gap-3 cursor-pointer">
-                <div
-                  onClick={() => setPostForm((p) => ({ ...p, publishNow: !p.publishNow }))}
-                  className={`relative w-10 h-6 rounded-full transition-colors ${
-                    postForm.publishNow ? 'bg-indigo-600' : 'bg-gray-200'
-                  }`}
-                >
-                  <span
-                    className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                      postForm.publishNow ? 'translate-x-5' : 'translate-x-1'
-                    }`}
-                  />
+                <div onClick={() => setPostForm(p => ({ ...p, publishNow: !p.publishNow }))}
+                  className={`relative w-10 h-6 rounded-full transition-colors ${postForm.publishNow ? 'bg-indigo-600' : 'bg-gray-200'}`}>
+                  <span className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${postForm.publishNow ? 'translate-x-5' : 'translate-x-1'}`} />
                 </div>
-                <span className="text-sm text-gray-700">
-                  {postForm.publishNow
-                    ? 'Publish immediately to Google'
-                    : 'Save as draft (publish later)'}
-                </span>
+                <span className="text-sm text-gray-700">{postForm.publishNow ? 'Publish to Google immediately' : 'Save as draft'}</span>
               </label>
+
+              {postForm.publishNow && !hasLocation && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  Set a business location in the Setup tab to publish directly to Google. The post will be saved as draft for now.
+                </p>
+              )}
             </div>
 
-            <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
-              <button
-                onClick={() => setShowPostModal(false)}
-                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCreatePost}
-                disabled={postSubmitting}
-                className="flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-60"
-              >
-                {postSubmitting && (
-                  <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                )}
-                {postForm.autoGenerate ? 'Generate & Save' : postForm.publishNow ? 'Publish Now' : 'Save Draft'}
+            <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3 sticky bottom-0 bg-white">
+              <button onClick={() => { setShowPostModal(false); setAiPostPreview(''); }} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
+              <button onClick={handleCreatePost} disabled={postSubmitting || (!postForm.content.trim() && !postForm.autoGenerate)}
+                className="flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium disabled:opacity-60 transition-colors">
+                {postSubmitting && <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin inline-block" />}
+                {postForm.publishNow ? 'Publish Now' : 'Save Draft'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ─────────────── REPLY MODAL ─────────────── */}
+      {/* ── REPLY MODAL ── */}
       {replyModal && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
               <h2 className="text-base font-semibold text-gray-900">Reply to Review</h2>
-              <button
-                onClick={() => setReplyModal(null)}
-                className="p-1 text-gray-400 hover:text-gray-600 rounded"
-              >
-                ✕
-              </button>
+              <button onClick={() => setReplyModal(null)} className="p-1 text-gray-400 hover:text-gray-600 rounded">✕</button>
             </div>
-
             <div className="px-6 py-5 space-y-4">
-              {/* Original review */}
               <div className="bg-gray-50 rounded-xl p-4">
                 <div className="flex items-center gap-2 mb-2">
-                  <span className="text-sm font-medium text-gray-800">
-                    {replyModal.review.reviewer}
-                  </span>
+                  <span className="text-sm font-medium text-gray-800">{replyModal.review.reviewer}</span>
                   <StarRating rating={replyModal.review.rating} />
                 </div>
                 <p className="text-sm text-gray-600">{replyModal.review.reviewText}</p>
               </div>
-
-              {/* Reply mode toggle */}
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setReplyModal((prev) => prev && { ...prev, mode: 'ai' })}
-                  className={`flex-1 py-2 text-sm rounded-lg font-medium border transition-colors ${
-                    replyModal.mode === 'ai'
-                      ? 'bg-indigo-600 text-white border-indigo-600'
-                      : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
-                  }`}
-                >
-                  🤖 AI Reply
-                </button>
-                <button
-                  onClick={() => setReplyModal((prev) => prev && { ...prev, mode: 'custom' })}
-                  className={`flex-1 py-2 text-sm rounded-lg font-medium border transition-colors ${
-                    replyModal.mode === 'custom'
-                      ? 'bg-indigo-600 text-white border-indigo-600'
-                      : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
-                  }`}
-                >
-                  ✍️ Custom Reply
-                </button>
-              </div>
-
-              {/* AI generate button */}
-              {replyModal.mode === 'ai' && (
-                <button
-                  onClick={handleGenerateAiReply}
-                  disabled={replyModal.loading}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-60"
-                >
-                  {replyModal.loading ? (
-                    <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    '✨'
-                  )}
-                  Generate AI Reply
-                </button>
-              )}
-
-              {/* Reply textarea */}
+              <button onClick={handleGenerateAiReply} disabled={replyModal.loading}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-medium disabled:opacity-60 transition-colors">
+                {replyModal.loading ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin inline-block" /> : '✨'} Generate AI Reply
+              </button>
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">
-                  {replyModal.mode === 'ai' ? 'Generated Reply (you can edit)' : 'Your Reply'}
-                </label>
-                <textarea
-                  value={replyModal.text}
-                  onChange={(e) =>
-                    setReplyModal((prev) => prev && { ...prev, text: e.target.value })
-                  }
-                  rows={4}
-                  placeholder={
-                    replyModal.mode === 'ai'
-                      ? 'Click "Generate AI Reply" above...'
-                      : 'Write your reply to the customer...'
-                  }
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
-                />
+                <label className="block text-xs font-medium text-gray-600 mb-1">Reply (AI generated or write your own)</label>
+                <textarea value={replyModal.text} onChange={e => setReplyModal(p => p && ({ ...p, text: e.target.value }))}
+                  rows={4} placeholder="Click Generate AI Reply or write your own…"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none" />
               </div>
             </div>
-
             <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
-              <button
-                onClick={() => setReplyModal(null)}
-                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSubmitReply}
-                disabled={!replyModal.text.trim() || replyModal.loading}
-                className="flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-60"
-              >
-                {replyModal.loading && (
-                  <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                )}
-                Publish Reply to Google
+              <button onClick={() => setReplyModal(null)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
+              <button onClick={handleSubmitReply} disabled={!replyModal.text.trim() || replyModal.loading}
+                className="flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium disabled:opacity-60 transition-colors">
+                {replyModal.loading && <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin inline-block" />}
+                Publish Reply
               </button>
             </div>
           </div>
@@ -1142,16 +768,11 @@ function GbpPageInner() {
 
 export default function GbpPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="flex items-center justify-center min-h-screen bg-gray-50">
-          <div className="text-center">
-            <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600 mb-4" />
-            <p className="text-sm text-gray-500">Loading Google Business Profile...</p>
-          </div>
-        </div>
-      }
-    >
+    <Suspense fallback={
+      <div className="flex items-center justify-center min-h-screen bg-gray-50">
+        <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600" />
+      </div>
+    }>
       <GbpPageInner />
     </Suspense>
   );
