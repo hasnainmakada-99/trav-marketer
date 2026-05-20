@@ -17,6 +17,7 @@ export async function POST() {
     let created = 0;
     let updated = 0;
     let skipped = 0;
+    let firstError: string | null = null;
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -72,28 +73,39 @@ export async function POST() {
         const lead = existingLead.documents[0] as { $id?: string } | undefined;
 
         if (lead?.$id) {
-          await updateDocument('leads', lead.$id, {
-            name: customer.name || undefined,
-            email: customer.email || undefined,
-            notes: notes || undefined,
-            lastContactedAt: now,
-            updatedAt: now,
-          }).catch(() => {});
-          updated++;
+          try {
+            await updateDocument('leads', lead.$id, {
+              name: customer.name || undefined,
+              email: customer.email || undefined,
+              notes: notes || undefined,
+              lastContactedAt: now,
+              updatedAt: now,
+            });
+            updated++;
+          } catch (err) {
+            console.error('[backfill] update failed for', phone, err);
+          }
         } else {
-          await createDocument('leads', {
-            teamId,
-            phone,
-            name: customer.name || null,
-            email: customer.email || null,
-            source: 'whatsapp',
-            status: 'new',
-            notes,
-            lastContactedAt: now,
-            createdAt: now,
-            updatedAt: now,
-          }).catch(() => {});
-          created++;
+          try {
+            await createDocument('leads', {
+              teamId,
+              phone,
+              name: customer.name || null,
+              email: customer.email || null,
+              source: 'whatsapp',
+              status: 'new',
+              notes,
+              lastContactedAt: now,
+              createdAt: now,
+              updatedAt: now,
+            });
+            created++;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error('[backfill] create failed for', phone, msg);
+            if (!firstError) firstError = msg;
+            skipped++;
+          }
         }
       }
 
@@ -101,7 +113,7 @@ export async function POST() {
       offset += batchSize;
     }
 
-    return NextResponse.json({ success: true, created, updated, skipped });
+    return NextResponse.json({ success: true, created, updated, skipped, firstError });
   } catch (err) {
     console.error('[POST /api/leads/backfill]', err);
     return NextResponse.json({ error: 'Backfill failed' }, { status: 500 });

@@ -54,7 +54,8 @@ export default function LeadsPage() {
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [expandedNotes, setExpandedNotes] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState<{ created: number; updated: number } | null>(null);
+  const [syncResult, setSyncResult] = useState<{ created: number; updated: number; firstError?: string | null } | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -67,12 +68,18 @@ export default function LeadsPage() {
       const params = new URLSearchParams({ limit: '200' });
       if (filter !== 'all') params.set('status', filter);
       const res = await fetch(`/api/leads?${params}`);
-      if (!res.ok) throw new Error('fetch failed');
       const data = await res.json();
-      setLeads(data.leads || []);
-      setTotal(data.total || 0);
+      if (!res.ok) {
+        setFetchError(data?.error || `HTTP ${res.status}`);
+      } else {
+        setFetchError(null);
+        setLeads(data.leads || []);
+        setTotal(data.total || 0);
+      }
       setLastRefresh(new Date());
-    } catch { /* keep stale */ } finally {
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : 'Network error');
+    } finally {
       setLoading(false);
     }
   }, [filter]);
@@ -90,10 +97,10 @@ export default function LeadsPage() {
     try {
       const res = await fetch('/api/leads/backfill', { method: 'POST' });
       const data = await res.json();
-      setSyncResult({ created: data.created || 0, updated: data.updated || 0 });
+      setSyncResult({ created: data.created || 0, updated: data.updated || 0, firstError: data.firstError });
       await fetchLeads();
-    } catch {
-      setSyncResult({ created: 0, updated: 0 });
+    } catch (err) {
+      setSyncResult({ created: 0, updated: 0, firstError: err instanceof Error ? err.message : 'Network error' });
     } finally {
       setSyncing(false);
     }
@@ -141,8 +148,15 @@ export default function LeadsPage() {
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             {syncResult && (
-              <span className="text-xs text-emerald-600 font-medium bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-200">
-                ✓ {syncResult.created} new · {syncResult.updated} updated
+              <span className={`text-xs font-medium px-3 py-1.5 rounded-full border ${
+                syncResult.firstError
+                  ? 'bg-red-50 text-red-700 border-red-200'
+                  : 'bg-emerald-50 text-emerald-600 border-emerald-200'
+              }`}>
+                {syncResult.firstError
+                  ? `Error: ${syncResult.firstError.slice(0, 80)}`
+                  : `✓ ${syncResult.created} new · ${syncResult.updated} updated`
+                }
               </span>
             )}
             <button
@@ -193,6 +207,16 @@ export default function LeadsPage() {
       </div>
 
       <div className="p-6">
+        {/* Fetch error banner */}
+        {fetchError && (
+          <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 flex items-start gap-2">
+            <span className="font-semibold flex-shrink-0">Appwrite error:</span>
+            <span className="font-mono break-all">{fetchError}</span>
+            <a href="/api/leads/debug" target="_blank" rel="noreferrer" className="ml-auto flex-shrink-0 underline text-red-600 hover:text-red-800 text-xs">
+              Run diagnostic →
+            </a>
+          </div>
+        )}
         {/* Search + filter */}
         <div className="flex flex-col sm:flex-row gap-3 mb-4">
           <input
