@@ -5,6 +5,7 @@ import {
   createGoogleLocalPost,
   getAccessTokenForTeam,
   getBusinessConfigByTeamId,
+  type GbpCallToAction,
 } from '@/lib/gbp';
 import {
   createDocument,
@@ -31,6 +32,7 @@ export async function POST(request: NextRequest) {
       publishNow,
       googleLocationName,
       languageCode,
+      callToAction,
     } = body;
 
     if (!teamId || !createdBy) {
@@ -89,11 +91,17 @@ Description: ${String((business as unknown as Record<string, unknown>).businessD
         );
       }
 
+      const resolvedCta: GbpCallToAction | undefined =
+        callToAction && callToAction.actionType && callToAction.actionType !== 'NONE'
+          ? (callToAction as GbpCallToAction)
+          : undefined;
+
       const createdPost = await createGoogleLocalPost(
         accessToken,
         locationName,
         String(finalContent || ''),
-        typeof languageCode === 'string' ? languageCode : 'en'
+        typeof languageCode === 'string' ? languageCode : 'en',
+        resolvedCta
       );
 
       googlePostId = createdPost.name || null;

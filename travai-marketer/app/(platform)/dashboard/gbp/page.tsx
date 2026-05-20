@@ -77,7 +77,11 @@ function GbpPageInner() {
   const [posts, setPosts] = useState<GbpPost[]>([]);
   const [postsLoading, setPostsLoading] = useState(false);
   const [showPostModal, setShowPostModal] = useState(false);
-  const [postForm, setPostForm] = useState({ title: '', content: '', keywords: '', autoGenerate: true, publishNow: false });
+  const [postForm, setPostForm] = useState({
+    title: '', content: '', keywords: '',
+    autoGenerate: true, publishNow: false,
+    callToAction: 'NONE', callToActionUrl: '', callToActionPhone: '',
+  });
   const [postSubmitting, setPostSubmitting] = useState(false);
 
   // Auto-generate single post
@@ -221,9 +225,18 @@ function GbpPageInner() {
   // ── Create post ──
   const handleCreatePost = async () => {
     if (!user) return;
-    if (!postForm.autoGenerate && !postForm.content.trim()) { flash('Enter content or use AI Generate', false); return; }
+    if (!postForm.content.trim()) { flash('Enter content or click "Generate with AI" first', false); return; }
     setPostSubmitting(true);
     try {
+      const ctaPayload =
+        postForm.callToAction !== 'NONE'
+          ? {
+              actionType: postForm.callToAction,
+              ...(postForm.callToAction === 'CALL'
+                ? { phoneNumber: postForm.callToActionPhone }
+                : { url: postForm.callToActionUrl }),
+            }
+          : undefined;
       const body = {
         teamId, title: postForm.title || 'GBP Post', content: postForm.content,
         type: postForm.autoGenerate ? 'auto_generated' : 'manual', createdBy: user.$id,
@@ -231,12 +244,13 @@ function GbpPageInner() {
         keywords: postForm.keywords.split(',').map(k => k.trim()).filter(Boolean),
         publishNow: postForm.publishNow,
         googleLocationName: savedLocationId,
+        callToAction: ctaPayload,
       };
       const res = await fetch('/api/gbp/posts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       if (res.ok) {
         flash(postForm.publishNow ? 'Post published to Google!' : 'Post saved as draft.');
         setShowPostModal(false);
-        setPostForm({ title: '', content: '', keywords: '', autoGenerate: true, publishNow: false });
+        setPostForm({ title: '', content: '', keywords: '', autoGenerate: true, publishNow: false, callToAction: 'NONE', callToActionUrl: '', callToActionPhone: '' });
         setAiPostPreview('');
         loadPosts();
       } else {
@@ -653,71 +667,154 @@ function GbpPageInner() {
 
       {/* ── CREATE POST MODAL ── */}
       {showPostModal && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 sticky top-0 bg-white z-10">
-              <h2 className="text-base font-semibold text-gray-900">Create GBP Post</h2>
-              <button onClick={() => { setShowPostModal(false); setAiPostPreview(''); }} className="p-1 text-gray-400 hover:text-gray-600 rounded">✕</button>
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-3 sm:p-6">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[95vh] flex flex-col">
+
+            {/* Header */}
+            <div className="flex items-center gap-3 px-5 py-4 border-b border-gray-200">
+              <button onClick={() => { setShowPostModal(false); setAiPostPreview(''); }}
+                className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/>
+                </svg>
+              </button>
+              <h2 className="text-base font-semibold text-gray-900 flex-1">Add post</h2>
+              <button onClick={handleAiGeneratePreview} disabled={aiGenerating}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-60">
+                {aiGenerating
+                  ? <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin inline-block" />
+                  : '✨'}
+                {aiGenerating ? 'Generating…' : 'Generate with AI'}
+              </button>
+              <button onClick={() => { setShowPostModal(false); setAiPostPreview(''); }}
+                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors ml-1">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+              </button>
             </div>
 
-            <div className="px-6 py-5 space-y-4">
-              {/* Title */}
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Post Title (optional)</label>
-                <input type="text" value={postForm.title} onChange={e => setPostForm(p => ({ ...p, title: e.target.value }))}
-                  placeholder="e.g. Dubai Package Offer — Best Deals"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            {/* Body — scrollable */}
+            <div className="flex-1 overflow-y-auto">
+
+              {/* Top split: description + image */}
+              <div className="flex flex-col sm:flex-row gap-0 sm:divide-x sm:divide-gray-200">
+
+                {/* Left: Description */}
+                <div className="flex-1 p-5 flex flex-col">
+                  <textarea
+                    value={postForm.content}
+                    onChange={e => setPostForm(p => ({ ...p, content: e.target.value, autoGenerate: false }))}
+                    maxLength={1500}
+                    rows={8}
+                    placeholder="Description"
+                    className={`flex-1 w-full border-0 outline-none text-sm text-gray-800 placeholder-gray-400 resize-none leading-relaxed ${aiPostPreview ? 'bg-purple-50/30' : ''}`}
+                  />
+                  <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-100">
+                    <span className="text-xs text-gray-400">{aiPostPreview ? '✨ AI generated — edit freely' : ''}</span>
+                    <span className="text-xs text-gray-400">{postForm.content.length}/1,500</span>
+                  </div>
+                </div>
+
+                {/* Right: Image upload */}
+                <div className="sm:w-56 p-5 flex flex-col items-center justify-center bg-gray-50 min-h-[160px] sm:min-h-0">
+                  <div className="border-2 border-dashed border-gray-300 rounded-xl p-6 flex flex-col items-center text-center w-full h-full justify-center gap-3">
+                    <svg className="w-8 h-8 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                    </svg>
+                    <p className="text-xs text-gray-500 leading-tight">Drag images and videos here</p>
+                    <span className="text-xs text-gray-400">or</span>
+                    <label className="cursor-pointer text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.069A1 1 0 0121 8.82V15.18a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/>
+                      </svg>
+                      Select images and videos
+                      <input type="file" accept="image/*,video/*" multiple className="hidden" />
+                    </label>
+                  </div>
+                </div>
               </div>
 
-              {/* Keywords */}
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">SEO Keywords (comma-separated)</label>
-                <input type="text" value={postForm.keywords} onChange={e => setPostForm(p => ({ ...p, keywords: e.target.value }))}
-                  placeholder="e.g. Dubai holiday, travel packages, family tour India"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-              </div>
-
-              {/* AI Generate button */}
-              <button onClick={handleAiGeneratePreview} disabled={aiGenerating}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-60">
-                {aiGenerating ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin inline-block" /> : '✨'}
-                {aiGenerating ? 'Generating AI content…' : 'Generate with AI'}
-              </button>
-
-              {/* Content preview / manual */}
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">
-                  Post Content {aiPostPreview ? '(AI generated — edit if needed)' : '(or write manually)'}
-                </label>
-                <textarea value={postForm.content} onChange={e => setPostForm(p => ({ ...p, content: e.target.value, autoGenerate: false }))}
-                  rows={6} maxLength={1500}
-                  placeholder="AI-generated content will appear here, or write your own…"
-                  className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none ${aiPostPreview ? 'border-purple-300 bg-purple-50/30' : 'border-gray-300'}`} />
-                <p className="text-xs text-gray-400 mt-1 text-right">{postForm.content.length}/1500</p>
-              </div>
-
-              {/* Publish toggle */}
-              <label className="flex items-center gap-3 cursor-pointer">
+              {/* Schedule this post */}
+              <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between">
+                <span className="text-sm text-gray-700">Schedule this post</span>
                 <div onClick={() => setPostForm(p => ({ ...p, publishNow: !p.publishNow }))}
-                  className={`relative w-10 h-6 rounded-full transition-colors ${postForm.publishNow ? 'bg-indigo-600' : 'bg-gray-200'}`}>
+                  className={`relative w-11 h-6 rounded-full cursor-pointer transition-colors ${postForm.publishNow ? 'bg-indigo-600' : 'bg-gray-300'}`}>
                   <span className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${postForm.publishNow ? 'translate-x-5' : 'translate-x-1'}`} />
                 </div>
-                <span className="text-sm text-gray-700">{postForm.publishNow ? 'Publish to Google immediately' : 'Save as draft'}</span>
-              </label>
+              </div>
 
               {postForm.publishNow && !hasLocation && (
-                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                  Set a business location in the Setup tab to publish directly to Google. The post will be saved as draft for now.
-                </p>
+                <div className="mx-5 mb-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  No location set — post will be saved as draft. Go to Setup tab to select a location.
+                </div>
               )}
+
+              {/* Divider */}
+              <div className="border-t border-gray-200" />
+
+              {/* Add more details */}
+              <div className="px-5 py-4 space-y-4">
+                <p className="text-sm font-medium text-gray-700">Add more details</p>
+
+                {/* CTA button selector */}
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1.5">Add a button (optional)</label>
+                  <select
+                    value={postForm.callToAction}
+                    onChange={e => setPostForm(p => ({ ...p, callToAction: e.target.value, callToActionUrl: '', callToActionPhone: '' }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
+                    <option value="NONE">None</option>
+                    <option value="BOOK">Book</option>
+                    <option value="ORDER">Order online</option>
+                    <option value="SHOP">Shop</option>
+                    <option value="LEARN_MORE">Learn more</option>
+                    <option value="SIGN_UP">Sign up</option>
+                    <option value="CALL">Call now</option>
+                  </select>
+
+                  {postForm.callToAction !== 'NONE' && postForm.callToAction !== 'CALL' && (
+                    <input
+                      type="url"
+                      value={postForm.callToActionUrl}
+                      onChange={e => setPostForm(p => ({ ...p, callToActionUrl: e.target.value }))}
+                      placeholder="https://your-website.com"
+                      className="mt-2 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  )}
+                  {postForm.callToAction === 'CALL' && (
+                    <input
+                      type="tel"
+                      value={postForm.callToActionPhone}
+                      onChange={e => setPostForm(p => ({ ...p, callToActionPhone: e.target.value }))}
+                      placeholder="+91 98765 43210"
+                      className="mt-2 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  )}
+                </div>
+
+                {/* SEO Keywords (AI hint) */}
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1.5">SEO keywords for AI generation (optional)</label>
+                  <input type="text" value={postForm.keywords}
+                    onChange={e => setPostForm(p => ({ ...p, keywords: e.target.value }))}
+                    placeholder="e.g. Dubai holiday, travel packages, family tour India"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                </div>
+              </div>
             </div>
 
-            <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3 sticky bottom-0 bg-white">
-              <button onClick={() => { setShowPostModal(false); setAiPostPreview(''); }} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
-              <button onClick={handleCreatePost} disabled={postSubmitting || (!postForm.content.trim() && !postForm.autoGenerate)}
-                className="flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium disabled:opacity-60 transition-colors">
+            {/* Footer */}
+            <div className="px-5 py-4 border-t border-gray-200 flex items-center justify-between gap-3 bg-white rounded-b-2xl">
+              <button onClick={() => { setShowPostModal(false); setAiPostPreview(''); }}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition-colors">
+                Cancel
+              </button>
+              <button onClick={handleCreatePost}
+                disabled={postSubmitting || !postForm.content.trim()}
+                className="flex items-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-semibold disabled:opacity-60 transition-colors shadow-sm">
                 {postSubmitting && <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin inline-block" />}
-                {postForm.publishNow ? 'Publish Now' : 'Save Draft'}
+                {postForm.publishNow && hasLocation ? 'Post' : 'Save Draft'}
               </button>
             </div>
           </div>

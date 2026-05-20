@@ -313,23 +313,31 @@ export async function listGoogleLocations(
   return response.locations || [];
 }
 
+export interface GbpCallToAction {
+  actionType: 'BOOK' | 'ORDER' | 'SHOP' | 'LEARN_MORE' | 'SIGN_UP' | 'CALL';
+  url?: string;
+  phoneNumber?: string;
+}
+
 export async function createGoogleLocalPost(
   accessToken: string,
   locationName: string,
   summary: string,
-  languageCode = 'en'
+  languageCode = 'en',
+  callToAction?: GbpCallToAction
 ): Promise<{ name?: string; state?: string }> {
+  const payload: Record<string, unknown> = {
+    languageCode,
+    summary,
+    topicType: 'STANDARD',
+  };
+  if (callToAction) {
+    payload.callToAction = callToAction;
+  }
   return googleFetch<{ name?: string; state?: string }>(
     `https://mybusiness.googleapis.com/v4/${locationName}/localPosts`,
     accessToken,
-    {
-      method: 'POST',
-      body: JSON.stringify({
-        languageCode,
-        summary,
-        topicType: 'STANDARD',
-      }),
-    }
+    { method: 'POST', body: JSON.stringify(payload) }
   );
 }
 
