@@ -629,23 +629,33 @@ async function processIncomingMessage(
       return;
     }
 
-    // Non-critical: extract profile details in background so reply path stays fast.
-    if (process.env.OPENAI_API_KEY) {
-      extractCustomerInfo(text)
-        .then(async (extractedInfo) => {
-          if (extractedInfo?.name && !customer.name) {
-            customer = await updateDocument('customers', customer.$id, {
-              name: extractedInfo.name,
-              email: extractedInfo.email,
-              phone: extractedInfo.phone || phone,
-              updatedAt: new Date().toISOString(),
-            });
-          }
-        })
-        .catch(() => {});
+    // Extract customer info synchronously (alongside hasHumanTakeover) so lead save
+    // happens within the request lifecycle rather than as a detached background promise.
+    const [handover, extractedInfo] = await Promise.all([
+      hasHumanTakeover(teamId, phone),
+      process.env.OPENAI_API_KEY
+        ? extractCustomerInfo(text).catch(() => ({} as { name?: string; email?: string; phone?: string }))
+        : Promise.resolve({} as { name?: string; email?: string; phone?: string }),
+    ]);
+
+    if (extractedInfo?.name && !customer.name) {
+      customer = await updateDocument('customers', customer.$id, {
+        name: extractedInfo.name,
+        email: extractedInfo.email || null,
+        updatedAt: new Date().toISOString(),
+      }).catch(() => customer);
     }
 
-    const handover = await hasHumanTakeover(teamId, phone);
+    // Save lead whenever we have a name (phone always available)
+    if (customer.name) {
+      saveLead({
+        teamId,
+        phone,
+        customer,
+        intent: 'inquiry',
+        notes: `WhatsApp inquiry. ${text.slice(0, 300)}`,
+      }).catch(() => {});
+    }
     if (handover) {
       console.log(`[WhatsApp] AI suppressed for ${phone} due to staff takeover`);
       return;

@@ -5,13 +5,12 @@ import { listDocuments } from '@/lib/appwrite';
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const teamId = searchParams.get('teamId') || process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'system';
     const status = searchParams.get('status') || 'all';
-    const limit = Math.min(Number(searchParams.get('limit') || '50'), 100);
+    const limit = Math.min(Number(searchParams.get('limit') || '100'), 200);
     const offset = Number(searchParams.get('offset') || '0');
 
+    // No teamId filter — this is an admin endpoint, show all leads
     const queries = [
-      Query.equal('teamId', teamId),
       Query.orderDesc('$createdAt'),
       Query.limit(limit),
       Query.offset(offset),

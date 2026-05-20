@@ -375,45 +375,40 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Background: extract name/email and update customer + save lead
-    if (process.env.OPENAI_API_KEY) {
-      extractCustomerInfo(text)
-        .then(async (info) => {
-          const updates: Record<string, string> = {};
-          if (info?.name && !customer.name) updates.name = info.name;
-          if (info?.email && isValidEmail(info.email) && !customer.email) updates.email = info.email;
-          if (Object.keys(updates).length) {
-            await updateDocument('customers', customer.$id, {
-              ...updates,
-              updatedAt: new Date().toISOString(),
-            }).catch(() => {});
-            customer = { ...customer, ...updates };
-          }
-          // Save lead whenever we have a name (phone always available as `from`)
-          if (customer.name || info?.name) {
-            await saveLead({
-              teamId,
-              phone: from,
-              customer: { ...customer, name: customer.name || info?.name },
-              intent: 'inquiry',
-              notes: `WhatsApp conversation. Last message: ${text.slice(0, 200)}`,
-            });
-          }
-        })
-        .catch(() => {});
-    }
-
-    // Preprocess: typo correction
+    // Run typo correction and customer info extraction in parallel — both awaited
+    // so Vercel doesn't kill them when the response is sent.
     let intent = 'other';
     let correctedText = text;
     if (process.env.OPENAI_API_KEY) {
-      const preprocessed = await preprocessMessage(text, `Team: ${teamId}, channel: whatsapp_web`)
-        .catch(() => ({ correctedText: text, intent: 'other' }));
+      const [preprocessed, extractedInfo] = await Promise.all([
+        preprocessMessage(text, `Team: ${teamId}, channel: whatsapp_web`)
+          .catch(() => ({ correctedText: text, intent: 'other' })),
+        extractCustomerInfo(text).catch(() => ({} as { name?: string; email?: string; phone?: string })),
+      ]);
       correctedText = preprocessed.correctedText;
       intent = preprocessed.intent;
       if (correctedText !== text) {
         console.log(`[WA Bridge] Typo corrected: "${text}" → "${correctedText}"`);
       }
+      // Update customer record with extracted name/email
+      const updates: Record<string, string> = {};
+      if (extractedInfo?.name && !customer.name) updates.name = extractedInfo.name;
+      if (extractedInfo?.email && isValidEmail(extractedInfo.email) && !customer.email) updates.email = extractedInfo.email;
+      if (Object.keys(updates).length) {
+        updateDocument('customers', customer.$id, { ...updates, updatedAt: new Date().toISOString() }).catch(() => {});
+        customer = { ...customer, ...updates };
+      }
+    }
+
+    // Save lead synchronously whenever we have a name (phone always available as `from`)
+    if (customer.name) {
+      await saveLead({
+        teamId,
+        phone: from,
+        customer,
+        intent,
+        notes: `WhatsApp inquiry. ${correctedText.slice(0, 300)}`,
+      }).catch(() => {});
     }
 
     const built = await buildReply({
