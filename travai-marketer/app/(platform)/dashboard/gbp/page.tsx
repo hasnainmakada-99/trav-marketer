@@ -68,6 +68,7 @@ function GbpPageInner() {
   // Locations from Google API
   const [accounts, setAccounts] = useState<GbpAccount[]>([]);
   const [locationsLoading, setLocationsLoading] = useState(false);
+  const [locationsError, setLocationsError] = useState<string | null>(null);
 
   // UI
   const [tab, setTab] = useState<Tab>('posts');
@@ -138,11 +139,15 @@ function GbpPageInner() {
   // ── Load Google locations (only when connected, separate from connection check) ──
   const loadGoogleLocations = useCallback(async (tid: string) => {
     setLocationsLoading(true);
+    setLocationsError(null);
     try {
       const res = await fetch(`/api/gbp/locations?teamId=${encodeURIComponent(tid)}`);
       const data = await res.json();
       setAccounts(data.accounts || []);
-    } catch { /* ignore */ } finally {
+      if (data.error) setLocationsError(data.reason || data.error);
+    } catch (e) {
+      setLocationsError(String(e));
+    } finally {
       setLocationsLoading(false);
     }
   }, []);
@@ -411,12 +416,28 @@ function GbpPageInner() {
             {/* Location picker banner */}
             {!hasLocation && (
               <div className="mb-5 bg-amber-50 border border-amber-200 rounded-xl p-4">
-                <p className="text-sm font-semibold text-amber-800 mb-1">Select your Google Business location</p>
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <p className="text-sm font-semibold text-amber-800">Select your Google Business location</p>
+                  <button onClick={() => loadGoogleLocations(teamId)} disabled={locationsLoading}
+                    className="flex-shrink-0 text-xs text-amber-700 hover:text-amber-900 underline disabled:opacity-50">
+                    {locationsLoading ? 'Loading…' : 'Retry'}
+                  </button>
+                </div>
                 <p className="text-xs text-amber-600 mb-3">
                   Select your business location to enable publishing posts and syncing reviews from Google.
-                  {locationsLoading && ' Loading locations from Google…'}
                 </p>
-                {allLocations.length > 0 ? (
+                {locationsLoading ? (
+                  <div className="flex items-center gap-2 text-xs text-amber-600">
+                    <span className="w-3 h-3 border-2 border-amber-500 border-t-transparent rounded-full animate-spin inline-block" />
+                    Loading locations from Google…
+                  </div>
+                ) : locationsError ? (
+                  <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                    <p className="font-semibold mb-0.5">Could not load locations:</p>
+                    <p className="font-mono break-all">{locationsError}</p>
+                    <p className="mt-1 text-red-600">If your Google token expired, <button onClick={handleConnect} className="underline font-medium">reconnect with Google</button>.</p>
+                  </div>
+                ) : allLocations.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
                     {allLocations.map((loc, i) => (
                       <button key={i} onClick={() => handleSelectLocation(loc.v4LocationName)}
@@ -425,13 +446,13 @@ function GbpPageInner() {
                       </button>
                     ))}
                   </div>
-                ) : !locationsLoading ? (
+                ) : (
                   <p className="text-xs text-amber-700">
                     No locations found on this Google account. Make sure your Google account is connected to a{' '}
                     <a href="https://business.google.com" target="_blank" rel="noreferrer" className="underline">Google Business Profile</a>.
                     You can still create draft posts without a location.
                   </p>
-                ) : null}
+                )}
               </div>
             )}
 
@@ -615,6 +636,13 @@ function GbpPageInner() {
                   <p className="text-xs text-gray-400 mb-3">Select which location to use for publishing posts and syncing reviews.</p>
                   {locationsLoading ? (
                     <p className="text-sm text-gray-400">Loading locations from Google…</p>
+                  ) : locationsError ? (
+                    <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">
+                      <p className="font-medium mb-1">Error loading locations</p>
+                      <p className="text-xs font-mono break-all mb-2">{locationsError}</p>
+                      <button onClick={() => loadGoogleLocations(teamId)} className="text-xs underline mr-3">Retry</button>
+                      <button onClick={handleConnect} className="text-xs underline">Reconnect with Google</button>
+                    </div>
                   ) : allLocations.length === 0 ? (
                     <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
                       No locations found. Make sure your Google account is linked to a{' '}

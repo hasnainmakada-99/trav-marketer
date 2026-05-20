@@ -67,9 +67,11 @@ export async function GET(request: NextRequest) {
     }
 
     console.error('[GBP Locations] Error:', error);
+    // Return 200 with empty accounts + reason so the UI can surface the error
+    // instead of silently showing "No locations found".
     return NextResponse.json(
-      { error: 'Failed to fetch GBP locations', reason: message },
-      { status: 500 }
+      { accounts: [], error: 'Failed to fetch locations', reason: message },
+      { status: 200 }
     );
   }
 }

@@ -250,21 +250,28 @@ export async function getAccessTokenForTeam(teamId: string): Promise<string> {
   const accessToken = businessConfig.googleAccessToken;
   const refreshToken = businessConfig.googleRefreshToken;
 
+  // Always refresh proactively when a refresh token is available.
+  // Google access tokens expire in 1 hour; we never store expiry, so we
+  // refresh on every call to avoid stale-token failures.
+  if (typeof refreshToken === 'string' && refreshToken.length > 0) {
+    try {
+      const refreshed = await refreshAccessToken(refreshToken);
+      // Update stored tokens in the background — don't block the API call.
+      saveGoogleConnection(teamId, {
+        googleAccessToken: refreshed.access_token,
+        googleRefreshToken: refreshed.refresh_token || refreshToken,
+      }).catch(() => {});
+      return refreshed.access_token;
+    } catch {
+      // Refresh failed (revoked?). Fall through to the stored access token.
+    }
+  }
+
   if (typeof accessToken === 'string' && accessToken.length > 0) {
     return accessToken;
   }
 
-  if (typeof refreshToken !== 'string' || refreshToken.length === 0) {
-    throw new Error('Google access is not connected for this team');
-  }
-
-  const refreshed = await refreshAccessToken(refreshToken);
-  await saveGoogleConnection(teamId, {
-    googleAccessToken: refreshed.access_token,
-    googleRefreshToken: refreshed.refresh_token || refreshToken,
-  });
-
-  return refreshed.access_token;
+  throw new Error('Google access is not connected for this team');
 }
 
 async function googleFetch<T>(url: string, accessToken: string, init?: RequestInit): Promise<T> {
