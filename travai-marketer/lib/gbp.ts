@@ -237,27 +237,7 @@ export async function saveGoogleConnection(
       updatedAt: now,
     };
 
-    try {
-      await createDocument('business_configs', fullPayload);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const mightBeUnknownAttr =
-        message.includes('Unknown attribute') || message.includes('Invalid document structure');
-
-      if (!mightBeUnknownAttr) {
-        throw error;
-      }
-
-      await createDocument('business_configs', {
-        teamId,
-        businessName: 'My Business',
-        googleAccessToken: updates.googleAccessToken,
-        googleRefreshToken: updates.googleRefreshToken || null,
-        googleLocationId: updates.googleLocationId || null,
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
+    await createDocument('business_configs', fullPayload);
   }
 }
 
