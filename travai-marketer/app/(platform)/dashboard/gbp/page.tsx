@@ -138,22 +138,17 @@ function GbpPageInner() {
 
   useEffect(() => { if (teamId) checkStatus(teamId); }, [teamId, checkStatus]);
 
-  // ── Load Google locations (called on-demand, not on mount, to avoid quota hits) ──
-  const loadGoogleLocations = useCallback(async (tid: string) => {
+  // ── Load locations — reads from DB cache by default, passes ?refresh=true to force Google API ──
+  const loadGoogleLocations = useCallback(async (tid: string, refresh = false) => {
     setLocationsLoading(true);
     setLocationsError(null);
     try {
-      const res = await fetch(`/api/gbp/locations?teamId=${encodeURIComponent(tid)}`);
+      const url = `/api/gbp/locations?teamId=${encodeURIComponent(tid)}${refresh ? '&refresh=true' : ''}`;
+      const res = await fetch(url);
       const data = await res.json();
       setAccounts(data.accounts || []);
       setLocationsLoaded(true);
-      if (data.error) {
-        if (data.error === 'quota_exceeded') {
-          setLocationsError('quota_exceeded');
-        } else {
-          setLocationsError(data.reason || data.error);
-        }
-      }
+      if (data.error) setLocationsError(data.error === 'quota_exceeded' ? 'quota_exceeded' : (data.reason || data.error));
     } catch (e) {
       setLocationsError(String(e));
     } finally {
@@ -161,7 +156,8 @@ function GbpPageInner() {
     }
   }, []);
 
-  // Don't auto-load locations — user clicks "Load" to avoid hitting Google API quota on every page view.
+  // Auto-load locations on connect — safe because the route serves from DB cache, not Google API.
+  useEffect(() => { if (teamId && connected) loadGoogleLocations(teamId); }, [teamId, connected, loadGoogleLocations]);
 
   // ── Posts ──
   const loadPosts = useCallback(async () => {
@@ -430,38 +426,39 @@ function GbpPageInner() {
                     <p className="text-sm font-semibold text-amber-800">Select your Google Business location</p>
                     <p className="text-xs text-amber-600 mt-0.5">Required to publish posts and sync reviews from Google.</p>
                   </div>
-                  {!locationsLoaded && (
-                    <button onClick={() => loadGoogleLocations(teamId)} disabled={locationsLoading}
-                      className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50">
-                      {locationsLoading
-                        ? <><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin inline-block" /> Loading…</>
-                        : 'Load my locations'}
-                    </button>
-                  )}
+                  <button onClick={() => loadGoogleLocations(teamId, true)} disabled={locationsLoading}
+                    className="flex-shrink-0 text-xs text-amber-700 hover:text-amber-900 underline disabled:opacity-50 whitespace-nowrap">
+                    {locationsLoading ? 'Loading…' : '↻ Refresh from Google'}
+                  </button>
                 </div>
 
+                {/* Loading spinner */}
+                {locationsLoading && (
+                  <div className="flex items-center gap-2 text-xs text-amber-600">
+                    <span className="w-3 h-3 border-2 border-amber-500 border-t-transparent rounded-full animate-spin inline-block" />
+                    Loading locations…
+                  </div>
+                )}
+
                 {/* Quota error */}
-                {locationsError === 'quota_exceeded' && (
-                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700 space-y-1">
-                    <p className="font-semibold">Google API quota exceeded — too many requests this minute.</p>
-                    <p>Wait 1–2 minutes then click <button onClick={() => { setLocationsError(null); setLocationsLoaded(false); }} className="underline font-medium">Retry</button>, or paste your location ID below.</p>
+                {!locationsLoading && locationsError === 'quota_exceeded' && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700">
+                    <p className="font-semibold mb-1">Google API quota exceeded (too many requests this minute).</p>
+                    <p>Wait 60 seconds then click <button onClick={() => loadGoogleLocations(teamId, true)} className="underline font-medium">Refresh from Google</button>, or paste your location ID in the field below.</p>
                   </div>
                 )}
 
                 {/* Other errors */}
-                {locationsError && locationsError !== 'quota_exceeded' && (
-                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700 space-y-1">
-                    <p className="font-semibold">Could not load locations from Google:</p>
-                    <p className="font-mono break-all">{locationsError}</p>
-                    <p>
-                      <button onClick={() => { setLocationsError(null); setLocationsLoaded(false); }} className="underline mr-2">Retry</button>
-                      <button onClick={handleConnect} className="underline">Reconnect with Google</button>
-                    </p>
+                {!locationsLoading && locationsError && locationsError !== 'quota_exceeded' && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700">
+                    <p className="font-semibold mb-0.5">Could not load locations:</p>
+                    <p className="font-mono break-all mb-1">{locationsError}</p>
+                    <button onClick={handleConnect} className="underline">Reconnect with Google</button>
                   </div>
                 )}
 
-                {/* Locations loaded successfully */}
-                {locationsLoaded && !locationsError && allLocations.length > 0 && (
+                {/* Location buttons from cache */}
+                {!locationsLoading && !locationsError && allLocations.length > 0 && (
                   <div className="flex flex-wrap gap-2">
                     {allLocations.map((loc, i) => (
                       <button key={i} onClick={() => handleSelectLocation(loc.v4LocationName)}
@@ -472,34 +469,28 @@ function GbpPageInner() {
                   </div>
                 )}
 
-                {locationsLoaded && !locationsError && allLocations.length === 0 && (
+                {!locationsLoading && !locationsError && locationsLoaded && allLocations.length === 0 && (
                   <p className="text-xs text-amber-700">
-                    No locations found. Make sure your Google account has a{' '}
-                    <a href="https://business.google.com" target="_blank" rel="noreferrer" className="underline">verified Business Profile</a>.
-                    Or paste your location ID below.
+                    No locations found on this Google account. Use the manual entry below or{' '}
+                    <button onClick={handleConnect} className="underline">reconnect</button>.
                   </p>
                 )}
 
-                {/* Manual entry fallback — always available */}
+                {/* Manual entry — always visible */}
                 <div className="border-t border-amber-200 pt-3">
                   <p className="text-xs text-amber-700 font-medium mb-1.5">Or enter your location ID manually:</p>
                   <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={manualLocationId}
-                      onChange={e => setManualLocationId(e.target.value)}
+                    <input type="text" value={manualLocationId} onChange={e => setManualLocationId(e.target.value)}
                       placeholder="accounts/123456789/locations/987654321"
-                      className="flex-1 border border-amber-300 bg-white rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-amber-400"
-                    />
-                    <button
-                      onClick={() => { if (manualLocationId.trim()) handleSelectLocation(manualLocationId.trim()); }}
+                      className="flex-1 border border-amber-300 bg-white rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-amber-400" />
+                    <button onClick={() => { if (manualLocationId.trim()) handleSelectLocation(manualLocationId.trim()); }}
                       disabled={!manualLocationId.trim()}
                       className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-medium disabled:opacity-50 transition-colors">
                       Use this
                     </button>
                   </div>
                   <p className="text-xs text-amber-600 mt-1">
-                    Find it in <a href="https://business.google.com/dashboard" target="_blank" rel="noreferrer" className="underline">Business Profile Manager</a> → the URL contains your location ID.
+                    Find it in <a href="https://business.google.com" target="_blank" rel="noreferrer" className="underline">Business Profile Manager</a> — the URL shows your location ID.
                   </p>
                 </div>
               </div>
@@ -683,9 +674,9 @@ function GbpPageInner() {
                 <div className="bg-white rounded-xl border border-gray-200 p-5">
                   <div className="flex items-center justify-between mb-1">
                     <h3 className="text-sm font-semibold text-gray-700">Google Business Location</h3>
-                    <button onClick={() => loadGoogleLocations(teamId)} disabled={locationsLoading}
+                    <button onClick={() => loadGoogleLocations(teamId, true)} disabled={locationsLoading}
                       className="text-xs text-indigo-600 hover:text-indigo-800 underline disabled:opacity-50">
-                      {locationsLoading ? 'Loading…' : 'Load from Google'}
+                      {locationsLoading ? 'Loading…' : '↻ Refresh from Google'}
                     </button>
                   </div>
                   <p className="text-xs text-gray-400 mb-3">Select which location to use for publishing posts and syncing reviews.</p>

@@ -26,6 +26,7 @@ interface BusinessConfigDocument {
   googleAccessToken?: string;
   googleRefreshToken?: string;
   googleLocationId?: string;
+  googleLocationsJson?: string;
 }
 
 export interface GbpAccount {
@@ -207,18 +208,23 @@ export async function saveGoogleConnection(
     googleAccessToken: string;
     googleRefreshToken?: string;
     googleLocationId?: string;
+    googleLocationsJson?: string;
   }
 ): Promise<void> {
   const businessConfig = await getBusinessConfigByTeamId(teamId);
 
   if (businessConfig) {
     // Update existing config
-    await updateDocument('business_configs', businessConfig.$id, {
+    const patch: Record<string, unknown> = {
       googleAccessToken: updates.googleAccessToken,
       googleRefreshToken: updates.googleRefreshToken || businessConfig.googleRefreshToken || null,
       googleLocationId: updates.googleLocationId || businessConfig.googleLocationId || null,
       updatedAt: new Date().toISOString(),
-    });
+    };
+    if (updates.googleLocationsJson !== undefined) {
+      patch.googleLocationsJson = updates.googleLocationsJson;
+    }
+    await updateDocument('business_configs', businessConfig.$id, patch);
   } else {
     // No config exists yet — create one automatically so the client
     // can connect GBP without any prior manual DB setup.
