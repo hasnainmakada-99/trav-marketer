@@ -4,7 +4,8 @@ import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
 
 const TEAM_ID = process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
 const IS_YCLOUD_MODE = (process.env.NEXT_PUBLIC_WHATSAPP_OUTBOUND_MODE || 'ycloud').toLowerCase() === 'ycloud';
-const POLL_INTERVAL_MS = 20_000;
+// 90 s when visible; polling pauses automatically when the tab is hidden.
+const POLL_INTERVAL_MS = 90_000;
 
 type Tab = 'inbox' | 'send';
 
@@ -212,12 +213,20 @@ function InboxTab({ showToast }: { showToast: (m: string, t?: 'success' | 'error
 
   useEffect(() => { loadConvos(); }, [loadConvos]);
   useEffect(() => {
-    if (pollRef.current) clearInterval(pollRef.current);
-    pollRef.current = setInterval(() => {
-      loadConvos(true);
-      if (selected) loadThread(selected);
-    }, POLL_INTERVAL_MS);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    const start = () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = setInterval(() => {
+        if (document.visibilityState === 'hidden') return; // skip when tab not focused
+        loadConvos(true);
+        if (selected) loadThread(selected);
+      }, POLL_INTERVAL_MS);
+    };
+    start();
+    document.addEventListener('visibilitychange', start);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      document.removeEventListener('visibilitychange', start);
+    };
   }, [loadConvos, loadThread, selected]);
 
   useEffect(() => {

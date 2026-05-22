@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { getCurrentUser } from '@/lib/appwrite-client';
 
-const POLL_MS = 15_000;
+// 60 s when visible; skipped when tab is hidden.
+const POLL_MS = 60_000;
 const STATUS_OPTIONS = ['new', 'contacted', 'converted', 'closed'] as const;
 type LeadStatus = (typeof STATUS_OPTIONS)[number];
 
@@ -86,9 +87,19 @@ export default function LeadsPage() {
 
   useEffect(() => {
     fetchLeads();
-    if (pollRef.current) clearInterval(pollRef.current);
-    pollRef.current = setInterval(() => fetchLeads(true), POLL_MS);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    const start = () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = setInterval(() => {
+        if (document.visibilityState === 'hidden') return;
+        fetchLeads(true);
+      }, POLL_MS);
+    };
+    start();
+    document.addEventListener('visibilitychange', start);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      document.removeEventListener('visibilitychange', start);
+    };
   }, [fetchLeads]);
 
   async function syncFromWhatsApp() {

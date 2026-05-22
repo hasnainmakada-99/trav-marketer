@@ -64,7 +64,10 @@ export async function GET(request: NextRequest) {
         try {
           const cached = JSON.parse(config.googleLocationsJson) as AccountRow[];
           if (Array.isArray(cached) && cached.length > 0) {
-            return NextResponse.json({ teamId, accounts: cached, fromCache: true }, { status: 200 });
+            return NextResponse.json(
+              { teamId, accounts: cached, fromCache: true },
+              { status: 200, headers: { 'Cache-Control': 'private, max-age=3600, stale-while-revalidate=300' } }
+            );
           }
         } catch {
           // Corrupt cache — fall through to Google

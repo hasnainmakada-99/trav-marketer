@@ -149,7 +149,12 @@ export async function GET(request: NextRequest) {
           new Date(a.lastTimestamp).getTime()
       );
 
-    return NextResponse.json({ conversations });
+    // 15 s browser cache — dashboard polls every 90 s so this just prevents
+    // duplicate in-flight requests from multiple tabs/rapid navigation.
+    return NextResponse.json(
+      { conversations },
+      { headers: { 'Cache-Control': 'private, max-age=15, stale-while-revalidate=5' } }
+    );
   } catch (error) {
     // Collection may not exist yet (fresh install) or have no data — return empty list.
     console.warn('[WA conversations] Returning empty list:', error instanceof Error ? error.message : error);
