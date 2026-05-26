@@ -3,7 +3,17 @@
     {
       "source": "/(.*)",
       "destination": "https://161-118-174-116.sslip.io/$1",
-      "permanent": false
+      "permanent": true
+    }
+  ],
+  "crons": [],
+  "functions": {},
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=3600, s-maxage=3600" }
+      ]
     }
   ]
 }
