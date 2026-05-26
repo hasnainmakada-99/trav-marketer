@@ -4,8 +4,9 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { getCurrentUser } from '@/lib/appwrite-client';
 
-// 60 s when visible; skipped when tab is hidden.
-const POLL_MS = 60_000;
+const POLL_MS_RAW = Number(process.env.NEXT_PUBLIC_LEADS_POLL_MS || '180000');
+// Default 3 min when visible; skipped when tab is hidden.
+const POLL_MS = Number.isFinite(POLL_MS_RAW) ? Math.max(30_000, POLL_MS_RAW) : 180_000;
 const STATUS_OPTIONS = ['new', 'contacted', 'converted', 'closed'] as const;
 type LeadStatus = (typeof STATUS_OPTIONS)[number];
 
@@ -57,6 +58,7 @@ export default function LeadsPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<{ created: number; updated: number; firstError?: string | null } | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -114,6 +116,18 @@ export default function LeadsPage() {
       setSyncResult({ created: 0, updated: 0, firstError: err instanceof Error ? err.message : 'Network error' });
     } finally {
       setSyncing(false);
+    }
+  }
+
+  async function deleteLead(id: string) {
+    if (!confirm('Delete this lead? This cannot be undone.')) return;
+    setDeleting(id);
+    try {
+      await fetch(`/api/leads/${id}`, { method: 'DELETE' });
+      setLeads(prev => prev.filter(l => l.$id !== id));
+      setTotal(prev => prev - 1);
+    } finally {
+      setDeleting(null);
     }
   }
 
@@ -293,11 +307,10 @@ export default function LeadsPage() {
                   const cfg = STATUS_CONFIG[lead.status] || STATUS_CONFIG.new;
                   const notesOpen = expandedNotes === lead.$id;
                   return (
-                    <>
-                      <tr
-                        key={lead.$id}
-                        className={`border-b border-gray-50 hover:bg-gray-50/60 transition-colors ${cfg.row}`}
-                      >
+                    <tr
+                      key={lead.$id}
+                      className={`border-b border-gray-50 hover:bg-gray-50/60 transition-colors ${cfg.row}`}
+                    >
                         <td className="px-5 py-3.5 text-gray-400 text-xs font-mono">{idx + 1}</td>
                         <td className="px-4 py-3.5">
                           <div className="flex items-center gap-3">
@@ -375,10 +388,17 @@ export default function LeadsPage() {
                                 <option key={s} value={s}>{STATUS_CONFIG[s].label}</option>
                               ))}
                             </select>
+                            <button
+                              onClick={() => deleteLead(lead.$id)}
+                              disabled={deleting === lead.$id}
+                              title="Delete lead"
+                              className="text-xs px-2 py-1 rounded-lg text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors disabled:opacity-50"
+                            >
+                              {deleting === lead.$id ? '…' : '✕'}
+                            </button>
                           </div>
                         </td>
-                      </tr>
-                    </>
+                    </tr>
                   );
                 })}
               </tbody>

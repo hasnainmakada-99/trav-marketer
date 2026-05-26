@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { updateDocument } from '@/lib/appwrite';
+import { deleteDocument, updateDocument } from '@/lib/appwrite';
 
 export async function PATCH(
   request: NextRequest,
@@ -21,5 +21,20 @@ export async function PATCH(
   } catch (err) {
     console.error('[PATCH /api/leads/[id]]', err);
     return NextResponse.json({ error: 'Failed to update lead' }, { status: 500 });
+  }
+}
+
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params;
+    if (!id) return NextResponse.json({ error: 'Missing lead id' }, { status: 400 });
+    await deleteDocument('leads', id);
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    console.error('[DELETE /api/leads/[id]]', err);
+    return NextResponse.json({ error: 'Failed to delete lead' }, { status: 500 });
   }
 }
