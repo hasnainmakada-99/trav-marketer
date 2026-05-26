@@ -7,7 +7,6 @@
     }
   ],
   "crons": [],
-  "functions": {},
   "headers": [
     {
       "source": "/(.*)",
