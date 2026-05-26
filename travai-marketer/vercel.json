@@ -1,0 +1,9 @@
+{
+  "redirects": [
+    {
+      "source": "/(.*)",
+      "destination": "https://161-118-174-116.sslip.io/$1",
+      "permanent": false
+    }
+  ]
+}
