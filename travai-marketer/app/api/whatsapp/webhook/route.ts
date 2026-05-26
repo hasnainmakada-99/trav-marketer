@@ -576,6 +576,23 @@ async function processIncomingMessage(
     const type = incoming.type || 'text';
     const text = 'text' in incoming ? (incoming.text || '') : '';
     const messageId = incoming.messageId || null;
+
+    // Drop messages from the Traventions own number (self-loop) and auto-replies
+    const ownPhone = (process.env.YCLOUD_WHATSAPP_FROM || '').replace(/\D/g, '');
+    if (ownPhone && phone.replace(/\D/g, '') === ownPhone) {
+      console.log(`[WhatsApp] Skipping self-message from own number ${phone}`);
+      return;
+    }
+    const AUTOREPLY_PATTERNS = [
+      /reach out to us/i, /thanks for reaching out/i, /out of (office|town)/i,
+      /automated (message|reply|response)/i, /do not (reply|respond)/i,
+      /this is an? (auto|automated)/i, /unsubscribe/i,
+    ];
+    if (text && AUTOREPLY_PATTERNS.some(p => p.test(text))) {
+      console.log(`[WhatsApp] Skipping auto-reply from ${phone}: "${text.slice(0, 80)}"`);
+      return;
+    }
+
     const teamId = await resolveTeamIdByPhoneNumberId(webhookPhoneNumberId);
     const dedupeKey = buildInboundDedupeKey({
       teamId,
