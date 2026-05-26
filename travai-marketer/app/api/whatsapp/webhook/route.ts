@@ -646,16 +646,6 @@ async function processIncomingMessage(
       }).catch(() => customer);
     }
 
-    // Save/update lead on every non-greeting inbound message.
-    // Phone (`from`) is always the identifier — name is optional.
-    saveLead({
-      teamId,
-      phone,
-      customer,
-      intent: 'inquiry',
-      notes: text.slice(0, 300),
-    }).catch(() => {});
-
     if (handover) {
       console.log(`[WhatsApp] AI suppressed for ${phone} due to staff takeover`);
       return;
@@ -791,6 +781,17 @@ async function generateAndSendResponse(
   try {
     const resolvedTeamId =
       teamId || customer.teamId || process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'system';
+
+    // Save lead only when the bot actively responds — prevents junk/spam numbers
+    // from appearing in the CRM just because they sent an unhandled message.
+    saveLead({
+      teamId: resolvedTeamId,
+      phone,
+      customer,
+      intent,
+      notes: correctedText.slice(0, 300),
+    }).catch(() => {});
+
     const typingKeepAlive = await startYCloudTypingKeepAlive(inboundMessageId);
     try {
 
@@ -909,15 +910,6 @@ async function generateAndSendResponse(
       });
       return;
     }
-
-    // Always save/update lead — phone is always the identifier, name is optional.
-    saveLead({
-      teamId: resolvedTeamId,
-      phone,
-      customer,
-      intent,
-      notes: correctedText.slice(0, 300),
-    }).catch(() => {});
 
     // Load knowledge for AI context
     const knowledge = await loadTravelKnowledgeFast(resolvedTeamId, correctedText);

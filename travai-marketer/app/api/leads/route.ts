@@ -20,7 +20,33 @@ export async function GET(request: NextRequest) {
     }
 
     const result = await listDocuments('leads', queries);
-    return NextResponse.json({ leads: result.documents, total: result.total });
+
+    // Enrich with customer names — leads only store names if AI extracted them from
+    // conversation text; the customers collection gets updated as conversations grow.
+    const phonesMissingName = (result.documents as Array<{ phone?: string; name?: string }>)
+      .filter(l => !l.name && l.phone)
+      .map(l => l.phone as string);
+
+    const nameByPhone = new Map<string, string>();
+    if (phonesMissingName.length > 0) {
+      const custResult = await listDocuments('customers', [
+        Query.equal('phone', phonesMissingName),
+        Query.limit(200),
+      ]).catch(() => ({ documents: [] }));
+      for (const c of custResult.documents as Array<{ phone?: string; name?: string }>) {
+        if (c.phone && c.name) nameByPhone.set(c.phone, c.name);
+      }
+    }
+
+    const leads = (result.documents as Array<Record<string, unknown>>).map(l => ({
+      ...l,
+      name: (l.name as string | null) || nameByPhone.get(l.phone as string) || null,
+    }));
+
+    return NextResponse.json(
+      { leads, total: result.total },
+      { headers: { 'Cache-Control': 'private, max-age=15, stale-while-revalidate=15' } }
+    );
   } catch (err) {
     console.error('[GET /api/leads]', err);
     return NextResponse.json({ error: 'Failed to fetch leads' }, { status: 500 });
