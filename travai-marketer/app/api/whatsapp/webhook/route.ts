@@ -840,32 +840,37 @@ async function generateAndSendResponse(
     const typingKeepAlive = await startYCloudTypingKeepAlive(inboundMessageId);
     try {
 
-      // Get recent conversation history
+      // Fetch up to 40 messages so the workflow engine never loses the intent-lock
+      // signal even in long conversations. OpenAI only receives the last 20.
       const convos = await listDocuments('conversations', [
         Query.equal('teamId', resolvedTeamId),
         Query.equal('customerId', customer.$id),
         Query.orderDesc('$createdAt'),
-        Query.limit(10),
+        Query.limit(40),
       ]);
 
     const historyRows = convos.documents as Array<{ role?: string; message?: string; sentBy?: string }>;
-    const history = historyRows
-      .slice(0, 12)
-      .reverse()
-      .map((c) => ({
-        role: (c.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
-        content: c.message || '[media]',
-      }));
-    // Current inbound was already stored above, so remove it from history to avoid double prompting.
-    if (history.length > 0) {
-      const last = history[history.length - 1];
+
+    // Full chronological history (all 40) — used for workflow state resolution
+    const fullHistory = [...historyRows].reverse().map((c) => ({
+      role: (c.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+      content: c.message || '[media]',
+    }));
+
+    // Remove the current inbound message from the tail (already stored above)
+    if (fullHistory.length > 0) {
+      const last = fullHistory[fullHistory.length - 1];
       if (
         last.role === 'user' &&
         normalizeTextForDedupe(last.content) === normalizeTextForDedupe(userMessage)
       ) {
-        history.pop();
+        fullHistory.pop();
       }
     }
+
+    // Truncated history sent to OpenAI — last 20 messages keeps token budget sane
+    const history = fullHistory.slice(-20);
+
     const assistantMessages = historyRows.filter((row) => row.role === 'assistant').length;
     const firstAssistantReply = assistantMessages === 0;
     const recentAi = await listDocuments('conversations', [
@@ -956,8 +961,9 @@ async function generateAndSendResponse(
       return;
     }
 
-    // Resolve structured workflow state from history
-    const historyUserMessages = history.filter(h => h.role === 'user').map(h => h.content);
+    // Resolve structured workflow state using the FULL history (all 40 messages)
+    // so the intent lock and slot values are never lost in long conversations.
+    const historyUserMessages = fullHistory.filter(h => h.role === 'user').map(h => h.content);
     const workflowState = resolveWorkflowState({
       userMessage: correctedText,
       classifiedIntent: intent,
@@ -1010,7 +1016,7 @@ async function generateAndSendResponse(
     );
     const memoryBlock = buildConversationMemoryBlock({
       state: workflowState,
-      recentUserMessages: historyUserMessages,
+      recentUserMessages: historyUserMessages.slice(-12),
     });
 
     const systemPrompt = [

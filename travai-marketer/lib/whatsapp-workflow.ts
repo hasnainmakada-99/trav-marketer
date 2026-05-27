@@ -940,26 +940,26 @@ export function buildConversationMemoryBlock(args: {
   state: WorkflowState;
   recentUserMessages?: string[];
 }): string {
-  const recent = (args.recentUserMessages || []).filter(Boolean).slice(-6);
+  const recent = (args.recentUserMessages || []).filter(Boolean).slice(-12);
   const slotPairs = Object.entries(args.state.slots || {}).filter(([, v]) => Boolean(v));
   const slotText =
     slotPairs.length > 0
-      ? slotPairs.map(([k, v]) => `${k}=${v}`).join(', ')
-      : 'none';
+      ? slotPairs.map(([k, v]) => `${k}: ${v}`).join(' | ')
+      : 'none yet';
   const recentText =
     recent.length > 0
-      ? recent.map((v, i) => `${i + 1}. ${v}`).join('\n')
+      ? recent.map((v, i) => `${i + 1}. "${v}"`).join('\n')
       : 'none';
 
   return [
-    'CONVERSATION MEMORY (must be respected):',
-    `- Active workflow: ${args.state.intent}`,
-    `- Current stage: ${args.state.stage}`,
-    `- Captured user details: ${slotText}`,
-    `- Missing details: ${args.state.missingSlots.length ? args.state.missingSlots.join(', ') : 'none'}`,
-    '- Recent user messages:',
+    '─── CONVERSATION MEMORY (AUTHORITATIVE — follow exactly) ───',
+    `Intent  : ${args.state.intent}`,
+    `Stage   : ${args.state.stage}`,
+    `Collected slots: ${slotText}`,
+    `Missing : ${args.state.missingSlots.length ? args.state.missingSlots.join(', ') : 'none — all collected'}`,
+    'Recent user messages (oldest → newest):',
     recentText,
-    '- Do not ask for already captured details again unless user explicitly edits them.',
+    'RULE: Never re-ask for already captured slots. Never contradict captured data.',
   ].join('\n');
 }
 
