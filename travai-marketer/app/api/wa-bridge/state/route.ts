@@ -332,14 +332,17 @@ export async function GET(request: NextRequest) {
 
     const row = await findBridgeState(teamId);
     if (!row) {
-      return NextResponse.json({
-        teamId,
-        status: 'starting',
-        qrText: null,
-        reason: null,
-        linkedPhone: null,
-        heartbeatAt: null,
-      });
+      return NextResponse.json(
+        {
+          teamId,
+          status: 'starting',
+          qrText: null,
+          reason: null,
+          linkedPhone: null,
+          heartbeatAt: null,
+        },
+        { headers: { 'Cache-Control': 'private, max-age=10, stale-while-revalidate=20' } }
+      );
     }
 
     const state = row as {
@@ -353,16 +356,19 @@ export async function GET(request: NextRequest) {
       updatedAt?: string | null;
     };
 
-    return NextResponse.json({
-      teamId: state.teamId || teamId,
-      status: sanitizeStatus(state.status),
-      qrText: state.qrText || null,
-      reason: state.reason || null,
-      linkedPhone: state.linkedPhone || null,
-      heartbeatAt: state.heartbeatAt || null,
-      linkedAt: state.linkedAt || null,
-      updatedAt: state.updatedAt || null,
-    });
+    return NextResponse.json(
+      {
+        teamId: state.teamId || teamId,
+        status: sanitizeStatus(state.status),
+        qrText: state.qrText || null,
+        reason: state.reason || null,
+        linkedPhone: state.linkedPhone || null,
+        heartbeatAt: state.heartbeatAt || null,
+        linkedAt: state.linkedAt || null,
+        updatedAt: state.updatedAt || null,
+      },
+      { headers: { 'Cache-Control': 'private, max-age=10, stale-while-revalidate=20' } }
+    );
   } catch (error) {
     console.error('[WA Bridge State GET] Error:', error);
     return NextResponse.json(

@@ -149,8 +149,7 @@ export async function GET(request: NextRequest) {
           new Date(a.lastTimestamp).getTime()
       );
 
-    // 15 s browser cache — dashboard polls every 90 s so this just prevents
-    // duplicate in-flight requests from multiple tabs/rapid navigation.
+    // 15 s browser cache to reduce duplicate polling from multiple tabs/rapid navigation.
     return NextResponse.json(
       { conversations },
       { headers: { 'Cache-Control': 'private, max-age=15, stale-while-revalidate=5' } }

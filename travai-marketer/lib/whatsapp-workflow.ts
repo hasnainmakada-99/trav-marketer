@@ -374,8 +374,8 @@ function parseGeneralSlots(message: string, intent: WorkflowIntent = 'unknown'):
     slots.destination = slots.to_city;
   }
 
-  // Short standalone response (1-3 alpha words) is likely a destination when in plan_holiday context
-  if (intent === 'plan_holiday' && !slots.destination) {
+  // Short standalone response (1-3 alpha words) is likely a destination when in plan_holiday or hotels context
+  if ((intent === 'plan_holiday' || intent === 'hotels') && !slots.destination) {
     const words = raw.trim().split(/\s+/);
     const isShortAlpha = words.length <= 3 && words.every((w) => /^[a-zA-Z.'-]+$/.test(w));
     const NOT_DESTINATIONS = new Set([
@@ -599,7 +599,11 @@ function isMenuRepeatMessage(text: string): boolean {
 
 function findLockedIntentFromHistory(historyMessages: string[]): WorkflowIntent | null {
   for (let i = historyMessages.length - 1; i >= 0; i--) {
-    const intent = detectWorkflowIntent(historyMessages[i] || '');
+    const msg = historyMessages[i] || '';
+    // A greeting marks the start of a new session — stop scanning here so old
+    // session messages cannot bleed their intent into the current session.
+    if (isGreetingLike(msg)) break;
+    const intent = detectWorkflowIntent(msg);
     if (intent !== 'unknown') return intent;
   }
   return null;
@@ -623,20 +627,28 @@ export function resolveWorkflowState(args: {
   const historyMessages = args.historyMessages || [];
   const msgIntent = detectWorkflowIntent(args.userMessage, args.classifiedIntent);
   const selected = args.selectedIntent && args.selectedIntent !== 'unknown' ? args.selectedIntent : null;
-  const locked = shouldResetState(args.userMessage) ? null : findLockedIntentFromHistory(historyMessages);
+  const locked = (shouldResetState(args.userMessage) || isGreetingLike(args.userMessage))
+    ? null
+    : findLockedIntentFromHistory(historyMessages);
 
   // Locked intent from history wins unless the current message is an explicit,
   // unambiguous service selection (button tap / single keyword).
   // This prevents travel-detail messages like "2 Adults, July, Bangalore, 5 Nights"
   // from accidentally overriding the locked plan_holiday intent.
   const canOverrideLocked = !locked || isDirectServiceSelection(args.userMessage);
+  // resolvedOverride: prefer explicitly-passed selectedIntent, fall back to detected msgIntent.
+  // This ensures that when the user taps "Hotels" and locked='plan_holiday', the Hotels
+  // intent wins (selected is null but msgIntent='hotels', so resolvedOverride='hotels').
+  const resolvedOverride: WorkflowIntent | null =
+    selected ?? (msgIntent !== 'unknown' ? msgIntent : null);
   const intent: WorkflowIntent =
-    (canOverrideLocked && selected) ? selected
+    (canOverrideLocked && resolvedOverride)
+      ? resolvedOverride
       : locked
         ? locked
         : selected || (msgIntent !== 'unknown' ? msgIntent : 'unknown');
-  const source: WorkflowState['source'] = selected && canOverrideLocked
-    ? 'selected_now'
+  const source: WorkflowState['source'] = (canOverrideLocked && resolvedOverride)
+    ? (selected ? 'selected_now' : 'detected_now')
     : locked
       ? 'locked_history'
       : 'detected_now';

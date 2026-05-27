@@ -4,8 +4,11 @@ import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
 
 const TEAM_ID = process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
 const IS_YCLOUD_MODE = (process.env.NEXT_PUBLIC_WHATSAPP_OUTBOUND_MODE || 'ycloud').toLowerCase() === 'ycloud';
-// 90 s when visible; polling pauses automatically when the tab is hidden.
-const POLL_INTERVAL_MS = 90_000;
+const POLL_INTERVAL_RAW = Number(process.env.NEXT_PUBLIC_WHATSAPP_POLL_MS || '180000');
+// Default 3 min when visible; polling pauses automatically when the tab is hidden.
+const POLL_INTERVAL_MS = Number.isFinite(POLL_INTERVAL_RAW)
+  ? Math.max(30_000, POLL_INTERVAL_RAW)
+  : 180_000;
 
 type Tab = 'inbox' | 'send';
 

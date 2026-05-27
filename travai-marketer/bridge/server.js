@@ -34,6 +34,8 @@ const HTTP_TIMEOUT_MS = Number(process.env.BRIDGE_HTTP_TIMEOUT_MS || 30000);
 const BRIDGE_AUTH_AUTO_RESET = String(process.env.BRIDGE_AUTH_AUTO_RESET || 'false') === 'true';
 const BRIDGE_AUTH_RESET_401_THRESHOLD = Number(process.env.BRIDGE_AUTH_RESET_401_THRESHOLD || 5);
 const BRIDGE_AUTH_RESET_WINDOW_MS = Number(process.env.BRIDGE_AUTH_RESET_WINDOW_MS || 300000);
+const BRIDGE_STATE_HEARTBEAT_MS = Number(process.env.BRIDGE_STATE_HEARTBEAT_MS || 600000);
+const BRIDGE_CONTROL_POLL_MS = Number(process.env.BRIDGE_CONTROL_POLL_MS || 60000);
 
 const lockFilePath   = path.resolve(process.cwd(), '.bridge.lock');
 const authStatePath  = path.resolve(process.cwd(), '.baileys_auth');
@@ -42,6 +44,20 @@ if (!BRIDGE_SHARED_SECRET || !NEXT_APP_BRIDGE_URL || !NEXT_APP_BRIDGE_STATE_URL 
   console.error('Missing BRIDGE_SHARED_SECRET or bridge URLs. Check bridge/.env');
   process.exit(1);
 }
+
+if (!Number.isFinite(BRIDGE_STATE_HEARTBEAT_MS) || BRIDGE_STATE_HEARTBEAT_MS < 15000) {
+  console.error('Invalid BRIDGE_STATE_HEARTBEAT_MS. Use a number >= 15000.');
+  process.exit(1);
+}
+
+if (!Number.isFinite(BRIDGE_CONTROL_POLL_MS) || BRIDGE_CONTROL_POLL_MS < 5000) {
+  console.error('Invalid BRIDGE_CONTROL_POLL_MS. Use a number >= 5000.');
+  process.exit(1);
+}
+
+console.log(
+  `Bridge polling config: state heartbeat ${Math.round(BRIDGE_STATE_HEARTBEAT_MS / 1000)}s, control poll ${Math.round(BRIDGE_CONTROL_POLL_MS / 1000)}s`
+);
 
 function bridgeHeaders(contentType = true) {
   const headers = {
@@ -419,7 +435,7 @@ function startHeartbeatLoop() {
     } finally {
       heartbeatInFlight = false;
     }
-  }, 30000);
+  }, BRIDGE_STATE_HEARTBEAT_MS);
 }
 
 function stopHeartbeatLoop() {
@@ -516,7 +532,8 @@ async function pollControlCommands() {
 
 function startControlPolling() {
   if (controlPollTimer) return;
-  controlPollTimer = setInterval(() => { pollControlCommands(); }, 5000);
+  void pollControlCommands();
+  controlPollTimer = setInterval(() => { pollControlCommands(); }, BRIDGE_CONTROL_POLL_MS);
 }
 
 function stopControlPolling() {

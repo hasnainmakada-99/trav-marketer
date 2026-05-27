@@ -84,16 +84,22 @@ export async function GET(
       }
     );
 
-    return NextResponse.json({
-      phone: decodedPhone,
-      messages,
-    });
+    return NextResponse.json(
+      {
+        phone: decodedPhone,
+        messages,
+      },
+      { headers: { 'Cache-Control': 'private, max-age=10, stale-while-revalidate=10' } }
+    );
   } catch (error) {
     // Collection may not exist yet; return empty thread.
     console.warn(
       '[WA thread] Returning empty thread:',
       error instanceof Error ? error.message : error
     );
-    return NextResponse.json({ phone: decodedPhone, messages: [] });
+    return NextResponse.json(
+      { phone: decodedPhone, messages: [] },
+      { headers: { 'Cache-Control': 'private, max-age=5, stale-while-revalidate=10' } }
+    );
   }
 }
