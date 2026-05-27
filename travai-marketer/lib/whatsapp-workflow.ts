@@ -344,8 +344,13 @@ function tryParseCommaFormat(raw: string, intent: WorkflowIntent, existingSlots:
 
   const cities = unclassified.filter(safeCityPart);
   if (intent === 'plan_holiday') {
-    if (!existingSlots.destination && cities[0]) slots.destination = cities[0];
-    if (!existingSlots.departure_city && cities[1]) slots.departure_city = cities[1];
+    if (existingSlots.destination) {
+      // In travel-details step, a single city usually means departure city.
+      if (!existingSlots.departure_city && cities[0]) slots.departure_city = cities[0];
+    } else if (!existingSlots.destination && cities[0]) {
+      slots.destination = cities[0];
+      if (!existingSlots.departure_city && cities[1]) slots.departure_city = cities[1];
+    }
   }
   if (intent === 'hotels') {
     if (!existingSlots.destination && cities[0]) slots.destination = cities[0];
@@ -358,7 +363,11 @@ function tryParseCommaFormat(raw: string, intent: WorkflowIntent, existingSlots:
   return slots;
 }
 
-function parseGeneralSlots(message: string, intent: WorkflowIntent = 'unknown'): WorkflowSlotMap {
+function parseGeneralSlots(
+  message: string,
+  intent: WorkflowIntent = 'unknown',
+  knownSlots: WorkflowSlotMap = {}
+): WorkflowSlotMap {
   const raw = autoCorrect(String(message || '').trim()); // fix typos first
   const text = normalize(raw);
   const slots: WorkflowSlotMap = {};
@@ -378,6 +387,15 @@ function parseGeneralSlots(message: string, intent: WorkflowIntent = 'unknown'):
   if (fromTo?.[1] && fromTo?.[2]) {
     slots.from_city = fromTo[1].trim();
     slots.to_city = fromTo[2].trim();
+  } else {
+    // Common compact route input: "Delhi to Mumbai, 25th June, 2 Adults"
+    const compactFromTo = raw.match(
+      /(?:^|,|\broute\b\s*[:\-]?\s*)([a-zA-Z][a-zA-Z .'-]{1,28})\s+to\s+([a-zA-Z][a-zA-Z .'-]{1,28})(?=,|$|\s+\d)/i
+    );
+    if (compactFromTo?.[1] && compactFromTo?.[2]) {
+      slots.from_city = compactFromTo[1].trim();
+      slots.to_city = compactFromTo[2].trim();
+    }
   }
 
   if (!slots.destination) {
@@ -498,7 +516,7 @@ function parseGeneralSlots(message: string, intent: WorkflowIntent = 'unknown'):
   if (callbackTime) slots.callback_time = callbackTime;
 
   // Try comma-separated format if we still have missing common fields
-  const commaSlots = tryParseCommaFormat(raw, intent, slots);
+  const commaSlots = tryParseCommaFormat(raw, intent, { ...knownSlots, ...slots });
   return mergeSlots(slots, commaSlots);
 }
 
@@ -727,9 +745,9 @@ export function resolveWorkflowState(args: {
   const sessionMessages = historyMessages.slice(slotStart);
   let slots: WorkflowSlotMap = {};
   for (const item of sessionMessages) {
-    slots = mergeSlots(slots, parseGeneralSlots(item, intent));
+    slots = mergeSlots(slots, parseGeneralSlots(item, intent, slots));
   }
-  slots = mergeSlots(slots, parseGeneralSlots(args.userMessage, intent));
+  slots = mergeSlots(slots, parseGeneralSlots(args.userMessage, intent, slots));
   // AI-extracted slot hints are a fallback layer: they only fill still-missing fields
   // and never override slots already captured by deterministic parsing.
   if (args.aiSlots) {
@@ -969,6 +987,9 @@ export function detectWorkflowIntent(message: string, classifiedIntent?: string)
   // This prevents "2 adults" or "2, june, ..." from being classified as "Flights".
   const isDigitSelect = (n: string) => new RegExp(`^${n}\\.?\\s*$`).test(text);
 
+  const hasFlightKeyword =
+    /(^|\s)(svc_2|flight|flights|fligth|fligths|air ticket|airticket|airfare)(\s|$)/.test(joined);
+
   // plan_holiday — fuzzy-match "holiday", "package", "tour", "leisure"
   if (
     isDigitSelect('1') ||
@@ -980,16 +1001,15 @@ export function detectWorkflowIntent(message: string, classifiedIntent?: string)
     const explicitPlanHoliday =
       isDigitSelect('1') ||
       /(^|\s)(svc_1|plan a holiday|plan holiday)(\s|$)/.test(text);
-    const flightLike = fuzzyAny(text, ['flight', 'flights', 'airfare', 'ticket']);
+    const flightLike = hasFlightKeyword;
     const hotelLike = isDigitSelect('3') || /(^|\s)(svc_3|hotel|hotels|stay|resort)(\s|$)/.test(joined);
     if (explicitPlanHoliday || (!flightLike && !hotelLike)) return 'plan_holiday';
   }
 
-  // flights — fuzzy-match "flights", "flight", "airfare"
+  // flights — strict keyword matching only (avoid false positives like "nights")
   if (
     isDigitSelect('2') ||
-    /(^|\s)(svc_2|flight|flights|air ticket|airfare)(\s|$)/.test(joined) ||
-    fuzzyAny(text, ['flights', 'flight', 'airfare'])
+    hasFlightKeyword
   ) {
     return 'flights';
   }
