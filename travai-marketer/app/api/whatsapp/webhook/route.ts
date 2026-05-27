@@ -31,6 +31,7 @@ import {
   getWorkflowSystemPromptBlock,
   buildConversationMemoryBlock,
   buildLeadNotes,
+  isQuestionLike,
 } from '@/lib/whatsapp-workflow';
 
 // Verify webhook token from Meta
@@ -648,6 +649,28 @@ async function processIncomingMessage(
     markInboundProcessed(dedupeKey);
 
     if (!text) {
+      // Non-text message (audio, image, video, sticker) — send a friendly nudge
+      const nonTextReply = type === 'audio' || type === 'voice'
+        ? '😊 I received your voice note! Unfortunately I can only read text right now. Please type your message and I\'ll be happy to help!'
+        : type === 'image' || type === 'video'
+          ? '📸 Thanks for sharing! I work best with text messages. Please describe what you need and I\'ll assist you right away 😊'
+          : '😊 I work best with text messages. Please type your query and I\'ll help you plan your trip!';
+
+      const handoverCheck = await hasHumanTakeover(teamId, phone);
+      if (!handoverCheck) {
+        const sendResult = await sendAutoReply({
+          requestUrl, teamId, customerId: customer.$id,
+          phone, message: nonTextReply, webhookPhoneNumberId,
+        }).catch(() => ({ success: false, messageId: null, mode: 'unknown' }));
+        if (sendResult.success) {
+          await createDocument('conversations', {
+            teamId, customerId: customer.$id, phone,
+            role: 'assistant', message: nonTextReply, messageType: 'text',
+            sentBy: 'ai', metaMessageId: sendResult.messageId || null,
+            deliveryStatus: 'sent', createdAt: new Date().toISOString(),
+          });
+        }
+      }
       return;
     }
 
@@ -942,7 +965,9 @@ async function generateAndSendResponse(
     });
 
     // Try deterministic workflow reply first (ask_destination, ask_holiday_type, etc.)
-    const deterministicReply = buildWorkflowReply(workflowState);
+    // Skip deterministic for question-like messages so AI can briefly answer
+    // before re-asking the required stage info.
+    const deterministicReply = isQuestionLike(correctedText) ? null : buildWorkflowReply(workflowState);
     if (deterministicReply !== null) {
       const waReply = normalizeToWhatsAppMarkdown(deterministicReply);
       if (
@@ -990,15 +1015,27 @@ async function generateAndSendResponse(
 
     const systemPrompt = [
       businessConfig?.openaiSystemPrompt || '',
-      `You are Sini, a warm and knowledgeable travel sales assistant for Traventions (a full-service travel agency in India).`,
+      `You are Sini, a warm and knowledgeable travel sales assistant for Traventions (a full-service travel agency in India).
+You ALWAYS respond — no matter what the customer sends (short, long, confusing, off-topic, emoji-only, Hindi, Hinglish, random text).`,
       getBotRoutePolicyPromptBlock(),
       workflowBlock,
       memoryBlock,
-      `GLOBAL RULES:
-- WhatsApp formatting only: *bold*, _italic_, numbered lists, bullet lists. NEVER markdown links [text](url) — plain URLs only.
+      `HANDLING UNEXPECTED INPUTS (mandatory):
+- Emoji-only or very short messages (ok, yes, no, 👍, 🙏) → interpret in context of current stage; if ambiguous, re-ask the stage question warmly.
+- Questions mid-flow (Is Dubai visa-free? What currency does Bali use?) → briefly answer in 1-2 sentences, then re-ask the stage question.
+- Hindi or Hinglish → respond in the same language if possible, continue the flow.
+- Angry or frustrated customer → empathize first ("I completely understand your concern 😊"), then offer to help.
+- "Speak to human" / "agent" / "staff" → "Sure! Our team can be reached at info@traventions.com. I can also continue helping you right now 😊"
+- Completely off-topic (weather, sports, jokes, etc.) → "That's a little outside my expertise! I'm here to help with travel ✈️" then re-ask stage question.
+- Random characters or test messages → "Hello! 😊 I'm Sini from Traventions. How can I help you plan your next trip?"
+- User wants to change their mind (different destination, different dates) → accept gracefully and update the plan.
+
+GLOBAL RULES:
+- WhatsApp formatting only: *bold*, _italic_, numbered lists, bullet * lists. NEVER markdown links [text](url) — plain URLs only.
 - INR only for all pricing — never USD or $.
-- Keep reply concise and focused on the current stage task only.
+- Keep reply concise and focused. Under 250 words unless generating packages.
 - Never repeat questions already answered by the customer.
+- ALWAYS send a reply — never respond with empty text.
 - Website: ${safeBestWebsiteUrl}`,
       knowledge.databaseSnippets.length
         ? `\nPACKAGE KNOWLEDGE:\n${knowledge.databaseSnippets.slice(0, 6).map((v, i) => `${i + 1}. ${v}`).join('\n')}`

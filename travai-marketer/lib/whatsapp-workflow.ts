@@ -568,7 +568,21 @@ function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowS
 
 function shouldResetState(message: string): boolean {
   const text = normalize(message);
-  return hasAny(text, ['start over', 'reset', 'new request', 'new enquiry', 'new inquiry']);
+  return hasAny(text, [
+    'start over', 'reset', 'new request', 'new enquiry', 'new inquiry',
+    'main menu', 'go back', 'back to menu', 'restart', 'cancel',
+    'start again', 'start fresh', 'begin again',
+  ]);
+}
+
+// Returns true when the user's message looks like a question or off-topic text
+// that the AI should handle with a brief answer before re-asking the required info.
+export function isQuestionLike(message: string): boolean {
+  const t = normalize(message);
+  if (t.endsWith('?')) return true;
+  if (/^(what|how|why|when|where|who|which|can|is|are|do|does|will|should|could|would|tell me)\b/.test(t)) return true;
+  if (/\b(tell me|explain|information about|info about|what about)\b/.test(t)) return true;
+  return false;
 }
 
 // Returns true when the message looks like the user echoing the quick-reply menu
@@ -644,10 +658,29 @@ export function resolveWorkflowState(args: {
     slots.holiday_type = 'personalized';
   }
 
-  // Stage-aware callback fallback: if all lead info is collected but callback_time
-  // is still missing, treat the current message as the callback time directly.
-  // This handles freeform responses like "evening tomorrow" or "5 pm on saturday".
+  // Stage-aware overrides — applied BEFORE final stage resolution.
   const preStage = resolveStage(intent, slots);
+
+  // show_packages: detect bare number/keyword selections as post_package_action
+  // so the flow advances to collect_lead instead of repeating the packages.
+  if (preStage === 'show_packages' && !slots.post_package_action) {
+    const msg = args.userMessage.trim();
+    const msgL = normalize(msg);
+    if (/^[123]$/.test(msg) ||
+        /\b(budget|premium|luxury|package [123]|option [123]|deal [123])\b/i.test(msg) ||
+        /\b(get package|get detail|package detail)\b/i.test(msg) ||
+        /\b(itinerary|day wise|day-wise|day by day)\b/i.test(msg)) {
+      slots.post_package_action = 'get_details';
+    } else if (/\b(customis|customiz|modify|edit plan|change plan)\b/i.test(msgL)) {
+      slots.post_package_action = 'customize';
+    } else if (/\b(callback|call me|call back|arrange call)\b/i.test(msgL)) {
+      slots.post_package_action = 'arrange_callback';
+    }
+  }
+
+  // Callback fallback: treat the entire short message as callback time when
+  // all lead info is collected but callback_time is still missing.
+  // Handles freeform responses like "evening tomorrow" or "5 pm on saturday".
   if (preStage === 'ask_callback' && !slots.callback_time) {
     const msg = args.userMessage.trim();
     if (msg && msg.length <= 60) {
@@ -948,7 +981,19 @@ export function getWorkflowSystemPromptBlock(
   // ── per-stage task instructions ─────────────────────────────────────────────
   let task = '';
 
-  if (stage === 'ask_destination') {
+  if (intent === 'unknown' || stage === 'unknown') {
+    task = `The customer's intent is not yet identified. Respond warmly and naturally.
+Guidelines:
+- Greeting (Hi, Hello, etc.) → warmly greet and show: "How may I assist you today? 😊\n\n1️⃣ Plan a Holiday\n2️⃣ Flights\n3️⃣ Hotels"
+- Travel-related question → briefly answer, then show the main menu
+- Off-topic question (weather, jokes, math, etc.) → say "That's a bit outside my expertise! I'm here to help plan your trip 😊" and show the menu
+- Confused or unclear message → empathize and show the menu
+- User says they want to speak to a human → say "Sure! You can reach our team at info@traventions.com or WhatsApp us at +91 XXXXX. Meanwhile, I can help you explore options 😊"
+- Profanity or frustration → stay calm, empathize: "I understand your concern. Let me connect you with our team who can help you better."
+- Random characters/test messages → respond friendly: "Hello! 😊 I'm Sini, your travel assistant. How can I help you today?"
+Always end with the main menu if intent is unclear.`;
+
+  } else if (stage === 'ask_destination') {
     task = `Ask the customer which destination they want to visit.
 Ask for the destination ONLY — nothing else yet.`;
 
@@ -979,7 +1024,9 @@ Do NOT ask about travel details yet. Only ask for the holiday type.`;
       if (!slots?.nights)      missing.push('Number of Nights');
     }
     task = `Ask for ONLY these missing travel details: ${missing.length ? missing.join(', ') : 'none — all collected'}.
-ALREADY COLLECTED — DO NOT ASK AGAIN: ${collected}.`;
+ALREADY COLLECTED — DO NOT ASK AGAIN: ${collected}.
+If the customer asks a travel question (visa, weather, currency, etc.) → briefly answer it, THEN re-ask the missing details in the same reply.
+If the customer seems confused or off-topic → gently redirect and re-ask the missing details.`;
 
   } else if (stage === 'show_packages') {
     if (intent === 'flights') {
