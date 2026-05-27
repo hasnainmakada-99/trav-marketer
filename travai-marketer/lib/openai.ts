@@ -31,6 +31,22 @@ interface Message {
   content: string;
 }
 
+type WorkflowSlotKey =
+  | 'destination'
+  | 'from_city'
+  | 'to_city'
+  | 'travel_time'
+  | 'travellers'
+  | 'departure_city'
+  | 'nights'
+  | 'name'
+  | 'phone'
+  | 'email'
+  | 'callback_time'
+  | 'holiday_type'
+  | 'hotel_preference'
+  | 'post_package_action';
+
 /**
  * Get AI chatbot response based on conversation history
  */
@@ -375,5 +391,112 @@ Only include fields that are clearly present in the message.`,
   } catch (error) {
     console.error('Error extracting customer info:', error);
     return {};
+  }
+}
+
+/**
+ * AI-assisted workflow slot extraction.
+ * Used as a fallback to fill missing slots when deterministic parsing misses
+ * natural or comma-separated user phrasing.
+ */
+export async function extractWorkflowSlots(
+  message: string,
+  intentHint?: string
+): Promise<Partial<Record<WorkflowSlotKey, string>>> {
+  const fallback: Partial<Record<WorkflowSlotKey, string>> = {};
+  if (!message?.trim()) return fallback;
+  try {
+    const response = await getOpenAI().chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `Extract only explicitly stated workflow slots from the user's message.
+Allowed keys only:
+destination, from_city, to_city, travel_time, travellers, departure_city, nights, name, phone, email, callback_time, holiday_type, hotel_preference, post_package_action
+
+Rules:
+- Return ONLY valid JSON object. No markdown, no explanation.
+- If a field is missing, omit it.
+- Do not infer values not present in text.
+- Keep values short plain strings.
+- holiday_type can only be: "exclusive" or "personalized".
+- post_package_action can only be: "get_details", "get_itinerary", "customize", "arrange_callback".`,
+        },
+        {
+          role: 'user',
+          content: `Intent hint: ${intentHint || 'unknown'}\nMessage: "${message}"`,
+        },
+      ],
+      temperature: 0,
+      max_tokens: 260,
+    });
+
+    const raw = (response.choices[0]?.message?.content || '').trim();
+    const jsonText = raw
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
+    const start = jsonText.indexOf('{');
+    const end = jsonText.lastIndexOf('}');
+    if (start < 0 || end <= start) return fallback;
+    const parsed = JSON.parse(jsonText.slice(start, end + 1)) as Record<string, unknown>;
+
+    const allowedKeys: WorkflowSlotKey[] = [
+      'destination',
+      'from_city',
+      'to_city',
+      'travel_time',
+      'travellers',
+      'departure_city',
+      'nights',
+      'name',
+      'phone',
+      'email',
+      'callback_time',
+      'holiday_type',
+      'hotel_preference',
+      'post_package_action',
+    ];
+
+    const out: Partial<Record<WorkflowSlotKey, string>> = {};
+    for (const key of allowedKeys) {
+      const value = parsed[key];
+      if (typeof value !== 'string') continue;
+      const cleaned = value.trim();
+      if (!cleaned) continue;
+      out[key] = cleaned;
+    }
+
+    if (out.holiday_type) {
+      const normalized = out.holiday_type.toLowerCase();
+      if (normalized !== 'exclusive' && normalized !== 'personalized') {
+        delete out.holiday_type;
+      } else {
+        out.holiday_type = normalized;
+      }
+    }
+
+    if (out.post_package_action) {
+      const normalized = out.post_package_action.toLowerCase();
+      if (!['get_details', 'get_itinerary', 'customize', 'arrange_callback'].includes(normalized)) {
+        delete out.post_package_action;
+      } else {
+        out.post_package_action = normalized;
+      }
+    }
+
+    if (out.phone) out.phone = out.phone.replace(/\s+/g, '');
+    if (out.email) out.email = out.email.toLowerCase();
+    if (out.nights) {
+      const match = out.nights.match(/\d+/);
+      if (match) out.nights = match[0];
+    }
+
+    return out;
+  } catch (error) {
+    console.error('Error extracting workflow slots:', error);
+    return fallback;
   }
 }

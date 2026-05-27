@@ -12,7 +12,7 @@ import {
   sendYCloudReplyButtonsMessage,
   showYCloudTypingIndicator,
 } from '@/lib/whatsapp-ycloud';
-import { getChatResponse, extractCustomerInfo, preprocessMessage } from '@/lib/openai';
+import { getChatResponse, extractCustomerInfo, preprocessMessage, extractWorkflowSlots } from '@/lib/openai';
 import { createDocument, listDocuments, updateDocument } from '@/lib/appwrite';
 import { normalizeToWhatsAppMarkdown } from '@/lib/whatsapp-format';
 import { createHmac, timingSafeEqual } from 'crypto';
@@ -968,9 +968,18 @@ async function generateAndSendResponse(
     // Resolve structured workflow state using the FULL history (all 40 messages)
     // so the intent lock and slot values are never lost in long conversations.
     const historyUserMessages = fullHistory.filter(h => h.role === 'user').map(h => h.content);
+    const aiSlotHints = process.env.OPENAI_API_KEY
+      ? await withTimeout(
+          extractWorkflowSlots(correctedText, intent).catch(() => ({})),
+          CLASSIFY_TIMEOUT_MS,
+          {}
+        )
+      : {};
+
     const workflowState = resolveWorkflowState({
       userMessage: correctedText,
       classifiedIntent: intent,
+      aiSlots: aiSlotHints,
       historyMessages: historyUserMessages,
     });
 

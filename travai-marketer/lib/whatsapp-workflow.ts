@@ -292,7 +292,7 @@ function tryParseCommaFormat(raw: string, intent: WorkflowIntent, existingSlots:
   // Detect parts that contain a month name (in any position, e.g. "june mid", "mid-June")
   const containsMonthRx = /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\b/i;
 
-  let travellersAccum: string[] = [];
+  const travellersAccum: string[] = [];
   const unclassified: string[] = [];
 
   for (const part of parts) {
@@ -342,12 +342,15 @@ function tryParseCommaFormat(raw: string, intent: WorkflowIntent, existingSlots:
     return /^[a-zA-Z\s.'-]{2,30}$/.test(candidate) && !NON_CITY_WORDS.has(key);
   };
 
-  if (intent === 'plan_holiday' && !existingSlots.departure_city) {
-    const cityPart = unclassified.find(safeCityPart);
-    if (cityPart) slots.departure_city = cityPart;
+  const cities = unclassified.filter(safeCityPart);
+  if (intent === 'plan_holiday') {
+    if (!existingSlots.destination && cities[0]) slots.destination = cities[0];
+    if (!existingSlots.departure_city && cities[1]) slots.departure_city = cities[1];
+  }
+  if (intent === 'hotels') {
+    if (!existingSlots.destination && cities[0]) slots.destination = cities[0];
   }
   if (intent === 'flights') {
-    const cities = unclassified.filter(safeCityPart);
     if (!existingSlots.from_city && cities[0]) slots.from_city = cities[0];
     if (!existingSlots.to_city && cities[1]) slots.to_city = cities[1];
   }
@@ -679,6 +682,7 @@ export function resolveWorkflowState(args: {
   userMessage: string;
   classifiedIntent?: string;
   selectedIntent?: WorkflowIntent | null;
+  aiSlots?: WorkflowSlotMap;
   historyMessages?: string[];
 }): WorkflowState {
   const historyMessages = args.historyMessages || [];
@@ -726,6 +730,11 @@ export function resolveWorkflowState(args: {
     slots = mergeSlots(slots, parseGeneralSlots(item, intent));
   }
   slots = mergeSlots(slots, parseGeneralSlots(args.userMessage, intent));
+  // AI-extracted slot hints are a fallback layer: they only fill still-missing fields
+  // and never override slots already captured by deterministic parsing.
+  if (args.aiSlots) {
+    slots = mergeSlots(slots, args.aiSlots);
+  }
 
   // If "customize" is selected as post_package_action, switch to personalized
   if (slots.post_package_action === 'customize') {
