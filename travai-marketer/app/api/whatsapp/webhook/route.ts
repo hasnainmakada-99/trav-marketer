@@ -59,7 +59,11 @@ const GREETING_BUTTONS = [
 const GREETING_MENU_TEXT = getGreetingMenuText();
 
 function isGreetingMessage(text: string) {
-  const normalized = text.trim().toLowerCase();
+  const normalized = String(text || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   return /^(hi|hello|hey|hlo|helo|namaste|yo|good morning|good afternoon|good evening)$/.test(
     normalized
   );
@@ -1148,4 +1152,3 @@ async function resolveTeamIdByPhoneNumberId(phoneNumberId: string): Promise<stri
 
   return process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'system';
 }
-

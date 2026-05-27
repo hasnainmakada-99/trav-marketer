@@ -41,7 +41,11 @@ const SUPPORT_MENU_OPTIONS = [
 ] as const;
 
 function isGreetingMessage(text: string) {
-  const normalized = text.trim().toLowerCase();
+  const normalized = String(text || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   return /^(hi|hello|hey|hlo|helo|namaste|yo|good morning|good afternoon|good evening)$/.test(
     normalized
   );

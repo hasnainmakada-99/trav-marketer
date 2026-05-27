@@ -65,6 +65,14 @@ function normalize(input: string) {
   return String(input || '').toLowerCase().trim().replace(/\s+/g, ' ');
 }
 
+function normalizeSelectionText(input: string) {
+  return String(input || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function hasAny(text: string, words: string[]) {
   return words.some((w) => text.includes(w));
 }
@@ -171,8 +179,15 @@ function autoCorrect(text: string): string {
 }
 
 function isGreetingLike(msg: string): boolean {
+  // Allow punctuation/emoji variants like "Hello!", "Hi 😊", "Good morning!!"
+  // but do not treat longer intent-bearing sentences as pure greetings.
+  const stripped = String(msg || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   return /^(hi|hello|hey|hlo|helo|namaste|yo|good morning|good afternoon|good evening)$/i.test(
-    msg.trim()
+    stripped
   );
 }
 
@@ -639,9 +654,25 @@ function findSlotStartIndex(historyMessages: string[], intent: WorkflowIntent): 
 // (button tap, single keyword, or "Plan a Holiday" / "Flights" / "Hotels").
 // Used to decide whether the current message can override a locked intent from history.
 function isDirectServiceSelection(message: string): boolean {
-  const text = normalize(message);
-  return /^(plan a holiday|plan holiday|flights?|hotels?|svc_1|svc_2|svc_3|1|2|3)$/.test(text) ||
-    /^(visa|transfer|forex|insurance|mice|booking status)$/.test(text);
+  const text = normalizeSelectionText(message);
+  if (/^(svc_1|svc_2|svc_3|1|2|3)$/.test(text)) return true;
+  if (/^(plan a holiday|plan holiday|flights?|hotels?|visa|transfer|forex|insurance|mice|booking status)$/.test(text)) {
+    return true;
+  }
+  // Accept common interactive payload variants like:
+  // "1 plan a holiday", "2 flights", "3 hotels"
+  if (/^(1|2|3)\s+(plan a holiday|plan holiday|flights?|hotels?)$/.test(text)) return true;
+  return false;
+}
+
+// Primary menu/service taps should start a fresh requirement-collection flow.
+// (Digits intentionally excluded so "1/2/3" can still act as package selection in show_packages.)
+function isPrimaryServiceSelection(message: string): boolean {
+  const text = normalizeSelectionText(message);
+  if (/^(svc_1|svc_2|svc_3|plan a holiday|plan holiday|flights?|hotels?)$/.test(text)) return true;
+  // Handle interactive labels that include numeric prefixes.
+  if (/^(1|2|3)\s+(plan a holiday|plan holiday|flights?|hotels?)$/.test(text)) return true;
+  return false;
 }
 
 export function resolveWorkflowState(args: {
@@ -686,7 +717,9 @@ export function resolveWorkflowState(args: {
   // Only accumulate slots from the current session + current service selection.
   // Prevents old-session data (e.g. previous travellers/dates/post_package_action)
   // from polluting a fresh conversation and making the bot skip stages.
-  const slotStart = findSlotStartIndex(historyMessages, intent);
+  const slotStart = isPrimaryServiceSelection(args.userMessage)
+    ? historyMessages.length
+    : findSlotStartIndex(historyMessages, intent);
   const sessionMessages = historyMessages.slice(slotStart);
   let slots: WorkflowSlotMap = {};
   for (const item of sessionMessages) {
