@@ -254,7 +254,8 @@ const NON_CITY_WORDS = new Set([
   'hotel', 'hotels', 'holiday', 'holidays', 'booking', 'status', 'or', 'and',
   'the', 'type', 'service', 'plan', 'package', 'packages', 'exclusive',
   'personalized', 'personalised', 'itinerary', 'traventions', 'details',
-  'sini', 'example', 'callback', 'contact',
+  'sini', 'example', 'callback', 'contact', 'arrange', 'book', 'confirm',
+  'yes', 'no', 'okay', 'ok', 'sure', 'thanks', 'thank', 'please', 'help',
 ]);
 
 // Try to parse comma-separated inputs:
@@ -570,9 +571,23 @@ function shouldResetState(message: string): boolean {
   return hasAny(text, ['start over', 'reset', 'new request', 'new enquiry', 'new inquiry']);
 }
 
+// Returns true when the message looks like the user echoing the quick-reply menu
+// (contains all three primary service keywords at once). These messages must be
+// skipped when scanning history for a locked intent.
+function isMenuRepeatMessage(text: string): boolean {
+  const t = normalize(text);
+  return (
+    (t.includes('plan a holiday') || t.includes('plan holiday')) &&
+    (t.includes('flight') || t.includes('flights')) &&
+    (t.includes('hotel') || t.includes('hotels'))
+  );
+}
+
 function findLockedIntentFromHistory(historyMessages: string[]): WorkflowIntent | null {
   for (let i = historyMessages.length - 1; i >= 0; i--) {
-    const intent = detectWorkflowIntent(historyMessages[i] || '');
+    const msg = historyMessages[i] || '';
+    if (isMenuRepeatMessage(msg)) continue; // skip WhatsApp button-tap menu echoes
+    const intent = detectWorkflowIntent(msg);
     if (intent !== 'unknown') return intent;
   }
   return null;
@@ -756,8 +771,7 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
         (!slots.to_city ? '🛬 To City\n' : '') +
         (!slots.travel_time ? '📅 Travel Date\n' : '') +
         (!slots.travellers ? '👥 Number of Travellers\n' : '') +
-        '↔️ One-way or Round Trip\n\n' +
-        'Example:\nDelhi to Mumbai, 25th June, 2 Adults, One-way'
+        '\nExample:\nDelhi to Mumbai, 25th June, 2 Adults'
       );
     }
 
@@ -845,10 +859,14 @@ export function detectWorkflowIntent(message: string, classifiedIntent?: string)
     /(^|\s)(svc_1|plan holiday|plan a holiday|holiday package|holiday|leisure|tour package)(\s|$)/.test(joined) ||
     fuzzyAny(text, ['holiday', 'package', 'tour', 'leisure'])
   ) {
-    // Guard: must not be primarily about flights or hotels to avoid false positives
+    // Explicit digit-1, svc_1, or the phrase "plan a holiday" always wins — even if the
+    // message also contains "flights"/"hotels" (e.g. the user echoing the quick-reply menu).
+    const explicitPlanHoliday =
+      isDigitSelect('1') ||
+      /(^|\s)(svc_1|plan a holiday|plan holiday)(\s|$)/.test(text);
     const flightLike = fuzzyAny(text, ['flight', 'flights', 'airfare', 'ticket']);
     const hotelLike = isDigitSelect('3') || /(^|\s)(svc_3|hotel|hotels|stay|resort)(\s|$)/.test(joined);
-    if (!flightLike && !hotelLike) return 'plan_holiday';
+    if (explicitPlanHoliday || (!flightLike && !hotelLike)) return 'plan_holiday';
   }
 
   // flights — fuzzy-match "flights", "flight", "airfare"
