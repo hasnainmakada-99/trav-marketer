@@ -609,6 +609,32 @@ function findLockedIntentFromHistory(historyMessages: string[]): WorkflowIntent 
   return null;
 }
 
+// Returns the index in historyMessages from which to START parsing slots.
+// Scopes slot accumulation to the current session + current service selection
+// so old-session data and switched-service data never pollute the current flow.
+function findSlotStartIndex(historyMessages: string[], intent: WorkflowIntent): number {
+  // Step 1: last greeting = session boundary
+  let sessionStart = 0;
+  for (let i = historyMessages.length - 1; i >= 0; i--) {
+    if (isGreetingLike(historyMessages[i])) {
+      sessionStart = i + 1;
+      break;
+    }
+  }
+
+  // Step 2: within session, find last explicit service selection for this intent.
+  // E.g. if user did Hotels → then switched to "Plan a Holiday", we start
+  // accumulating slots from the "Plan a Holiday" message, ignoring the Hotels part.
+  for (let i = historyMessages.length - 1; i >= sessionStart; i--) {
+    const msg = historyMessages[i];
+    if (isDirectServiceSelection(msg) && detectWorkflowIntent(msg) === intent) {
+      return i; // include this message (defines intent) onward
+    }
+  }
+
+  return sessionStart;
+}
+
 // Returns true only when the message is an explicit, unambiguous service selection
 // (button tap, single keyword, or "Plan a Holiday" / "Flights" / "Hotels").
 // Used to decide whether the current message can override a locked intent from history.
@@ -657,8 +683,13 @@ export function resolveWorkflowState(args: {
     return { intent, stage: 'unknown', source, slots: {}, missingSlots: [], complete: false, leadShouldBeSaved: false };
   }
 
+  // Only accumulate slots from the current session + current service selection.
+  // Prevents old-session data (e.g. previous travellers/dates/post_package_action)
+  // from polluting a fresh conversation and making the bot skip stages.
+  const slotStart = findSlotStartIndex(historyMessages, intent);
+  const sessionMessages = historyMessages.slice(slotStart);
   let slots: WorkflowSlotMap = {};
-  for (const item of historyMessages) {
+  for (const item of sessionMessages) {
     slots = mergeSlots(slots, parseGeneralSlots(item, intent));
   }
   slots = mergeSlots(slots, parseGeneralSlots(args.userMessage, intent));
