@@ -527,22 +527,32 @@ function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowS
     if (!slots.from_city || !slots.to_city || !slots.travel_time || !slots.travellers) {
       return 'ask_travel_details';
     }
-    const hasFullLead = Boolean(slots.name && slots.phone && slots.email);
-    if (hasFullLead) {
-      return slots.callback_time ? 'confirmed' : 'ask_callback';
+    const hasPostAction = Boolean(slots.post_package_action);
+    const hasContactStart = Boolean(slots.name || slots.phone);
+    if (hasPostAction || hasContactStart) {
+      const hasFullLead = Boolean(slots.name && slots.phone && slots.email);
+      if (hasFullLead) {
+        return slots.callback_time ? 'confirmed' : 'ask_callback';
+      }
+      return 'collect_lead';
     }
-    return 'collect_lead';
+    return 'show_packages';
   }
 
   if (intent === 'hotels') {
     if (!slots.destination || !slots.travellers || !slots.travel_time || !slots.nights) {
       return 'ask_travel_details';
     }
-    const hasFullLead = Boolean(slots.name && slots.phone && slots.email);
-    if (hasFullLead) {
-      return slots.callback_time ? 'confirmed' : 'ask_callback';
+    const hasPostAction = Boolean(slots.post_package_action);
+    const hasContactStart = Boolean(slots.name || slots.phone);
+    if (hasPostAction || hasContactStart) {
+      const hasFullLead = Boolean(slots.name && slots.phone && slots.email);
+      if (hasFullLead) {
+        return slots.callback_time ? 'confirmed' : 'ask_callback';
+      }
+      return 'collect_lead';
     }
-    return 'collect_lead';
+    return 'show_packages';
   }
 
   // Other intents: transfer, forex, visa, insurance, mice, booking_status
@@ -667,10 +677,6 @@ export function resolveWorkflowState(args: {
   return { intent, stage, source, slots, missingSlots, complete, leadShouldBeSaved };
 }
 
-const TRAVENTIONS_WEBSITE =
-  (typeof process !== 'undefined' && process.env?.TRAVENTIONS_WEBSITE_URL) ||
-  'https://traventions-ai.vercel.app';
-
 // ─── reply builders ──────────────────────────────────────────────────────────
 
 const DESTINATION_TAGLINES: Record<string, string> = {
@@ -746,11 +752,12 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
     if (intent === 'flights') {
       return (
         '✈️ Sure! Please share:\n\n' +
-        (!slots.from_city ? '🛫 Departure City\n' : '') +
-        (!slots.to_city ? '🛬 Destination City\n' : '') +
+        (!slots.from_city ? '🛫 From City\n' : '') +
+        (!slots.to_city ? '🛬 To City\n' : '') +
         (!slots.travel_time ? '📅 Travel Date\n' : '') +
         (!slots.travellers ? '👥 Number of Travellers\n' : '') +
-        '\nExample:\nDelhi to Mumbai, 25th June, 2 Adults'
+        '↔️ One-way or Round Trip\n\n' +
+        'Example:\nDelhi to Mumbai, 25th June, 2 Adults, One-way'
       );
     }
 
@@ -773,28 +780,8 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
     );
   }
 
-  // ── show_packages (exclusive only — personalized handled by AI) ──
+  // ── show_packages — AI generates all package/flight/hotel options ──
   if (stage === 'show_packages') {
-    if (intent === 'plan_holiday' && slots.holiday_type !== 'personalized') {
-      const dest = slots.destination || 'your destination';
-      return (
-        '✨ Perfect! I\'ve got your holiday request 😊\n\n' +
-        `📍 Destination: ${dest}\n` +
-        `👥 Travellers: ${slots.travellers || '-'}\n` +
-        `📅 Travel: ${slots.travel_time || '-'}\n` +
-        `🏙 Departure City: ${slots.departure_city || '-'}\n` +
-        `🌃 Duration: ${slots.nights || '-'} Nights\n\n` +
-        'Searching the best holiday packages for you 😊\n\n' +
-        `✨ Here are the available exclusive holiday packages:\n\n` +
-        `🌐 ${dest} Holiday Packages\n\n` +
-        `Website:\nTraventions Holidays — ${TRAVENTIONS_WEBSITE}/holidays\n\n` +
-        'Would you like to:\n\n' +
-        '📄 Get Package Details\n' +
-        '✨ Customize Holiday\n' +
-        '📞 Arrange Callback'
-      );
-    }
-    // personalized — return null so caller lets AI generate the 5 options
     return null;
   }
 
@@ -832,22 +819,9 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
     );
   }
 
-  // ── confirmed ──
+  // ── confirmed — AI handles both initial confirmation and YES/NO follow-up ──
   if (stage === 'confirmed') {
-    const name = slots.name ? `, ${slots.name}` : '';
-    const callbackTime = slots.callback_time || 'at the earliest';
-    const context =
-      intent === 'plan_holiday'
-        ? 'assist you with complete package details'
-        : intent === 'flights'
-          ? 'assist you with the best flight options'
-          : 'assist you with your travel requirement';
-
-    return (
-      `✨ Perfect${name}! Your callback has been scheduled successfully 😊\n\n` +
-      `📞 Our travel expert will contact you *${callbackTime}* and ${context}.\n\n` +
-      'Looking forward to planning your holiday ✨'
-    );
+    return null;
   }
 
   return null;
@@ -990,7 +964,48 @@ Do NOT ask about travel details yet. Only ask for the holiday type.`;
 ALREADY COLLECTED — DO NOT ASK AGAIN: ${collected}.`;
 
   } else if (stage === 'show_packages') {
-    if (slots?.holiday_type === 'personalized') {
+    if (intent === 'flights') {
+      const fromCity = slots?.from_city || 'the departure city';
+      const toCity = slots?.to_city || 'the destination';
+      const travelTime = slots?.travel_time || 'the travel date';
+      const travellers = slots?.travellers || 'the given travellers';
+      task = `FLIGHT OPTIONS GENERATION — REQUIRED:
+Show 2 flight options from ${fromCity} to ${toCity} on ${travelTime} for ${travellers}.
+Format EXACTLY as:
+✈️ Option 1: Direct Flight
+🛫 [Airline name] | ⏱ [realistic duration] | 💰 ₹[realistic INR price] PP (approx)
+✨ Highlights: [departure time range, arrival time, airline]
+
+🔄 Option 2: 1-Stop Flight
+🛫 [Airline name] via [hub city] | ⏱ [total duration] | 💰 ₹[lower INR price] PP (approx)
+✨ Highlights: cheaper option, [layover duration] layover at [hub]
+
+End with:
+Would you like to:
+✈️ Get Flight Details  ✏️ Customise Flights  📞 Arrange Callback
+Use realistic INR pricing only. Never mention USD or $.`;
+
+    } else if (intent === 'hotels') {
+      const dest = slots?.destination || 'the destination';
+      const travellers = slots?.travellers || '';
+      const travelTime = slots?.travel_time || '';
+      const nights = slots?.nights || '';
+      const hotelPref = slots?.hotel_preference || '';
+      task = `HOTEL OPTIONS GENERATION — REQUIRED:
+Show 3 hotel options in ${dest}${travellers ? ` for ${travellers}` : ''}${travelTime ? `, ${travelTime}` : ''}${nights ? `, ${nights} nights` : ''}${hotelPref ? ` (${hotelPref} preferred)` : ''}.
+Format EXACTLY as:
+🏨 [Hotel Name] | ⭐ [Star Rating] | 💰 ₹[realistic price per night] per night
+📍 Location: [area / neighbourhood]
+✨ Highlights: [3-4 key amenities or nearby attractions]
+
+(repeat for all 3 hotels)
+
+End with:
+Would you like to:
+🏨 Get Hotel Details  ✏️ Customise Hotels  📞 Arrange Callback
+Use realistic INR pricing only. Never mention USD or $.`;
+
+    } else if (slots?.holiday_type === 'personalized') {
       const dest = slots?.destination || 'the destination';
       const nights = slots?.nights || '5';
       const hotelPref = slots?.hotel_preference || '4 star';
@@ -1009,10 +1024,34 @@ End with:
 ✨ Would you like to:
 1️⃣ Select an option  📄 Get Day-wise Itinerary  ✏️ Modify This Plan  📞 Arrange Callback
 Use realistic INR pricing. Never mention USD or $.`;
+
     } else {
-      task = `Show the available exclusive holiday packages for ${slots?.destination || 'the destination'}.
-Include destination, travellers, travel dates, departure city, and nights as a summary.
-Then show the website link for packages and ask if they want: Package Details, Customize Holiday, or Arrange Callback.`;
+      // exclusive holiday
+      const dest = slots?.destination || 'the destination';
+      const nights = slots?.nights || '5';
+      const days = String(parseInt(nights, 10) + 1);
+      const travellers = slots?.travellers || '';
+      const travelTime = slots?.travel_time || '';
+      const departureCity = slots?.departure_city || '';
+      task = `EXCLUSIVE PACKAGE GENERATION — REQUIRED:
+Show 3 exclusive holiday packages for ${dest}${travellers ? ` for ${travellers}` : ''}${travelTime ? `, ${travelTime}` : ''}${departureCity ? `, departing from ${departureCity}` : ''}, ${nights} nights.
+Format EXACTLY as:
+🌟 Package 1: Budget Deal
+🏨 3 Star Hotels | 🌃 ${nights} Nights / ${days} Days | 💰 ₹[realistic INR price] PP
+✨ Highlights: [5 specific sightseeing/activity highlights for ${dest}]
+
+✨ Package 2: Premium Deal
+🏨 4 Star Hotels | 🌃 ${nights} Nights / ${days} Days | 💰 ₹[realistic INR price] PP
+✨ Highlights: [5 specific highlights for ${dest}]
+
+🌟 Package 3: Luxury Experience
+🏨 5 Star Hotels | 🌃 ${nights} Nights / ${days} Days | 💰 ₹[realistic INR price] PP
+✨ Highlights: [5 specific highlights for ${dest}]
+
+End with:
+Would you like to:
+📄 Get Package Details  ✏️ Customise Holiday  📞 Arrange Callback
+Use realistic INR pricing only. Never mention USD or $.`;
     }
 
   } else if (stage === 'collect_lead') {
@@ -1026,9 +1065,32 @@ Tell them a travel expert will call at that time.
 Already have: name=${slots?.name || '?'}, phone=${slots?.phone || '?'}, email=${slots?.email || '?'}.`;
 
   } else if (stage === 'confirmed') {
-    task = `Confirm the callback is scheduled. Thank the customer warmly.
-Callback time: ${slots?.callback_time || 'at the earliest'}. Travel expert will reach out.
-Close the conversation with warm, encouraging words.`;
+    const name = slots?.name ? `, ${slots.name}` : '';
+    const callbackTime = slots?.callback_time || 'at the earliest';
+    const ctx = intent === 'flights'
+      ? 'assist you with the best flight options'
+      : intent === 'hotels'
+        ? 'assist you with the best hotel options'
+        : 'assist you with complete package details';
+    task = `Look at the conversation history:
+A) If the last assistant message does NOT already contain "callback has been scheduled":
+   → Send EXACTLY this confirmation message (replace placeholders):
+   "✨ Perfect${name}! Your callback has been scheduled successfully 😊
+
+📞 Our travel expert will contact you *${callbackTime}* and ${ctx}.
+
+Is there anything else I may assist you with today? 😊"
+
+B) If the last assistant message ALREADY contains "callback has been scheduled":
+   → The customer is replying to "Is there anything else?". Handle as follows:
+   - If YES or a new travel question → reply: "How may I assist you today? 😊\n\n1️⃣ Plan a Holiday\n2️⃣ Flights\n3️⃣ Hotels"
+   - If NO / Thank you / ending → reply with EXACTLY:
+"Thank you for your time 😊
+We truly appreciate your support.
+
+⭐ Kindly rate your experience with us:
+https://www.google.com/search?q=Traventions+India+Pvt+Ltd+Reviews"
+Do NOT repeat the callback confirmation. Do NOT ask for details already collected.`;
   }
 
   // Draft reply as structural guide (optional)
@@ -1053,15 +1115,13 @@ FORMATTING RULES (mandatory):
 }
 
 export function getGreetingMenuText(customerName?: string | null): string {
-  const namePart = customerName ? ` ${customerName}` : '';
+  const namePart = customerName ? `, ${customerName}` : '';
   return (
-    `Welcome to Traventions!${namePart}\n\n` +
-    "I'm Sini, your Trav-AI Buddy.\n" +
-    'Please choose a service:\n' +
-    '1. Plan a Holiday\n' +
-    '2. Flights\n' +
-    '3. Hotels\n\n' +
-    'For Transfer, Forex, Visa, Insurance, MICE, or Booking Status, type the service name directly.'
+    `Hello${namePart}! 😊\n\n` +
+    'How may I assist you today?\n\n' +
+    '1️⃣ Plan a Holiday\n' +
+    '2️⃣ Flights\n' +
+    '3️⃣ Hotels'
   );
 }
 

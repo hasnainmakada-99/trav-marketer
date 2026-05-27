@@ -26,6 +26,11 @@ import {
 import {
   getGreetingMenuText,
   PRIMARY_QUICK_MENU_OPTIONS,
+  resolveWorkflowState,
+  buildWorkflowReply,
+  getWorkflowSystemPromptBlock,
+  buildConversationMemoryBlock,
+  buildLeadNotes,
 } from '@/lib/whatsapp-workflow';
 
 // Verify webhook token from Meta
@@ -928,47 +933,73 @@ async function generateAndSendResponse(
       return;
     }
 
-    // Load knowledge for AI context
+    // Resolve structured workflow state from history
+    const historyUserMessages = history.filter(h => h.role === 'user').map(h => h.content);
+    const workflowState = resolveWorkflowState({
+      userMessage: correctedText,
+      classifiedIntent: intent,
+      historyMessages: historyUserMessages,
+    });
+
+    // Try deterministic workflow reply first (ask_destination, ask_holiday_type, etc.)
+    const deterministicReply = buildWorkflowReply(workflowState);
+    if (deterministicReply !== null) {
+      const waReply = normalizeToWhatsAppMarkdown(deterministicReply);
+      if (
+        recentAiText === normalizeTextForDedupe(waReply) &&
+        Number.isFinite(recentAiTs) &&
+        Date.now() - recentAiTs <= RECENT_AI_DUPLICATE_WINDOW_MS
+      ) {
+        console.log('[WhatsApp] Skipping duplicate deterministic reply');
+        return;
+      }
+      const sendResult = await sendAutoReply({
+        requestUrl, teamId: resolvedTeamId, customerId: customer.$id,
+        phone, message: waReply, webhookPhoneNumberId,
+      });
+      await createDocument('conversations', {
+        teamId: resolvedTeamId, customerId: customer.$id, phone,
+        role: 'assistant', message: waReply, messageType: 'text',
+        sentBy: 'ai', metaMessageId: sendResult.messageId || null,
+        deliveryStatus: sendResult.success ? 'sent' : 'failed',
+        createdAt: new Date().toISOString(),
+      });
+      if (sendResult.success) {
+        console.log(`[OK] Workflow reply sent to ${phone} (stage=${workflowState.stage})`);
+      }
+      return;
+    }
+
+    // No deterministic reply — call AI with workflow-aware system prompt
     const knowledge = await loadTravelKnowledgeFast(resolvedTeamId, correctedText);
     const safeWebsiteSnippets = sanitizeWebsiteSnippetsForBot(knowledge.websiteSnippets);
     const safeBestWebsiteUrl = sanitizeWebsiteUrlForBot(
       knowledge.bestWebsiteUrl || WEBSITE_FALLBACK_URL
     );
 
+    const workflowBlock = getWorkflowSystemPromptBlock(
+      workflowState.intent,
+      workflowState.stage,
+      workflowState.slots,
+      null
+    );
+    const memoryBlock = buildConversationMemoryBlock({
+      state: workflowState,
+      recentUserMessages: historyUserMessages,
+    });
+
     const systemPrompt = [
       businessConfig?.openaiSystemPrompt || '',
-      `You are Sini, a warm and knowledgeable travel assistant for Traventions (a full-service travel agency in India).`,
-      firstAssistantReply
-        ? 'Start this reply with "Welcome to Traventions!".'
-        : 'Do not repeat the welcome greeting.',
+      `You are Sini, a warm and knowledgeable travel sales assistant for Traventions (a full-service travel agency in India).`,
       getBotRoutePolicyPromptBlock(),
-      `
-YOUR ROLE:
-Help customers with: holidays, flights, hotels, transfers, forex, visa, insurance, and MICE.
-Converse naturally — ask one or two questions at a time, never overwhelm.
-
-CONVERSATION APPROACH:
-- First understand what the customer needs (holiday, flight, hotel, etc.)
-- For holidays: ask destination, travel month, number of travellers, number of nights, budget range
-- For flights: ask origin city, destination city, travel date, number of passengers
-- For hotels: ask city, check-in & check-out dates, star preference
-- Once you have enough details, collect: customer name, WhatsApp number, preferred callback time
-- Confirm: "Our team will call you back shortly to finalise everything!"
-
-ITINERARY GENERATION (very important):
-- When the customer has shared BOTH a destination AND a duration (e.g. "Dubai, 5 nights"), generate a day-by-day sample itinerary immediately — do not wait for pricing.
-- Format: Day 1: ..., Day 2: ..., etc. Keep each day to one line.
-- After the itinerary, add: "Budget range: INR X – Y (approx, per person, flights extra)" — estimate based on typical market rates for that destination and duration.
-- Then ask: "Would you like to customise this, or shall we proceed with booking?"
-- If the customer gives a budget, tailor the suggestion (budget = local stays, mid = 3–4 star, premium = 5 star).
-- Never say you cannot create an itinerary. Always give your best sample based on the destination and duration provided.
-
-RULES:
-- All amounts in INR only — never USD or $
-- Do NOT use markdown links [text](url) — WhatsApp cannot render them. Use plain URLs only.
-- Keep replies concise (under 220 words)
-- Never invent exact flight or hotel prices — use ranges like "INR 45,000–65,000 approx"
-- Website & packages: ${safeBestWebsiteUrl}`,
+      workflowBlock,
+      memoryBlock,
+      `GLOBAL RULES:
+- WhatsApp formatting only: *bold*, _italic_, numbered lists, bullet lists. NEVER markdown links [text](url) — plain URLs only.
+- INR only for all pricing — never USD or $.
+- Keep reply concise and focused on the current stage task only.
+- Never repeat questions already answered by the customer.
+- Website: ${safeBestWebsiteUrl}`,
       knowledge.databaseSnippets.length
         ? `\nPACKAGE KNOWLEDGE:\n${knowledge.databaseSnippets.slice(0, 6).map((v, i) => `${i + 1}. ${v}`).join('\n')}`
         : '',
@@ -991,6 +1022,22 @@ RULES:
       }
     } else {
       response = 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
+    }
+
+    // Update lead notes with workflow data when stage is confirmed
+    if (workflowState.stage === 'confirmed' && workflowState.slots) {
+      const leadNotes = buildLeadNotes(workflowState.intent, workflowState.slots);
+      saveLead({
+        teamId: resolvedTeamId,
+        phone,
+        customer: {
+          ...customer,
+          name: workflowState.slots.name || customer.name,
+          email: workflowState.slots.email || customer.email,
+        },
+        intent: workflowState.intent,
+        notes: leadNotes,
+      }).catch(() => {});
     }
 
     const waFormattedResponse = normalizeToWhatsAppMarkdown(enforceSafeUrlsInReply(response));
