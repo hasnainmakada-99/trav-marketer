@@ -31,7 +31,6 @@ import {
   getWorkflowSystemPromptBlock,
   buildConversationMemoryBlock,
   buildLeadNotes,
-  isQuestionLike,
 } from '@/lib/whatsapp-workflow';
 
 // Verify webhook token from Meta
@@ -983,38 +982,12 @@ async function generateAndSendResponse(
       historyMessages: historyUserMessages,
     });
 
-    // Try deterministic workflow reply first (ask_destination, ask_holiday_type, etc.)
-    // Skip deterministic for question-like messages so AI can briefly answer
-    // before re-asking the required stage info.
-    const deterministicReply = isQuestionLike(correctedText) ? null : buildWorkflowReply(workflowState);
-    if (deterministicReply !== null) {
-      const waReply = normalizeToWhatsAppMarkdown(deterministicReply);
-      if (
-        recentAiText === normalizeTextForDedupe(waReply) &&
-        Number.isFinite(recentAiTs) &&
-        Date.now() - recentAiTs <= RECENT_AI_DUPLICATE_WINDOW_MS
-      ) {
-        console.log('[WhatsApp] Skipping duplicate deterministic reply');
-        return;
-      }
-      const sendResult = await sendAutoReply({
-        requestUrl, teamId: resolvedTeamId, customerId: customer.$id,
-        phone, message: waReply, webhookPhoneNumberId,
-      });
-      await createDocument('conversations', {
-        teamId: resolvedTeamId, customerId: customer.$id, phone,
-        role: 'assistant', message: waReply, messageType: 'text',
-        sentBy: 'ai', metaMessageId: sendResult.messageId || null,
-        deliveryStatus: sendResult.success ? 'sent' : 'failed',
-        createdAt: new Date().toISOString(),
-      });
-      if (sendResult.success) {
-        console.log(`[OK] Workflow reply sent to ${phone} (stage=${workflowState.stage})`);
-      }
-      return;
-    }
+    // AI-first response for all workflow stages.
+    // Deterministic stage text is passed as a structural guide in the prompt and
+    // only used as fallback if OpenAI is unavailable/fails.
+    const stageDraftReply = buildWorkflowReply(workflowState);
 
-    // No deterministic reply — call AI with workflow-aware system prompt
+    // Call AI with workflow-aware system prompt
     const knowledge = await loadTravelKnowledgeFast(resolvedTeamId, correctedText);
     const safeWebsiteSnippets = sanitizeWebsiteSnippetsForBot(knowledge.websiteSnippets);
     const safeBestWebsiteUrl = sanitizeWebsiteUrlForBot(
@@ -1025,7 +998,7 @@ async function generateAndSendResponse(
       workflowState.intent,
       workflowState.stage,
       workflowState.slots,
-      null
+      stageDraftReply
     );
     const memoryBlock = buildConversationMemoryBlock({
       state: workflowState,
@@ -1074,10 +1047,10 @@ GLOBAL RULES:
         response = enforceSafeUrlsInReply(response);
       } catch (err) {
         console.error('[WhatsApp] OpenAI reply failed:', err);
-        response = 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
+        response = stageDraftReply || 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
       }
     } else {
-      response = 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
+      response = stageDraftReply || 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
     }
 
     // Update lead notes with workflow data when stage is confirmed
