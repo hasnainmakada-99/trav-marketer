@@ -599,9 +599,7 @@ function isMenuRepeatMessage(text: string): boolean {
 
 function findLockedIntentFromHistory(historyMessages: string[]): WorkflowIntent | null {
   for (let i = historyMessages.length - 1; i >= 0; i--) {
-    const msg = historyMessages[i] || '';
-    if (isMenuRepeatMessage(msg)) continue; // skip WhatsApp button-tap menu echoes
-    const intent = detectWorkflowIntent(msg);
+    const intent = detectWorkflowIntent(historyMessages[i] || '');
     if (intent !== 'unknown') return intent;
   }
   return null;
