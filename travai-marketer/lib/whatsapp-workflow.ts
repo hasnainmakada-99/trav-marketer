@@ -545,16 +545,13 @@ function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowS
 
     if (travelMissing || needsHotelPref) return 'ask_travel_details';
 
-    // Travel details complete — check if user selected a post-package action
+    // Travel details complete — proceed to callback stage directly once the user
+    // selects any post-package action. Lead collection is intentionally skipped.
     const hasPostAction = Boolean(slots.post_package_action);
     const hasContactStart = Boolean(slots.name || slots.phone);
 
     if (hasPostAction || hasContactStart) {
-      const hasFullLead = Boolean(slots.name && slots.phone && slots.email);
-      if (hasFullLead) {
-        return slots.callback_time ? 'confirmed' : 'ask_callback';
-      }
-      return 'collect_lead';
+      return slots.callback_time ? 'confirmed' : 'ask_callback';
     }
 
     return 'show_packages';
@@ -567,11 +564,7 @@ function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowS
     const hasPostAction = Boolean(slots.post_package_action);
     const hasContactStart = Boolean(slots.name || slots.phone);
     if (hasPostAction || hasContactStart) {
-      const hasFullLead = Boolean(slots.name && slots.phone && slots.email);
-      if (hasFullLead) {
-        return slots.callback_time ? 'confirmed' : 'ask_callback';
-      }
-      return 'collect_lead';
+      return slots.callback_time ? 'confirmed' : 'ask_callback';
     }
     return 'show_packages';
   }
@@ -583,21 +576,13 @@ function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowS
     const hasPostAction = Boolean(slots.post_package_action);
     const hasContactStart = Boolean(slots.name || slots.phone);
     if (hasPostAction || hasContactStart) {
-      const hasFullLead = Boolean(slots.name && slots.phone && slots.email);
-      if (hasFullLead) {
-        return slots.callback_time ? 'confirmed' : 'ask_callback';
-      }
-      return 'collect_lead';
+      return slots.callback_time ? 'confirmed' : 'ask_callback';
     }
     return 'show_packages';
   }
 
   // Other intents: transfer, forex, visa, insurance, mice, booking_status
-  const hasFullLead = Boolean(slots.name && slots.phone && slots.email);
-  if (hasFullLead) {
-    return slots.callback_time ? 'confirmed' : 'ask_callback';
-  }
-  return 'collect_lead';
+  return slots.callback_time ? 'confirmed' : 'ask_callback';
 }
 
 // ─── public API ─────────────────────────────────────────────────────────────
@@ -784,11 +769,15 @@ export function resolveWorkflowState(args: {
   // Handles freeform responses like "evening tomorrow" or "5 pm on saturday".
   if (preStage === 'ask_callback' && !slots.callback_time) {
     const msg = args.userMessage.trim();
+    const msgL = normalize(msg);
     if (msg && msg.length <= 60) {
+      const isCallbackActionOnly =
+        slots.post_package_action === 'arrange_callback' &&
+        /\b(arrange\s*callback|callback|call\s*back|call me)\b/i.test(msgL);
       // Only use whole message if it doesn't look like a new service request
       const looksLikeNewIntent =
         detectWorkflowIntent(msg) !== 'unknown' || isGreetingLike(msg);
-      if (!looksLikeNewIntent) {
+      if (!looksLikeNewIntent && !isCallbackActionOnly) {
         slots.callback_time = msg;
       }
     }
@@ -818,9 +807,6 @@ export function resolveWorkflowState(args: {
     if (!slots.travel_time) missingSlots.push('travel_time');
     if (!slots.nights) missingSlots.push('nights');
   }
-  if (!slots.name) missingSlots.push('name');
-  if (!slots.phone) missingSlots.push('phone');
-  if (!slots.email) missingSlots.push('email');
   if (!slots.callback_time) missingSlots.push('callback_time');
 
   return { intent, stage, source, slots, missingSlots, complete, leadShouldBeSaved };
@@ -935,24 +921,8 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
 
   // ── collect_lead ──
   if (stage === 'collect_lead') {
-    const action = slots.post_package_action;
-    const context =
-      action === 'get_itinerary'
-        ? 'the complete day-wise itinerary'
-        : action === 'arrange_callback'
-          ? 'schedule your callback'
-          : 'complete package details';
-
-    return (
-      `✨ Sure! To share ${context}, let\'s proceed quickly 😊\n\n` +
-      '✨ Step 1: Lead Collection\n\n' +
-      'Please share your details:\n\n' +
-      '👤 Full Name (as per Passport/Government ID)\n' +
-      '📞 Contact Number\n' +
-      '📧 Email ID\n\n' +
-      'Example:\nSini, +91 9876543210, sini@gmail.com\n\n' +
-      'Once shared, we\'ll schedule your callback and provide full details ✨'
-    );
+    // Lead collection is disabled in the current flow; hand off to AI callback step.
+    return null;
   }
 
   // ── ask_callback ──
@@ -1223,14 +1193,14 @@ Use realistic INR pricing only. Never mention USD or $.`;
     }
 
   } else if (stage === 'collect_lead') {
-    task = `Ask the customer for their Full Name, Phone Number, and Email ID.
-All 3 must be collected. Ask in a friendly single message with an example format.
-Do NOT ask for travel details — those are already collected.`;
+    task = `Lead collection is disabled for this workflow.
+Do NOT ask for name, phone, or email.
+Instead, ask only for the customer's preferred callback time.`;
 
   } else if (stage === 'ask_callback') {
-    task = `Thank the customer for sharing their details and ask for their preferred callback time.
-Tell them a travel expert will call at that time.
-Already have: name=${slots?.name || '?'}, phone=${slots?.phone || '?'}, email=${slots?.email || '?'}.`;
+    task = `Ask for the customer's preferred callback time only.
+Do NOT ask for name, phone, or email in this stage.
+Tell them a travel expert will call at that time.`;
 
   } else if (stage === 'confirmed') {
     const name = slots?.name ? `, ${slots.name}` : '';

@@ -1070,13 +1070,15 @@ GLOBAL RULES:
     }
 
     const waFormattedResponse = normalizeToWhatsAppMarkdown(enforceSafeUrlsInReply(response));
+    // Never silence the bot on a real user turn. We still keep inbound dedupe guards
+    // earlier in the pipeline, so sending a repeated AI message here is safer than
+    // dropping the reply entirely.
     if (
       recentAiText === normalizeTextForDedupe(waFormattedResponse) &&
       Number.isFinite(recentAiTs) &&
       Date.now() - recentAiTs <= RECENT_AI_DUPLICATE_WINDOW_MS
     ) {
-      console.log('[WhatsApp] Skipping duplicate AI response send');
-      return;
+      console.log('[WhatsApp] AI response text matches recent reply; sending anyway to avoid silent turns');
     }
 
     const sendResult = await sendAutoReply({
