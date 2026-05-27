@@ -220,20 +220,31 @@ async function sendViaYCloud(params: {
   if (!apiKey || !fromPhone) {
     throw new Error('YCloud send is not configured. Set YCLOUD_API_KEY and YCLOUD_WHATSAPP_FROM.');
   }
-  const result = await sendYCloudTextMessage({
-    apiKey,
-    fromPhoneE164: fromPhone,
-    toPhone: params.phone,
-    message: params.message,
-  });
-  if (!result.success) {
-    throw new Error(result.error || 'YCloud send failed');
+  let lastError = 'YCloud send failed';
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const result = await sendYCloudTextMessage({
+        apiKey,
+        fromPhoneE164: fromPhone,
+        toPhone: params.phone,
+        message: params.message,
+      });
+      if (result.success) {
+        return {
+          success: true,
+          mode: 'ycloud',
+          messageId: result.messageId || null,
+        };
+      }
+      lastError = result.error || lastError;
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err || lastError);
+    }
+    if (attempt < 3) {
+      await new Promise((r) => setTimeout(r, 600 * attempt));
+    }
   }
-  return {
-    success: true,
-    mode: 'ycloud',
-    messageId: result.messageId || null,
-  };
+  throw new Error(lastError);
 }
 
 async function sendYCloudGreetingExperience(params: {
@@ -616,6 +627,7 @@ async function processIncomingMessage(
       return;
     }
 
+    let existingInbound: { customerId?: string; createdAt?: string; $createdAt?: string } | null = null;
     if (messageId) {
       const existing = await listDocuments('conversations', [
         Query.equal('teamId', teamId),
@@ -625,9 +637,41 @@ async function processIncomingMessage(
         Query.limit(1),
       ]);
       if (existing.documents.length > 0) {
-        console.log(`[WhatsApp] Skipping duplicate inbound messageId=${messageId}`);
-        markInboundProcessed(dedupeKey);
-        return;
+        existingInbound = existing.documents[0] as {
+          customerId?: string;
+          createdAt?: string;
+          $createdAt?: string;
+        };
+        const inboundTs = new Date(
+          existingInbound.createdAt || existingInbound.$createdAt || 0
+        ).getTime();
+        const existingCustomerId = existingInbound.customerId;
+
+        let hasAiReplyAfterInbound = false;
+        if (existingCustomerId && Number.isFinite(inboundTs) && inboundTs > 0) {
+          const aiAfterInbound = await listDocuments('conversations', [
+            Query.equal('teamId', teamId),
+            Query.equal('customerId', existingCustomerId),
+            Query.equal('sentBy', 'ai'),
+            Query.orderDesc('$createdAt'),
+            Query.limit(1),
+          ]);
+          const latestAi = aiAfterInbound.documents[0] as
+            | { createdAt?: string; $createdAt?: string }
+            | undefined;
+          const latestAiTs = new Date(latestAi?.createdAt || latestAi?.$createdAt || 0).getTime();
+          hasAiReplyAfterInbound = Number.isFinite(latestAiTs) && latestAiTs >= inboundTs;
+        }
+
+        if (hasAiReplyAfterInbound) {
+          console.log(`[WhatsApp] Skipping duplicate inbound messageId=${messageId}`);
+          markInboundProcessed(dedupeKey);
+          return;
+        }
+
+        console.log(
+          `[WhatsApp] Reprocessing inbound messageId=${messageId} because no AI reply was found after first receive`
+        );
       }
     }
 
@@ -637,18 +681,20 @@ async function processIncomingMessage(
     let customer = await findOrCreateCustomer(phone, teamId);
 
     // Save the conversation message
-    await createDocument('conversations', {
-      teamId,
-      customerId: customer.$id,
-      phone: phone,
-      role: 'user',
-      message: text || `[${type}]`,
-      messageType: type,
-      sentBy: 'customer',
-      metaMessageId: messageId || null,
-      deliveryStatus: 'received',
-      createdAt: new Date().toISOString(),
-    });
+    if (!existingInbound) {
+      await createDocument('conversations', {
+        teamId,
+        customerId: customer.$id,
+        phone: phone,
+        role: 'user',
+        message: text || `[${type}]`,
+        messageType: type,
+        sentBy: 'customer',
+        metaMessageId: messageId || null,
+        deliveryStatus: 'received',
+        createdAt: new Date().toISOString(),
+      });
+    }
     markInboundProcessed(dedupeKey);
 
     if (!text) {
