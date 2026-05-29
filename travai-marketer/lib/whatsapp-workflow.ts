@@ -777,6 +777,18 @@ export function resolveWorkflowState(args: {
     slots = mergeSlots(slots, args.aiSlots);
   }
 
+  // SAFETY: When post_package_action was just triggered by the current message
+  // and did NOT exist in session history, this is the start of lead collection.
+  // Forcibly clear any lead slots that bled in from history or AI hints so the
+  // bot always asks for details fresh instead of skipping to ask_callback.
+  const currentMsgPpa = parseGeneralSlots(args.userMessage, intent, {}).post_package_action;
+  if (currentMsgPpa && lastPpaIdx === -1) {
+    delete slots.name;
+    delete slots.phone;
+    delete slots.email;
+    delete slots.callback_time;
+  }
+
   // If "customize" is selected as post_package_action, switch to personalized
   if (slots.post_package_action === 'customize') {
     slots.holiday_type = 'personalized';
