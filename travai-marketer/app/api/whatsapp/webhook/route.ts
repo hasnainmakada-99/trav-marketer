@@ -1013,13 +1013,17 @@ async function generateAndSendResponse(
     // Resolve structured workflow state using the FULL history (all 40 messages)
     // so the intent lock and slot values are never lost in long conversations.
     const historyUserMessages = fullHistory.filter(h => h.role === 'user').map(h => h.content);
-    const aiSlotHints = process.env.OPENAI_API_KEY
+    const rawAiSlotHints = process.env.OPENAI_API_KEY
       ? await withTimeout(
           extractWorkflowSlots(correctedText, intent).catch(() => ({})),
           CLASSIFY_TIMEOUT_MS,
           {}
         )
       : {};
+    // Strip lead fields from AI hints — AI must never hallucinate name/phone/email/callback_time
+    // from action phrases like "Arrange Callback", which would skip the collect_lead stage.
+    // Only travel/service slots are safe to accept from AI extraction.
+    const { name: _n, phone: _p, email: _e, callback_time: _ct, ...aiSlotHints } = rawAiSlotHints;
 
     const workflowState = resolveWorkflowState({
       userMessage: correctedText,
