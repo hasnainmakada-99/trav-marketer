@@ -729,28 +729,47 @@ export function resolveWorkflowState(args: {
     : findSlotStartIndex(historyMessages, intent);
   const sessionMessages = historyMessages.slice(slotStart);
 
-  // Lead slots (name, phone, email, callback_time) are parsed from a narrow recent
-  // window only — NOT from the full session history. This prevents old-session contact
-  // info from bleeding into a fresh enquiry even when session boundaries are fuzzy
-  // (e.g. user skips "Hi" and goes straight to a service selection).
+  // Lead slots (name, phone, email, callback_time) require special scoping.
+  // They must NOT be pulled from session history when the user has just triggered
+  // lead collection (by tapping Arrange Callback / Get Details) — old-session contact
+  // info would otherwise skip the collect_lead stage entirely.
+  // Strategy:
+  //   1. Parse only travel/service slots from full session history.
+  //   2. Find the last message in session history that set post_package_action.
+  //   3. Only if that anchor exists (we're CONTINUING lead collection, not starting it),
+  //      pull lead slots from messages strictly AFTER the anchor — and only if no
+  //      service-selection reset happened after it.
+  //   4. Always parse all slots from the current message.
   const LEAD_SLOT_KEYS = ['name', 'phone', 'email', 'callback_time'] as const;
-  const leadWindow = historyMessages.slice(-5);
 
   let slots: WorkflowSlotMap = {};
   for (const item of sessionMessages) {
     const parsed = parseGeneralSlots(item, intent, slots);
-    // Strip lead slots — re-added below from the narrow window
-    const stripped = { ...parsed };
-    for (const k of LEAD_SLOT_KEYS) delete stripped[k];
-    slots = mergeSlots(slots, stripped);
+    const travelOnly = { ...parsed };
+    for (const k of LEAD_SLOT_KEYS) delete travelOnly[k];
+    slots = mergeSlots(slots, travelOnly);
   }
-  // Re-add lead slots from the recent window only
-  for (const item of leadWindow) {
-    const parsed = parseGeneralSlots(item, intent, slots);
-    for (const k of LEAD_SLOT_KEYS) {
-      if (parsed[k] && !slots[k]) (slots as Record<string, string>)[k] = parsed[k] as string;
+
+  // Find last post_package_action anchor in session history
+  let lastPpaIdx = -1;
+  for (let i = sessionMessages.length - 1; i >= 0; i--) {
+    const p = parseGeneralSlots(sessionMessages[i], intent, {});
+    if (p.post_package_action) { lastPpaIdx = i; break; }
+  }
+  if (lastPpaIdx !== -1) {
+    // Verify no service-selection reset happened after the anchor
+    const afterAnchor = sessionMessages.slice(lastPpaIdx + 1);
+    const resetAfter = afterAnchor.some(m => isDirectServiceSelection(m) || isGreetingLike(m));
+    if (!resetAfter) {
+      for (const item of afterAnchor) {
+        const parsed = parseGeneralSlots(item, intent, slots);
+        for (const k of LEAD_SLOT_KEYS) {
+          if (parsed[k] && !slots[k]) (slots as Record<string, string>)[k] = parsed[k] as string;
+        }
+      }
     }
   }
+
   slots = mergeSlots(slots, parseGeneralSlots(args.userMessage, intent, slots));
   // AI-extracted slot hints are a fallback layer: they only fill still-missing fields
   // and never override slots already captured by deterministic parsing.
@@ -940,19 +959,22 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
 
   // ── collect_lead ──
   if (stage === 'collect_lead') {
-    // Lead collection is disabled in the current flow; hand off to AI callback step.
-    return null;
+    return (
+      '😊 To proceed, please share your contact details:\n\n' +
+      '👤 Full Name\n' +
+      '📞 Contact Number\n' +
+      '📧 Email ID\n\n' +
+      'Example: Rahul, +91 9876543210, rahul@gmail.com'
+    );
   }
 
   // ── ask_callback ──
   if (stage === 'ask_callback') {
     const name = slots.name ? `, ${slots.name}` : '';
     return (
-      `✨ Thank you${name}! Your details have been received successfully 😊\n\n` +
-      '✨ Step 2: Callback Collection\n\n' +
-      '📞 Please share your preferred callback time\n\n' +
-      'Example:\nToday at 5 PM\nTomorrow Morning\n\n' +
-      'Once shared, we\'ll confirm your callback ✨'
+      `✨ Thank you${name}! Your details have been received 😊\n\n` +
+      '📞 When would you like us to call you?\n\n' +
+      'Example: Today at 5 PM  /  Tomorrow Morning'
     );
   }
 
@@ -1212,9 +1234,9 @@ Use realistic INR pricing only. Never mention USD or $.`;
     }
 
   } else if (stage === 'collect_lead') {
-    task = `Lead collection is disabled for this workflow.
-Do NOT ask for name, phone, or email.
-Instead, ask only for the customer's preferred callback time.`;
+    task = `Ask the customer for their Full Name, Phone Number, and Email ID — all three are required.
+Ask in one friendly message. Do NOT ask for travel details, they are already collected.
+Already have: ${collected}.`;
 
   } else if (stage === 'ask_callback') {
     task = `Ask for the customer's preferred callback time only.
