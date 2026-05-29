@@ -728,9 +728,28 @@ export function resolveWorkflowState(args: {
     ? historyMessages.length
     : findSlotStartIndex(historyMessages, intent);
   const sessionMessages = historyMessages.slice(slotStart);
+
+  // Lead slots (name, phone, email, callback_time) are parsed from a narrow recent
+  // window only — NOT from the full session history. This prevents old-session contact
+  // info from bleeding into a fresh enquiry even when session boundaries are fuzzy
+  // (e.g. user skips "Hi" and goes straight to a service selection).
+  const LEAD_SLOT_KEYS = ['name', 'phone', 'email', 'callback_time'] as const;
+  const leadWindow = historyMessages.slice(-5);
+
   let slots: WorkflowSlotMap = {};
   for (const item of sessionMessages) {
-    slots = mergeSlots(slots, parseGeneralSlots(item, intent, slots));
+    const parsed = parseGeneralSlots(item, intent, slots);
+    // Strip lead slots — re-added below from the narrow window
+    const stripped = { ...parsed };
+    for (const k of LEAD_SLOT_KEYS) delete stripped[k];
+    slots = mergeSlots(slots, stripped);
+  }
+  // Re-add lead slots from the recent window only
+  for (const item of leadWindow) {
+    const parsed = parseGeneralSlots(item, intent, slots);
+    for (const k of LEAD_SLOT_KEYS) {
+      if (parsed[k] && !slots[k]) (slots as Record<string, string>)[k] = parsed[k] as string;
+    }
   }
   slots = mergeSlots(slots, parseGeneralSlots(args.userMessage, intent, slots));
   // AI-extracted slot hints are a fallback layer: they only fill still-missing fields
