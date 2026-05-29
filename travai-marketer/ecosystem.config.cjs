@@ -4,7 +4,7 @@ module.exports = {
       name: 'travai-app',
       script: 'node_modules/.bin/next',
       args: 'start',
-      cwd: '/home/ubuntu/trav-marketer/travai-marketer',
+      cwd: '/home/ubuntu/travai-app/travai-marketer',
       instances: 1,
       autorestart: true,
       watch: false,

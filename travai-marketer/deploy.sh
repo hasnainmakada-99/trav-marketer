@@ -2,7 +2,7 @@
 # Oracle VM deploy script — run from /home/ubuntu/trav-marketer
 set -e
 
-APP_DIR="/home/ubuntu/trav-marketer"
+APP_DIR="/home/ubuntu/travai-app"
 NEXT_DIR="$APP_DIR/travai-marketer"
 
 echo "==> Pulling latest code..."
