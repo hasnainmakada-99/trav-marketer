@@ -783,6 +783,7 @@ export function resolveWorkflowState(args: {
   }
 
   // Stage-aware overrides — applied BEFORE final stage resolution.
+  console.log('[WF-SLOTS]', JSON.stringify({ intent, slots, sessionLen: sessionMessages.length, lastPpaIdx }));
   const preStage = resolveStage(intent, slots);
 
   // show_packages: detect bare number/keyword selections as post_package_action
