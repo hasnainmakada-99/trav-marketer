@@ -31,6 +31,7 @@ import {
   getWorkflowSystemPromptBlock,
   buildConversationMemoryBlock,
   buildLeadNotes,
+  isQuestionLike,
 } from '@/lib/whatsapp-workflow';
 
 // Verify webhook token from Meta
@@ -1023,7 +1024,9 @@ async function generateAndSendResponse(
     // Strip lead fields from AI hints — AI must never hallucinate name/phone/email/callback_time
     // from action phrases like "Arrange Callback", which would skip the collect_lead stage.
     // Only travel/service slots are safe to accept from AI extraction.
-    const { name: _n, phone: _p, email: _e, callback_time: _ct, ...aiSlotHints } = rawAiSlotHints;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { name: _n, phone: _p, email: _e, callback_time: _ct, ...aiSlotHints } =
+      rawAiSlotHints as Record<string, string>;
 
     const workflowState = resolveWorkflowState({
       userMessage: correctedText,
@@ -1032,10 +1035,35 @@ async function generateAndSendResponse(
       historyMessages: historyUserMessages,
     });
 
-    // AI-first response for all workflow stages.
-    // Deterministic stage text is passed as a structural guide in the prompt and
-    // only used as fallback if OpenAI is unavailable/fails.
-    const stageDraftReply = buildWorkflowReply(workflowState);
+    // Deterministic-first: for structured stages (ask_destination, ask_holiday_type,
+    // ask_travel_details, collect_lead, ask_callback) send the reply directly without AI.
+    // AI is only used for creative stages (show_packages, confirmed, unknown) where
+    // buildWorkflowReply returns null. This prevents AI from being anchored to bad
+    // patterns in conversation history and ignoring the system prompt task.
+    const deterministicReply = isQuestionLike(correctedText)
+      ? null
+      : buildWorkflowReply(workflowState);
+
+    if (deterministicReply !== null) {
+      const waReply = normalizeToWhatsAppMarkdown(deterministicReply);
+      const sendResult = await sendAutoReply({
+        requestUrl, teamId: resolvedTeamId, customerId: customer.$id,
+        phone, message: waReply, webhookPhoneNumberId,
+      });
+      await createDocument('conversations', {
+        teamId: resolvedTeamId, customerId: customer.$id, phone,
+        role: 'assistant', message: waReply, messageType: 'text',
+        sentBy: 'ai', metaMessageId: sendResult.messageId || null,
+        deliveryStatus: sendResult.success ? 'sent' : 'failed',
+        createdAt: new Date().toISOString(),
+      });
+      if (sendResult.success) {
+        console.log(`[OK] Deterministic reply sent to ${phone} (stage=${workflowState.stage})`);
+      }
+      return;
+    }
+
+    const stageDraftReply = null; // AI stages only (show_packages, confirmed, unknown)
 
     // Call AI with workflow-aware system prompt
     const knowledge = await loadTravelKnowledgeFast(resolvedTeamId, correctedText);
