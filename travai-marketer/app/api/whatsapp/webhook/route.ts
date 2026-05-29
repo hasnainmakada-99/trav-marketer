@@ -1035,6 +1035,8 @@ async function generateAndSendResponse(
       historyMessages: historyUserMessages,
     });
 
+    console.log('[WF]', JSON.stringify({ stage: workflowState.stage, intent: workflowState.intent, slots: workflowState.slots, histLen: historyUserMessages.length, last5: historyUserMessages.slice(-5) }));
+
     // Deterministic-first: for structured stages (ask_destination, ask_holiday_type,
     // ask_travel_details, collect_lead, ask_callback) send the reply directly without AI.
     // AI is only used for creative stages (show_packages, confirmed, unknown) where
