@@ -17,7 +17,7 @@ module.exports = {
     {
       name: 'travai-wa-bridge',
       script: 'server.js',
-      cwd: '/home/ubuntu/trav-marketer/travai-marketer/bridge',
+      cwd: '/home/ubuntu/travai-app/travai-marketer/bridge',
       instances: 1,
       autorestart: true,
       watch: false,
