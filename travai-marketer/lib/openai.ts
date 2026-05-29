@@ -16,7 +16,7 @@ function getSanitizedOpenAIKey() {
 
 function getPreferredChatModel() {
   const raw = (process.env.OPENAI_MODEL || '').trim();
-  return raw.length > 0 ? raw : 'gpt-4o-mini';
+  return raw.length > 0 ? raw : 'gpt-4o';
 }
 
 function getOpenAI(): OpenAI {
@@ -102,7 +102,7 @@ ${businessContext}
 ${targetAudience ? `Target audience: ${targetAudience}` : ''}`;
 
     const response = await getOpenAI().chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: 'gpt-4o',
       messages: [
         {
           role: 'system',
@@ -147,7 +147,7 @@ ${businessContext}
 ${keywordsStr}`;
 
     const response = await getOpenAI().chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: 'gpt-4o',
       messages: [
         {
           role: 'system',
@@ -192,7 +192,7 @@ Business: ${businessContext}
 Review: "${review}"`;
 
     const response = await getOpenAI().chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: 'gpt-4o',
       messages: [
         {
           role: 'system',
@@ -274,7 +274,7 @@ export async function classifyIntent(
 ): Promise<string> {
   try {
     const response = await getOpenAI().chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: 'gpt-4o',
       messages: [
         {
           role: 'system',
@@ -317,7 +317,7 @@ export async function preprocessMessage(
   if (!message?.trim()) return fallback;
   try {
     const response = await getOpenAI().chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: 'gpt-4o',
       messages: [
         {
           role: 'system',
@@ -365,7 +365,7 @@ export async function extractCustomerInfo(
 }> {
   try {
     const response = await getOpenAI().chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: 'gpt-4o',
       messages: [
         {
           role: 'system',
@@ -407,7 +407,7 @@ export async function extractWorkflowSlots(
   if (!message?.trim()) return fallback;
   try {
     const response = await getOpenAI().chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: 'gpt-4o',
       messages: [
         {
           role: 'system',
