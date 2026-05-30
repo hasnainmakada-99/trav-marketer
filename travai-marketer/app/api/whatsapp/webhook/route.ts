@@ -492,6 +492,7 @@ export async function POST(request: NextRequest) {
  */
 async function processIncomingMessage(
   message: Parameters<typeof extractMessage>[0],
+  webhookPhoneNumberId: string,
   requestUrl: string
 ) {
   try {

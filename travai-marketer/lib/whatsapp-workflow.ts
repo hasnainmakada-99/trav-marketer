@@ -8,6 +8,7 @@ export type WorkflowIntent =
   | 'insurance'
   | 'mice'
   | 'booking_status'
+  | 'callback_request'   // NEW: standalone "arrange callback" / "call me" requests
   | 'unknown';
 
 export type WorkflowStage =
@@ -165,6 +166,8 @@ function autoCorrect(text: string): string {
     tranfer: 'transfer', transfar: 'transfer', trasnfer: 'transfer',
     vsisa: 'visa', visaa: 'visa',
     forx: 'forex', froex: 'forex',
+    // call me variants
+    'cal me': 'call me', 'call me': 'call me',
   };
 
   return text
@@ -535,6 +538,12 @@ function mergeSlots(base: WorkflowSlotMap, next: WorkflowSlotMap): WorkflowSlotM
 function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowStage {
   if (intent === 'unknown') return 'unknown';
 
+  // Standalone callback request (no prior travel service)
+  if (intent === 'callback_request') {
+    if (!slots.name || !slots.phone) return 'collect_lead';
+    return slots.callback_time ? 'confirmed' : 'ask_callback';
+  }
+
   if (intent === 'plan_holiday') {
     if (!slots.destination) return 'ask_destination';
     if (!slots.holiday_type) return 'ask_holiday_type';
@@ -611,18 +620,6 @@ export function isQuestionLike(message: string): boolean {
   if (/^(what|how|why|when|where|who|which|can|is|are|do|does|will|should|could|would|tell me)\b/.test(t)) return true;
   if (/\b(tell me|explain|information about|info about|what about)\b/.test(t)) return true;
   return false;
-}
-
-// Returns true when the message looks like the user echoing the quick-reply menu
-// (contains all three primary service keywords at once). These messages must be
-// skipped when scanning history for a locked intent.
-function isMenuRepeatMessage(text: string): boolean {
-  const t = normalize(text);
-  return (
-    (t.includes('plan a holiday') || t.includes('plan holiday')) &&
-    (t.includes('flight') || t.includes('flights')) &&
-    (t.includes('hotel') || t.includes('hotels'))
-  );
 }
 
 function findLockedIntentFromHistory(historyMessages: string[]): WorkflowIntent | null {
@@ -872,6 +869,8 @@ export function resolveWorkflowState(args: {
     if (!slots.travellers) missingSlots.push('travellers');
     if (!slots.travel_time) missingSlots.push('travel_time');
     if (!slots.nights) missingSlots.push('nights');
+  } else if (intent === 'callback_request') {
+    // only lead slots matter
   }
   if (!slots.name) missingSlots.push('name');
   if (!slots.phone) missingSlots.push('phone');
@@ -974,7 +973,7 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
       );
     }
 
-    // Other intents
+    // Other intents (should not reach here under current logic, but safe fallback)
     return (
       '✨ Sure! Please share the following details:\n\n' +
       '👤 Full Name\n📞 Contact Number\n🕒 Preferred Callback Time\n\n' +
@@ -1076,6 +1075,17 @@ export function detectWorkflowIntent(message: string, classifiedIntent?: string)
   if (fuzzyAny(text, ['insurance'])) return 'insurance';
   if (/(mice|corporate event|meetings incentives conferences exhibitions)/.test(joined)) return 'mice';
   if (/(booking status|status|pnr|reference|booking id)/.test(joined)) return 'booking_status';
+
+  // ── NEW: standalone callback request ──
+  // Match explicit phrases like "arrange callback", "call me", "callback please" etc.
+  // Only if no other service intent has been triggered.
+  if (
+    /\b(arrange\s*(a\s)?callback|call\s*me|call\s*back|callback\s*request|request\s*callback|get\s*callback)\b/i.test(joined) ||
+    (/\bcallback\b/i.test(joined) && joined.length < 30)  // short message containing only "callback"
+  ) {
+    return 'callback_request';
+  }
+
   return 'unknown';
 }
 
@@ -1135,6 +1145,15 @@ Guidelines:
 - Profanity or frustration → stay calm, empathize: "I understand your concern. Let me connect you with our team who can help you better."
 - Random characters/test messages → respond friendly: "Hello! 😊 I'm Sini, your travel assistant. How can I help you today?"
 Always end with the main menu if intent is unclear.`;
+
+  } else if (intent === 'callback_request') {
+    if (stage === 'collect_lead') {
+      task = `The customer has requested a callback. Ask for their Full Name and Phone Number (both are required). Email is optional. Do NOT ask about travel details.`;
+    } else if (stage === 'ask_callback') {
+      task = `Ask for the preferred callback time only. Already have name and phone.`;
+    } else if (stage === 'confirmed') {
+      task = `Confirm that the callback has been scheduled, as described for the 'confirmed' stage below.`;
+    }
 
   } else if (stage === 'ask_destination') {
     task = `Ask the customer which destination they want to visit.
@@ -1292,7 +1311,7 @@ Is there anything else I may assist you with today? 😊"
 
 B) If the last assistant message ALREADY contains "callback has been scheduled":
    → The customer is replying to "Is there anything else?". Handle as follows:
-   - If YES or a new travel question 0→ reply: "How may I assist you today? 😊\n\n1️⃣ Plan a Holiday\n2️⃣ Flights\n3️⃣ Hotels"
+   - If YES or a new travel question → reply: "How may I assist you today? 😊\n\n1️⃣ Plan a Holiday\n2️⃣ Flights\n3️⃣ Hotels"
    - If NO / Thank you / ending → reply with EXACTLY:
 "Thank you for your time 😊
 We truly appreciate your support.
