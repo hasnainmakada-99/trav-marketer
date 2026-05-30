@@ -4,7 +4,6 @@ import {
   extractMessage,
   extractStatus,
   parseWhatsAppWebhook,
-  sendWhatsAppMessage,
   verifyWebhookToken,
 } from '@/lib/whatsapp';
 import {
@@ -82,17 +81,6 @@ function getGreetingImageUrl(requestUrl: string) {
   return `${fallbackOrigin}/sini.png`;
 }
 
-function resolveOutboundMode() {
-  const forced = (process.env.WHATSAPP_OUTBOUND_MODE || '').trim().toLowerCase();
-  if (forced === 'bridge' || forced === 'meta' || forced === 'ycloud') {
-    return forced;
-  }
-  if ((process.env.YCLOUD_API_KEY || '').trim()) {
-    return 'ycloud';
-  }
-  return process.env.BRIDGE_SHARED_SECRET ? 'bridge' : 'meta';
-}
-
 function verifyYCloudSignature(rawBody: string, signatureHeader: string, secret: string): boolean {
   const parts = signatureHeader
     .split(',')
@@ -168,9 +156,6 @@ function markInboundProcessed(key: string) {
 }
 
 async function hasHumanTakeover(teamId: string, phone: string) {
-  if (resolveOutboundMode() === 'ycloud') {
-    return false;
-  }
   if (DISABLE_HUMAN_HANDOVER) {
     return false;
   }
@@ -277,7 +262,7 @@ async function sendYCloudGreetingExperience(params: {
 }
 
 async function startYCloudTypingKeepAlive(inboundMessageId: string | null) {
-  if (resolveOutboundMode() !== 'ycloud' || !inboundMessageId) {
+  if (!inboundMessageId) {
     return { stop: async () => {} };
   }
   const apiKey = (process.env.YCLOUD_API_KEY || '').trim();
@@ -355,87 +340,11 @@ async function loadTravelKnowledgeFast(
   );
 }
 
-async function sendViaMetaCloud(params: {
-  phone: string;
-  message: string;
-  webhookPhoneNumberId: string;
-}) {
-  const phoneNumberId =
-    params.webhookPhoneNumberId || (process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim();
-  const whatsappToken = (process.env.WHATSAPP_TOKEN || '').trim();
-  if (!phoneNumberId || !whatsappToken) {
-    throw new Error(
-      'Meta Cloud send is not configured. Set WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_TOKEN.'
-    );
-  }
-  const result = await sendWhatsAppMessage({
-    phoneNumberId,
-    recipientPhone: params.phone,
-    message: params.message,
-    whatsappToken,
-  });
-  if (!result.success) {
-    throw new Error(result.error || 'Meta Cloud send failed');
-  }
-  return {
-    success: true,
-    mode: 'meta',
-    messageId: result.messageId || null,
-  };
-}
-
-async function queueBridgeReply(params: {
-  requestUrl: string;
-  teamId: string;
-  customerId: string;
-  phone: string;
-  message: string;
-}) {
-  const controlUrl = new URL('/api/wa-bridge/control', params.requestUrl);
-  const controlRes = await fetch(controlUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      teamId: params.teamId,
-      action: 'send_text',
-      payload: {
-        phone: params.phone,
-        message: params.message,
-        customerId: params.customerId,
-      },
-    }),
-  });
-  const controlData = await controlRes.json().catch(() => ({}));
-  if (!controlRes.ok) {
-    throw new Error(controlData?.error || 'Failed to queue bridge reply');
-  }
-  return {
-    success: true,
-    mode: 'bridge',
-    messageId: controlData?.commandId || null,
-  };
-}
-
 async function sendAutoReply(params: {
-  requestUrl: string;
-  teamId: string;
-  customerId: string;
   phone: string;
   message: string;
-  webhookPhoneNumberId: string;
 }) {
-  const mode = resolveOutboundMode();
-  if (mode === 'ycloud') {
-    return sendViaYCloud({ phone: params.phone, message: params.message });
-  }
-  if (mode === 'meta') {
-    return sendViaMetaCloud({
-      phone: params.phone,
-      message: params.message,
-      webhookPhoneNumberId: params.webhookPhoneNumberId,
-    });
-  }
-  return queueBridgeReply(params);
+  return sendViaYCloud({ phone: params.phone, message: params.message });
 }
 
 async function saveLead(params: {
@@ -583,7 +492,6 @@ export async function POST(request: NextRequest) {
  */
 async function processIncomingMessage(
   message: Parameters<typeof extractMessage>[0],
-  webhookPhoneNumberId: string,
   requestUrl: string
 ) {
   try {
@@ -709,8 +617,8 @@ async function processIncomingMessage(
       const handoverCheck = await hasHumanTakeover(teamId, phone);
       if (!handoverCheck) {
         const sendResult = await sendAutoReply({
-          requestUrl, teamId, customerId: customer.$id,
-          phone, message: nonTextReply, webhookPhoneNumberId,
+          phone,
+          message: nonTextReply,
         }).catch(() => ({ success: false, messageId: null, mode: 'unknown' }));
         if (sendResult.success) {
           await createDocument('conversations', {
@@ -774,7 +682,6 @@ async function processIncomingMessage(
         correctedText,  // typo-corrected used for logic
         phone,
         intent,
-        webhookPhoneNumberId,
         teamId,
         requestUrl,
         messageId
@@ -868,7 +775,6 @@ async function generateAndSendResponse(
   correctedText: string,    // AI typo-corrected — used for intent/slot logic
   phone: string,
   intent: string,
-  webhookPhoneNumberId: string,
   teamId: string,
   requestUrl: string,
   inboundMessageId: string | null
@@ -921,8 +827,6 @@ async function generateAndSendResponse(
     // Truncated history sent to OpenAI — last 20 messages keeps token budget sane
     const history = fullHistory.slice(-20);
 
-    const assistantMessages = historyRows.filter((row) => row.role === 'assistant').length;
-    const firstAssistantReply = assistantMessages === 0;
     const recentAi = await listDocuments('conversations', [
       Query.equal('teamId', resolvedTeamId),
       Query.equal('customerId', customer.$id),
@@ -944,56 +848,20 @@ async function generateAndSendResponse(
       | { businessName?: string; openaiSystemPrompt?: string }
       | undefined;
     if (isGreetingMessage(correctedText)) {
-      const mode = resolveOutboundMode();
       const greetingMenu = getGreetingMenuText(customer.name || null);
-
-      if (mode === 'ycloud') {
-        const priorGreeting = normalizeTextForDedupe(greetingMenu);
-        if (
-          recentAiText === priorGreeting &&
-          Number.isFinite(recentAiTs) &&
-          Date.now() - recentAiTs <= RECENT_AI_DUPLICATE_WINDOW_MS
-        ) {
-          console.log('[WhatsApp] Skipping duplicate greeting auto-reply');
-          return;
-        }
-
-        const greetingSend = await sendYCloudGreetingExperience({
-          phone,
-          requestUrl,
-        });
-
-        await createDocument('conversations', {
-          teamId: resolvedTeamId,
-          customerId: customer.$id,
-          phone: phone,
-          role: 'assistant',
-          message: greetingMenu,
-          messageType: 'interactive',
-          sentBy: 'ai',
-          metaMessageId: greetingSend.menuMessageId || null,
-          deliveryStatus: 'sent',
-          createdAt: new Date().toISOString(),
-        });
-        return;
-      }
-
-      const quickMenuReply = normalizeToWhatsAppMarkdown(greetingMenu);
+      const priorGreeting = normalizeTextForDedupe(greetingMenu);
       if (
-        recentAiText === normalizeTextForDedupe(quickMenuReply) &&
+        recentAiText === priorGreeting &&
         Number.isFinite(recentAiTs) &&
         Date.now() - recentAiTs <= RECENT_AI_DUPLICATE_WINDOW_MS
       ) {
         console.log('[WhatsApp] Skipping duplicate greeting auto-reply');
         return;
       }
-      const sendResult = await sendAutoReply({
-        requestUrl,
-        teamId: resolvedTeamId,
-        customerId: customer.$id,
+
+      const greetingSend = await sendYCloudGreetingExperience({
         phone,
-        message: quickMenuReply,
-        webhookPhoneNumberId,
+        requestUrl,
       });
 
       await createDocument('conversations', {
@@ -1001,11 +869,11 @@ async function generateAndSendResponse(
         customerId: customer.$id,
         phone: phone,
         role: 'assistant',
-        message: quickMenuReply,
-        messageType: 'text',
+        message: greetingMenu,
+        messageType: 'interactive',
         sentBy: 'ai',
-        metaMessageId: sendResult.messageId || null,
-        deliveryStatus: sendResult.success ? 'sent' : 'failed',
+        metaMessageId: greetingSend.menuMessageId || null,
+        deliveryStatus: 'sent',
         createdAt: new Date().toISOString(),
       });
       return;
@@ -1047,8 +915,8 @@ async function generateAndSendResponse(
     if (deterministicReply !== null) {
       const waReply = normalizeToWhatsAppMarkdown(deterministicReply);
       const sendResult = await sendAutoReply({
-        requestUrl, teamId: resolvedTeamId, customerId: customer.$id,
-        phone, message: waReply, webhookPhoneNumberId,
+        phone,
+        message: waReply,
       });
       await createDocument('conversations', {
         teamId: resolvedTeamId, customerId: customer.$id, phone,
@@ -1160,12 +1028,8 @@ GLOBAL RULES:
     }
 
     const sendResult = await sendAutoReply({
-      requestUrl,
-      teamId: resolvedTeamId,
-      customerId: customer.$id,
       phone,
       message: waFormattedResponse,
-      webhookPhoneNumberId,
     });
 
     // Save the outgoing message with the actual provider message ID
@@ -1214,3 +1078,4 @@ async function resolveTeamIdByPhoneNumberId(phoneNumberId: string): Promise<stri
 
   return process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'system';
 }
+

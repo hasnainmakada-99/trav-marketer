@@ -62,8 +62,6 @@ const STOPWORDS = new Set([
 ]);
 
 const EXCLUDED_COLLECTIONS = new Set([
-  'bridge_state',
-  'bridge_commands',
   'conversations',
   'customers',
   'campaign_logs',

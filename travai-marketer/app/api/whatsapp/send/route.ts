@@ -1,30 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { sendWhatsAppMessage, sendWhatsAppTemplate } from '@/lib/whatsapp';
 import { sendYCloudTextMessage } from '@/lib/whatsapp-ycloud';
 import { createDocument, getDocument, updateDocument } from '@/lib/appwrite';
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitForBridgeCommandResult(commandId: string, timeoutMs = 6000) {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    try {
-      const doc = (await getDocument('bridge_commands', commandId)) as {
-        status?: string;
-        message?: string | null;
-      };
-      if (doc.status === 'completed' || doc.status === 'failed') {
-        return { status: doc.status, message: doc.message || null };
-      }
-    } catch {
-      // command doc may not be visible instantly; keep polling
-    }
-    await sleep(450);
-  }
-  return { status: 'pending', message: null };
-}
 
 function parseButtons(raw: unknown): string[] {
   if (Array.isArray(raw)) {
@@ -57,20 +33,39 @@ function applyTemplateParams(text: string, params: string[]) {
   });
 }
 
-function resolveOutboundMode() {
-  const forced = (process.env.WHATSAPP_OUTBOUND_MODE || '').trim().toLowerCase();
-  if (forced === 'bridge' || forced === 'meta' || forced === 'ycloud') {
-    return forced;
+function buildLocalTemplateMessage(body: string, buttons: string[]): string {
+  if (!buttons.length) {
+    return body;
   }
-  if ((process.env.YCLOUD_API_KEY || '').trim()) {
-    return 'ycloud';
+  const options = buttons.map((label, idx) => `${idx + 1}. ${label}`).join('\n');
+  return `${body}\n\n${options}`.trim();
+}
+
+async function sendTextViaYCloud(phone: string, message: string) {
+  const apiKey = (process.env.YCLOUD_API_KEY || '').trim();
+  const fromPhone = (process.env.YCLOUD_WHATSAPP_FROM || '').trim();
+
+  if (!apiKey || !fromPhone) {
+    throw new Error('YCloud is not configured. Set YCLOUD_API_KEY and YCLOUD_WHATSAPP_FROM.');
   }
-  return process.env.BRIDGE_SHARED_SECRET ? 'bridge' : 'meta';
+
+  const ycloudResult = await sendYCloudTextMessage({
+    apiKey,
+    fromPhoneE164: fromPhone,
+    toPhone: phone,
+    message,
+  });
+
+  if (!ycloudResult.success) {
+    throw new Error(ycloudResult.error || 'Failed to send message via YCloud');
+  }
+
+  return ycloudResult;
 }
 
 /**
  * POST /api/whatsapp/send
- * Send a WhatsApp message to a customer
+ * Send a WhatsApp message to a customer via YCloud
  */
 export async function POST(request: NextRequest) {
   try {
@@ -84,30 +79,36 @@ export async function POST(request: NextRequest) {
       localTemplateId,
     } = body;
 
-    // Validate required fields
-    if (!phone || (!message && !templateName && !localTemplateId)) {
+    const teamId = body.teamId || 'system';
+    const normalizedPhone = String(phone || '').replace(/[^\d]/g, '');
+
+    if (!normalizedPhone) {
       return NextResponse.json(
-        { error: 'Missing required fields: phone and message/templateName/localTemplateId' },
+        { error: 'Missing required field: phone' },
         { status: 400 }
       );
     }
 
-    const outboundMode = resolveOutboundMode();
-    const bridgeModeEnabled = outboundMode === 'bridge';
-    const normalizedPhone = String(phone || '').replace(/[^\d]/g, '');
-    const normalizedMessage = String(message || '').trim();
+    if (templateName) {
+      return NextResponse.json(
+        { error: 'Meta template sends are disabled. This project now uses YCloud-only text sends.' },
+        { status: 400 }
+      );
+    }
+
     const normalizedParams = Array.isArray(templateParams)
       ? templateParams.map((p: unknown) => String(p || '').trim()).filter(Boolean)
       : [];
-    const teamId = body.teamId || 'system';
 
-    if (localTemplateId && bridgeModeEnabled) {
+    let outboundMessage = String(message || '').trim();
+    let messageType: 'text' | 'template' = 'text';
+
+    if (localTemplateId) {
       const localTemplate = (await getDocument(
         'wa_local_templates',
         String(localTemplateId)
       )) as {
         teamId?: string;
-        name?: string;
         body?: string;
         buttons?: string | null;
       };
@@ -116,17 +117,11 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Local template not found' }, { status: 404 });
       }
       if (localTemplate.teamId && localTemplate.teamId !== teamId) {
-        return NextResponse.json(
-          { error: 'Local template team mismatch' },
-          { status: 403 }
-        );
+        return NextResponse.json({ error: 'Local template team mismatch' }, { status: 403 });
       }
 
-      const renderedBody = applyTemplateParams(
-        String(localTemplate.body || ''),
-        normalizedParams
-      ).trim();
-      const buttonLabels = parseButtons(localTemplate.buttons || null)
+      const renderedBody = applyTemplateParams(String(localTemplate.body || ''), normalizedParams).trim();
+      const renderedButtons = parseButtons(localTemplate.buttons || null)
         .map((btn) => applyTemplateParams(btn, normalizedParams).trim())
         .filter(Boolean)
         .slice(0, 3);
@@ -138,268 +133,41 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const controlUrl = new URL('/api/wa-bridge/control', request.url);
-      const controlRes = await fetch(controlUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          teamId,
-          action: 'send_template',
-          payload: {
-            phone: normalizedPhone,
-            message: renderedBody,
-            buttons: buttonLabels,
-            customerId: customerId || 'manual',
-          },
-        }),
-      });
-      const controlData = await controlRes.json();
-      if (!controlRes.ok) {
-        return NextResponse.json(
-          { error: controlData?.error || 'Failed to queue local template send' },
-          { status: 400 }
-        );
-      }
-      const commandId = String(controlData?.commandId || '');
-      const commandResult = commandId
-        ? await waitForBridgeCommandResult(commandId, 7000)
-        : { status: 'pending', message: null };
-      if (commandResult.status === 'failed') {
-        return NextResponse.json(
-          {
-            error:
-              commandResult.message ||
-              'Bridge failed to send local template. Restart bridge and try again.',
-          },
-          { status: 400 }
-        );
-      }
-
-      try {
-        await createDocument('conversations', {
-          teamId,
-          customerId: customerId || 'manual',
-          phone: normalizedPhone,
-          role: 'assistant',
-          message: renderedBody,
-          messageType: 'template',
-          sentBy: 'staff',
-          metaMessageId: commandId || null,
-          deliveryStatus:
-            commandResult.status === 'completed' ? 'bridged' : 'queued',
-          createdAt: new Date().toISOString(),
-        });
-      } catch (dbError) {
-        console.error('Failed to save local template message to database:', dbError);
-      }
-
-      return NextResponse.json(
-        {
-          success: true,
-          mode: 'bridge_local_template',
-          queued: commandResult.status !== 'completed',
-          commandId: commandId || null,
-          phone: normalizedPhone,
-          status: commandResult.status,
-          timestamp: new Date().toISOString(),
-        },
-        { status: 200 }
-      );
+      outboundMessage = buildLocalTemplateMessage(renderedBody, renderedButtons);
+      messageType = 'template';
     }
 
-    // Bridge mode for text sends (dashboard/live chat) so it works with WA Web linked number.
-    if (!templateName && bridgeModeEnabled) {
-      const controlUrl = new URL('/api/wa-bridge/control', request.url);
-      const controlRes = await fetch(controlUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          teamId,
-          action: 'send_text',
-          payload: {
-            phone: normalizedPhone,
-            message: normalizedMessage,
-            customerId: customerId || 'manual',
-          },
-        }),
-      });
-      const controlData = await controlRes.json();
-      if (!controlRes.ok) {
-        return NextResponse.json(
-          { error: controlData?.error || 'Failed to queue bridge send' },
-          { status: 400 }
-        );
-      }
-      const commandId = String(controlData?.commandId || '');
-      const commandResult = commandId
-        ? await waitForBridgeCommandResult(commandId, 6500)
-        : { status: 'pending', message: null };
-      if (commandResult.status === 'failed') {
-        return NextResponse.json(
-          {
-            error:
-              commandResult.message ||
-              'Bridge failed to send message. Restart bridge and try again.',
-          },
-          { status: 400 }
-        );
-      }
-
-      try {
-        await createDocument('conversations', {
-          teamId,
-          customerId: customerId || 'manual',
-          phone: normalizedPhone,
-          role: 'assistant',
-          message: normalizedMessage,
-          messageType: 'text',
-          sentBy: 'staff',
-          metaMessageId: commandId || null,
-          deliveryStatus:
-            commandResult.status === 'completed' ? 'bridged' : 'queued',
-          createdAt: new Date().toISOString(),
-        });
-      } catch (dbError) {
-        console.error('Failed to save bridge message to database:', dbError);
-      }
-
+    if (!outboundMessage) {
       return NextResponse.json(
-        {
-          success: true,
-          mode: 'bridge',
-          queued: commandResult.status !== 'completed',
-          commandId: commandId || null,
-          phone: normalizedPhone,
-          status: commandResult.status,
-          timestamp: new Date().toISOString(),
-        },
-        { status: 200 }
-      );
-    }
-
-    if (!templateName && outboundMode === 'ycloud') {
-      const apiKey = (process.env.YCLOUD_API_KEY || '').trim();
-      const fromPhone = (process.env.YCLOUD_WHATSAPP_FROM || '').trim();
-      if (!apiKey || !fromPhone) {
-        return NextResponse.json(
-          {
-            error:
-              'YCloud is not configured. Set YCLOUD_API_KEY and YCLOUD_WHATSAPP_FROM.',
-          },
-          { status: 500 }
-        );
-      }
-
-      const ycloudResult = await sendYCloudTextMessage({
-        apiKey,
-        fromPhoneE164: fromPhone,
-        toPhone: normalizedPhone,
-        message: normalizedMessage,
-      });
-
-      if (!ycloudResult.success) {
-        return NextResponse.json(
-          { error: ycloudResult.error || 'Failed to send message via YCloud' },
-          { status: 400 }
-        );
-      }
-
-      try {
-        await createDocument('conversations', {
-          teamId,
-          customerId: customerId || 'manual',
-          phone: normalizedPhone,
-          role: 'assistant',
-          message: normalizedMessage,
-          messageType: 'text',
-          sentBy: 'staff',
-          metaMessageId: ycloudResult.messageId || null,
-          deliveryStatus: 'sent',
-          createdAt: new Date().toISOString(),
-        });
-      } catch (dbError) {
-        console.error('Failed to save YCloud message to database:', dbError);
-      }
-
-      return NextResponse.json(
-        {
-          success: true,
-          mode: 'ycloud',
-          messageId: ycloudResult.messageId || null,
-          phone: normalizedPhone,
-          timestamp: new Date().toISOString(),
-        },
-        { status: 200 }
-      );
-    }
-
-    // Get WhatsApp credentials from environment
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-    const whatsappToken = process.env.WHATSAPP_TOKEN;
-
-    if (!phoneNumberId || !whatsappToken) {
-      return NextResponse.json(
-        {
-          error:
-            'WhatsApp Cloud API is not configured. Set WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_TOKEN.',
-        },
-        { status: 500 }
-      );
-    }
-
-    let result;
-
-    // Send template or regular message
-    if (templateName) {
-      result = await sendWhatsAppTemplate({
-        phoneNumberId,
-        recipientPhone: normalizedPhone,
-        templateName,
-        parameters: templateParams || [],
-        whatsappToken,
-      });
-    } else {
-      result = await sendWhatsAppMessage({
-        phoneNumberId,
-        recipientPhone: normalizedPhone,
-        message: normalizedMessage,
-        whatsappToken,
-      });
-    }
-
-    // Check if send was successful
-    if (!result.success) {
-      return NextResponse.json(
-        { error: result.error || 'Failed to send message' },
+        { error: 'Missing required fields: message or localTemplateId' },
         { status: 400 }
       );
     }
 
-    // Save the message to database
+    const ycloudResult = await sendTextViaYCloud(normalizedPhone, outboundMessage);
+
     try {
       await createDocument('conversations', {
         teamId,
         customerId: customerId || 'manual',
         phone: normalizedPhone,
         role: 'assistant',
-        message: templateName
-          ? `[template: ${templateName}]`
-          : normalizedMessage,
-        messageType: templateName ? 'template' : 'text',
+        message: outboundMessage,
+        messageType,
         sentBy: 'staff',
-        metaMessageId: result.messageId || null,
+        metaMessageId: ycloudResult.messageId || null,
         deliveryStatus: 'sent',
         createdAt: new Date().toISOString(),
       });
     } catch (dbError) {
-      console.error('Failed to save message to database:', dbError);
-      // Don't fail the API call if database save fails
+      console.error('Failed to save YCloud message to database:', dbError);
     }
 
     return NextResponse.json(
       {
         success: true,
-        messageId: result.messageId,
+        mode: 'ycloud',
+        messageId: ycloudResult.messageId || null,
         phone: normalizedPhone,
         timestamp: new Date().toISOString(),
       },
@@ -408,15 +176,15 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('[WhatsApp Send] Error:', error);
     return NextResponse.json(
-      { error: 'Failed to send message' },
+      { error: error instanceof Error ? error.message : 'Failed to send message' },
       { status: 500 }
     );
   }
 }
 
 /**
- * POST /api/whatsapp/send-bulk
- * Send messages to multiple customers (for campaigns)
+ * PUT /api/whatsapp/send
+ * Send messages to multiple customers (for campaigns) via YCloud
  */
 export async function PUT(request: NextRequest) {
   try {
@@ -426,94 +194,86 @@ export async function PUT(request: NextRequest) {
       recipients,
       message,
       templateName,
-      templateParams,
       teamId,
     } = body;
 
-    if (!recipients || !Array.isArray(recipients) || !message) {
+    if (templateName) {
+      return NextResponse.json(
+        { error: 'Template campaigns are disabled in YCloud-only mode. Use text message campaigns.' },
+        { status: 400 }
+      );
+    }
+
+    if (!recipients || !Array.isArray(recipients) || !String(message || '').trim()) {
       return NextResponse.json(
         { error: 'Invalid request format' },
         { status: 400 }
       );
     }
 
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-    const whatsappToken = process.env.WHATSAPP_TOKEN;
-
-    if (!phoneNumberId || !whatsappToken) {
-      return NextResponse.json(
-        { error: 'WhatsApp credentials not configured' },
-        { status: 500 }
-      );
-    }
-
+    const normalizedMessage = String(message).trim();
     const results = {
       sent: 0,
       failed: 0,
       errors: [] as Array<{ phone: string; error: string }>,
     };
 
-    // Send to each recipient
     for (const recipient of recipients) {
+      const rawPhone = String(recipient?.phone || '');
+      const normalizedPhone = rawPhone.replace(/[^\d]/g, '');
+      if (!normalizedPhone) {
+        results.failed++;
+        results.errors.push({ phone: rawPhone, error: 'Invalid recipient phone' });
+        continue;
+      }
+
       try {
-        let sendResult;
+        const sendResult = await sendTextViaYCloud(normalizedPhone, normalizedMessage);
+        results.sent++;
 
-        if (templateName) {
-          sendResult = await sendWhatsAppTemplate({
-            phoneNumberId,
-            recipientPhone: recipient.phone,
-            templateName,
-            parameters: templateParams || [],
-            whatsappToken,
-          });
-        } else {
-          sendResult = await sendWhatsAppMessage({
-            phoneNumberId,
-            recipientPhone: recipient.phone,
-            message,
-            whatsappToken,
-          });
-        }
-
-        if (sendResult.success) {
-          results.sent++;
-
-          // Create campaign log entry
-          if (campaignId) {
-            await createDocument('campaign_logs', {
-              teamId: teamId || 'system',
-              campaignId: campaignId,
-              phone: recipient.phone,
-              customerId: recipient.customerId || '',
-              status: 'sent',
-              metaMessageId: sendResult.messageId,
-              sentAt: new Date().toISOString(),
-            });
-          }
-        } else {
-          results.failed++;
-          results.errors.push({
-            phone: recipient.phone,
-            error: sendResult.error || 'Failed to send message',
+        if (campaignId) {
+          await createDocument('campaign_logs', {
+            teamId: teamId || 'system',
+            campaignId,
+            phone: normalizedPhone,
+            customerId: recipient.customerId || '',
+            status: 'sent',
+            metaMessageId: sendResult.messageId || null,
+            sentAt: new Date().toISOString(),
           });
         }
       } catch (error) {
         results.failed++;
         results.errors.push({
-          phone: recipient.phone,
-          error: String(error),
+          phone: normalizedPhone,
+          error: error instanceof Error ? error.message : String(error),
         });
+
+        if (campaignId) {
+          try {
+            await createDocument('campaign_logs', {
+              teamId: teamId || 'system',
+              campaignId,
+              phone: normalizedPhone,
+              customerId: recipient.customerId || '',
+              status: 'failed',
+              metaMessageId: null,
+              sentAt: new Date().toISOString(),
+              error: error instanceof Error ? error.message : String(error),
+            });
+          } catch (logError) {
+            console.error('Failed to save failed campaign log:', logError);
+          }
+        }
       }
 
-      // Add small delay to avoid rate limiting
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
-    // Update campaign status
     if (campaignId) {
       try {
         await updateDocument('campaigns', campaignId, {
-          status: 'sent',
+          status: results.failed === 0 ? 'sent' : 'partial',
           sentAt: new Date().toISOString(),
           totalSent: results.sent,
         });
@@ -525,6 +285,7 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json(
       {
         success: results.failed === 0,
+        mode: 'ycloud',
         ...results,
         total: recipients.length,
         timestamp: new Date().toISOString(),
@@ -534,7 +295,7 @@ export async function PUT(request: NextRequest) {
   } catch (error) {
     console.error('[WhatsApp Bulk Send] Error:', error);
     return NextResponse.json(
-      { error: 'Failed to send bulk messages' },
+      { error: error instanceof Error ? error.message : 'Failed to send bulk messages' },
       { status: 500 }
     );
   }

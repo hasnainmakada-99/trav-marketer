@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react';
 
 const TEAM_ID = process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
-const IS_YCLOUD_MODE = (process.env.NEXT_PUBLIC_WHATSAPP_OUTBOUND_MODE || 'ycloud').toLowerCase() === 'ycloud';
 const POLL_INTERVAL_RAW = Number(process.env.NEXT_PUBLIC_WHATSAPP_POLL_MS || '180000');
 // Default 3 min when visible; polling pauses automatically when the tab is hidden.
 const POLL_INTERVAL_MS = Number.isFinite(POLL_INTERVAL_RAW)
@@ -151,7 +150,7 @@ export default function WhatsAppPage() {
           </div>
           <div className="flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full font-medium">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            {IS_YCLOUD_MODE ? 'YCloud API' : 'WA Bridge'}
+            YCloud API
           </div>
         </div>
         <div className="flex gap-0 mt-4 border-b border-gray-200 -mb-4">
