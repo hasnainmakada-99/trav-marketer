@@ -31,6 +31,8 @@ import {
   buildConversationMemoryBlock,
   buildLeadNotes,
   isQuestionLike,
+  type WorkflowIntent,
+  type WorkflowStage,
 } from '@/lib/whatsapp-workflow';
 
 // Verify webhook token from Meta
@@ -56,6 +58,11 @@ const GREETING_BUTTONS = [
   { id: 'svc_3', title: PRIMARY_QUICK_MENU_OPTIONS[2] },
 ] as const;
 const GREETING_MENU_TEXT = getGreetingMenuText();
+const TRAVEL_SALES_INTENTS: WorkflowIntent[] = ['plan_holiday', 'flights', 'hotels'];
+const TRAVEL_KEYWORDS_REGEX =
+  /\b(travel|trip|tour|holiday|holidays|package|packages|itinerary|destination|visa|forex|insurance|airport transfer|transfer|hotel|hotels|stay|resort|flight|flights|ticket|fare|booking|callback)\b/i;
+const OFF_TOPIC_KEYWORDS_REGEX =
+  /\b(weather|temperature|rain|sports|cricket|football|ipl|stocks?|share market|crypto|bitcoin|ethereum|politics|election|movie|movies|song|songs|joke|memes?|programming|code|debug|python|javascript|java|c\+\+|exam|homework|math|recipe|cooking|gym|workout|astrology|zodiac)\b/i;
 
 function isGreetingMessage(text: string) {
   const normalized = String(text || '')
@@ -65,6 +72,39 @@ function isGreetingMessage(text: string) {
     .trim();
   return /^(hi|hello|hey|hlo|helo|namaste|yo|good morning|good afternoon|good evening)$/.test(
     normalized
+  );
+}
+
+function isTravelSalesIntent(intent: WorkflowIntent): boolean {
+  return TRAVEL_SALES_INTENTS.includes(intent);
+}
+
+function isHardOffTopicInput(message: string, workflowIntent: WorkflowIntent): boolean {
+  const normalized = normalizeTextForDedupe(message || '');
+  if (!normalized) return false;
+  if (isTravelSalesIntent(workflowIntent)) return false;
+  if (TRAVEL_KEYWORDS_REGEX.test(normalized)) return false;
+  return OFF_TOPIC_KEYWORDS_REGEX.test(normalized);
+}
+
+function buildOffTopicReply(name?: string | null): string {
+  const prefix = name ? `${name.split(' ')[0]}, ` : '';
+  return (
+    `😊 ${prefix}I can help only with travel planning and bookings.\n\n` +
+    `Please choose one option to continue:\n\n` +
+    `1️⃣ Plan a Holiday\n2️⃣ Flights\n3️⃣ Hotels`
+  );
+}
+
+function shouldEnforceDatabaseFirst(params: {
+  workflowIntent: WorkflowIntent;
+  workflowStage: WorkflowStage;
+  userMessage: string;
+}): boolean {
+  if (!isTravelSalesIntent(params.workflowIntent)) return false;
+  if (params.workflowStage === 'show_packages') return true;
+  return /\b(package|packages|itinerary|price|pricing|cost|budget|offer|deals?|hotel options?|flight options?|fare)\b/i.test(
+    params.userMessage
   );
 }
 
@@ -904,6 +944,27 @@ async function generateAndSendResponse(
       historyMessages: historyUserMessages,
     });
 
+    if (isHardOffTopicInput(correctedText, workflowState.intent)) {
+      const offTopicReply = normalizeToWhatsAppMarkdown(buildOffTopicReply(customer.name || null));
+      const sendResult = await sendAutoReply({
+        phone,
+        message: offTopicReply,
+      });
+      await createDocument('conversations', {
+        teamId: resolvedTeamId,
+        customerId: customer.$id,
+        phone,
+        role: 'assistant',
+        message: offTopicReply,
+        messageType: 'text',
+        sentBy: 'ai',
+        metaMessageId: sendResult.messageId || null,
+        deliveryStatus: sendResult.success ? 'sent' : 'failed',
+        createdAt: new Date().toISOString(),
+      });
+      return;
+    }
+
     // Deterministic-first: for structured stages (ask_destination, ask_holiday_type,
     // ask_travel_details, collect_lead, ask_callback) send the reply directly without AI.
     // AI is only used for creative stages (show_packages, confirmed, unknown) where
@@ -935,11 +996,48 @@ async function generateAndSendResponse(
     const stageDraftReply = null; // AI stages only (show_packages, confirmed, unknown)
 
     // Call AI with workflow-aware system prompt
-    const knowledge = await loadTravelKnowledgeFast(resolvedTeamId, correctedText);
+    const knowledgeQuery = [
+      correctedText,
+      workflowState.intent,
+      workflowState.slots.destination,
+      workflowState.slots.from_city,
+      workflowState.slots.to_city,
+      workflowState.slots.travel_time,
+      workflowState.slots.nights,
+      workflowState.slots.hotel_preference,
+    ]
+      .filter(Boolean)
+      .join(' ');
+    const knowledge = await loadTravelKnowledgeFast(resolvedTeamId, knowledgeQuery || correctedText);
     const safeWebsiteSnippets = sanitizeWebsiteSnippetsForBot(knowledge.websiteSnippets);
     const safeBestWebsiteUrl = sanitizeWebsiteUrlForBot(
       knowledge.bestWebsiteUrl || WEBSITE_FALLBACK_URL
     );
+    const enforceDatabaseFirst = shouldEnforceDatabaseFirst({
+      workflowIntent: workflowState.intent,
+      workflowStage: workflowState.stage,
+      userMessage: correctedText,
+    });
+    const customerProfileBlock = [
+      `CUSTOMER PROFILE:`,
+      `- Name: ${customer.name || 'Unknown'}`,
+      `- Phone: ${phone}`,
+      `- Team: ${resolvedTeamId}`,
+      `Always keep replies personalized and context-aware for this customer.`,
+    ].join('\n');
+    const databasePolicyBlock = enforceDatabaseFirst
+      ? knowledge.databaseSnippets.length > 0
+        ? `DATABASE-FIRST POLICY (STRICT):
+- Use Appwrite package/flight/hotel data as the PRIMARY truth source.
+- Do not invent package names, inclusions, durations, or prices when DB data is available.
+- If the user asks for options, extract and present options from the provided PACKAGE KNOWLEDGE.
+- If some detail is missing in DB, say it clearly and ask one follow-up question.`
+        : `DATABASE-FIRST POLICY:
+- No matching package data found in Appwrite for this query.
+- You may provide curated sample options, but label them as "sample/estimated".
+- Keep pricing realistic in INR and avoid claiming confirmed live inventory.
+- Ask the user if they want a human expert callback for exact live inventory.`
+      : '';
 
     const workflowBlock = getWorkflowSystemPromptBlock(
       workflowState.intent,
@@ -959,13 +1057,15 @@ You ALWAYS respond — no matter what the customer sends (short, long, confusing
       getBotRoutePolicyPromptBlock(),
       workflowBlock,
       memoryBlock,
+      customerProfileBlock,
+      databasePolicyBlock,
       `HANDLING UNEXPECTED INPUTS (mandatory):
 - Emoji-only or very short messages (ok, yes, no, 👍, 🙏) → interpret in context of current stage; if ambiguous, re-ask the stage question warmly.
 - Questions mid-flow (Is Dubai visa-free? What currency does Bali use?) → briefly answer in 1-2 sentences, then re-ask the stage question.
 - Hindi or Hinglish → respond in the same language if possible, continue the flow.
 - Angry or frustrated customer → empathize first ("I completely understand your concern 😊"), then offer to help.
 - "Speak to human" / "agent" / "staff" → "Sure! Our team can be reached at info@traventions.com. I can also continue helping you right now 😊"
-- Completely off-topic (weather, sports, jokes, etc.) → "That's a little outside my expertise! I'm here to help with travel ✈️" then re-ask stage question.
+- Completely off-topic (weather, sports, jokes, coding, etc.) → politely refuse and steer back to travel only.
 - Random characters or test messages → "Hello! 😊 I'm Sini from Traventions. How can I help you plan your next trip?"
 - User wants to change their mind (different destination, different dates) → accept gracefully and update the plan.
 
