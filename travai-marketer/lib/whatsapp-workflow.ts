@@ -1289,7 +1289,7 @@ Already have: ${collected}.`;
 
   } else if (stage === 'ask_callback') {
     task = `Ask for the customer's preferred callback time only.
-Do NOT ask for name, phone, or email in this stage.
+ask for name, phone in this stage.
 Tell them a travel expert will call at that time.`;
 
   } else if (stage === 'confirmed') {

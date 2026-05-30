@@ -1,6 +1,6 @@
 #!/bin/bash
 # Oracle VM deploy script — run from /home/ubuntu/trav-marketer
-set -e
+set -euo pipefail
 
 APP_DIR="/home/ubuntu/travai-app"
 NEXT_DIR="$APP_DIR/travai-marketer"
@@ -11,7 +11,7 @@ git pull origin main
 
 echo "==> Installing dependencies..."
 cd "$NEXT_DIR"
-npm ci --omit=dev
+npm ci --include=dev
 
 echo "==> Building Next.js..."
 npm run build

@@ -1,6 +1,6 @@
 param(
   [string]$KeyPath = "C:\Users\hasna\Desktop\CodeSphere Agency LLP\Traventions\Trav Ai Marketing and Ai GBP\ssh-key-2026-05-06.key",
-  [string]$Host = "ubuntu@161.118.174.116",
+  [string]$ServerHost = "ubuntu@161.118.174.116",
   [string]$Branch = "main",
   [string]$ServerAppDir = "/home/ubuntu/travai-app",
   [switch]$NoBuild
@@ -19,7 +19,7 @@ $serverCommands = @(
   "git checkout $Branch",
   "git pull origin $Branch",
   "cd travai-marketer",
-  "npm ci --omit=dev"
+  "npm ci --include=dev"
 )
 
 if (-not $NoBuild) {
@@ -34,8 +34,12 @@ $serverCommands += @(
 )
 
 $remoteScript = $serverCommands -join "; "
+$escapedRemoteScript = $remoteScript -replace "'", "'\\''"
 
-Write-Host "Deploying branch '$Branch' to $Host ..."
-ssh -o StrictHostKeyChecking=no -i "$KeyPath" $Host "$remoteScript"
+Write-Host "Deploying branch '$Branch' to $ServerHost ..."
+ssh -o StrictHostKeyChecking=no -i "$KeyPath" $ServerHost "bash -lc '$escapedRemoteScript'"
+if ($LASTEXITCODE -ne 0) {
+  throw "Deployment failed on server. See logs above."
+}
 
 Write-Host "Deployment completed."
