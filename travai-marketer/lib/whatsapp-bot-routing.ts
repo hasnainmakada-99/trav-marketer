@@ -1,5 +1,7 @@
 const DEFAULT_BASE_URL = 'https://traventions-ai.vercel.app';
 const DEFAULT_FALLBACK_ROUTE = '/contact';
+const DEFAULT_GOOGLE_REVIEW_URL =
+  'https://www.google.com/search?q=Traventions+India+Pvt+Ltd+Reviews';
 
 type StaticRoute = {
   route: string;
@@ -246,6 +248,30 @@ function toAbsoluteUrl(path: string) {
   return `${getBaseUrl()}${path}`;
 }
 
+function normalizeExternalUrl(url: string): string | null {
+  try {
+    const parsed = new URL(String(url || '').trim());
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function getAllowedExternalUrls(): string[] {
+  const envUrls = (process.env.WA_ALLOWED_EXTERNAL_URLS || '')
+    .split(',')
+    .map((v) => normalizeExternalUrl(v))
+    .filter((v): v is string => Boolean(v));
+  const reviewUrl = normalizeExternalUrl(process.env.WA_GOOGLE_REVIEW_URL || DEFAULT_GOOGLE_REVIEW_URL);
+  return Array.from(new Set([reviewUrl, ...envUrls].filter((v): v is string => Boolean(v))));
+}
+
+function isAllowedExternalUrl(url: string): boolean {
+  const candidate = normalizeExternalUrl(url);
+  if (!candidate) return false;
+  return getAllowedExternalUrls().some((allowed) => candidate === allowed);
+}
+
 export function isConfidentialOrBlockedRoutePath(pathOrUrl: string): boolean {
   const path = normalizePath(pathOrUrl);
   if (!path) return true;
@@ -294,7 +320,7 @@ export function enforceSafeUrlsInReply(text: string): string {
   const fallbackUrl = toAbsoluteUrl(DEFAULT_FALLBACK_ROUTE);
 
   output = output.replace(/https?:\/\/[^\s)]+/gi, (url) => {
-    return isCustomerSafeRoutePath(url) ? url : fallbackUrl;
+    return isCustomerSafeRoutePath(url) || isAllowedExternalUrl(url) ? url : fallbackUrl;
   });
 
   output = output.replace(/(^|[\s(])\/[a-zA-Z0-9\-_/[\]]*/g, (full, prefix, pathToken: string) => {
