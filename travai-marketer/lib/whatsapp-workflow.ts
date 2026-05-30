@@ -777,16 +777,25 @@ export function resolveWorkflowState(args: {
     slots = mergeSlots(slots, args.aiSlots);
   }
 
-  // SAFETY: When post_package_action was just triggered by the current message
-  // and did NOT exist in session history, this is the start of lead collection.
-  // Forcibly clear any lead slots that bled in from history or AI hints so the
-  // bot always asks for details fresh instead of skipping to ask_callback.
+  // SAFETY: Prevent lead bleed from skipping collect_lead.
+  // If the current message sets post_package_action AND no lead has been
+  // explicitly provided AFTER the last post_package_action in session history,
+  // clear any accidentally accumulated lead slots so the bot always asks fresh.
   const currentMsgPpa = parseGeneralSlots(args.userMessage, intent, {}).post_package_action;
-  if (currentMsgPpa && lastPpaIdx === -1) {
-    delete slots.name;
-    delete slots.phone;
-    delete slots.email;
-    delete slots.callback_time;
+  if (currentMsgPpa) {
+    const msgsAfterLastPpa = lastPpaIdx !== -1
+      ? sessionMessages.slice(lastPpaIdx + 1)
+      : [];
+    const leadProvidedAfterPpa = msgsAfterLastPpa.some(m => {
+      const p = parseGeneralSlots(m, intent, {});
+      return Boolean(p.name || p.phone || p.email);
+    });
+    if (!leadProvidedAfterPpa) {
+      delete slots.name;
+      delete slots.phone;
+      delete slots.email;
+      delete slots.callback_time;
+    }
   }
 
   // If "customize" is selected as post_package_action, switch to personalized

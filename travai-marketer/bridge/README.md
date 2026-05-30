@@ -24,8 +24,11 @@ Inside this `bridge/` folder:
    - `NEXT_APP_BRIDGE_STATE_URL` (default: `http://localhost:3000/api/wa-bridge/state`)
    - `NEXT_APP_BRIDGE_CONTROL_URL` (default: `http://localhost:3000/api/wa-bridge/control`)
    - `TEAM_ID` (your Appwrite tenant/team id)
+   - `BRIDGE_STATE_HEARTBEAT_MS` (default: `600000` = 10 min)
+   - `BRIDGE_CONTROL_POLL_MS` (default: `60000` = 60 sec)
 
 If `NEXT_APP_BASE_URL` is set, the bridge auto-derives incoming/state/control URLs.
+For Oracle where app + bridge are on same VM, use `NEXT_APP_BASE_URL=http://127.0.0.1:3000` to avoid Vercel function invocations.
 
 ## 3) Run Locally
 
@@ -54,7 +57,7 @@ For Oracle deployment, use PM2 so the process stays alive 24/7 in background eve
 - This flow is separate from Meta Cloud API webhooks.
 - Group chats are ignored in this starter version.
 - Only text messages are handled in this starter version.
-- For later deployment, change `NEXT_APP_BRIDGE_URL` to your Vercel URL and set `BRIDGE_SHARED_SECRET` in Vercel env.
-- For production on Oracle, set `NEXT_APP_BASE_URL=https://trav-marketer.vercel.app`.
+- If you still host API routes on Vercel, use your Vercel URL in `NEXT_APP_BASE_URL`.
+- If Oracle runs your Next.js app, keep `NEXT_APP_BASE_URL=http://127.0.0.1:3000` so bridge traffic stays local.
 - Bridge status and QR relink state are posted to `/api/wa-bridge/state` for dashboard display.
 - Bridge polls `/api/wa-bridge/control` so dashboard actions can restart bridge or force re-link without SSH commands.
