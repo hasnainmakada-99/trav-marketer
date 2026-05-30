@@ -15,7 +15,7 @@ export type WorkflowStage =
   | 'ask_holiday_type'
   | 'ask_travel_details'
   | 'show_packages'          // deterministic (exclusive) or AI (personalized)
-  | 'collect_lead'           // ask name + phone + email
+  | 'collect_lead'           // ask name + phone
   | 'ask_callback'           // ask preferred callback time
   | 'confirmed'              // all done — save lead to CRM
   | 'unknown';
@@ -545,12 +545,14 @@ function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowS
 
     if (travelMissing || needsHotelPref) return 'ask_travel_details';
 
-    // Travel details complete — proceed to callback stage directly once the user
-    // selects any post-package action. Lead collection is intentionally skipped.
+    // Travel details complete — once user selects a package action, force
+    // name + phone collection before asking callback time.
     const hasPostAction = Boolean(slots.post_package_action);
     const hasContactStart = Boolean(slots.name || slots.phone);
+    const hasRequiredLead = Boolean(slots.name && slots.phone);
 
     if (hasPostAction || hasContactStart) {
+      if (!hasRequiredLead) return 'collect_lead';
       return slots.callback_time ? 'confirmed' : 'ask_callback';
     }
 
@@ -563,7 +565,9 @@ function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowS
     }
     const hasPostAction = Boolean(slots.post_package_action);
     const hasContactStart = Boolean(slots.name || slots.phone);
+    const hasRequiredLead = Boolean(slots.name && slots.phone);
     if (hasPostAction || hasContactStart) {
+      if (!hasRequiredLead) return 'collect_lead';
       return slots.callback_time ? 'confirmed' : 'ask_callback';
     }
     return 'show_packages';
@@ -575,13 +579,16 @@ function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowS
     }
     const hasPostAction = Boolean(slots.post_package_action);
     const hasContactStart = Boolean(slots.name || slots.phone);
+    const hasRequiredLead = Boolean(slots.name && slots.phone);
     if (hasPostAction || hasContactStart) {
+      if (!hasRequiredLead) return 'collect_lead';
       return slots.callback_time ? 'confirmed' : 'ask_callback';
     }
     return 'show_packages';
   }
 
   // Other intents: transfer, forex, visa, insurance, mice, booking_status
+  if (!slots.name || !slots.phone) return 'collect_lead';
   return slots.callback_time ? 'confirmed' : 'ask_callback';
 }
 
@@ -866,6 +873,8 @@ export function resolveWorkflowState(args: {
     if (!slots.travel_time) missingSlots.push('travel_time');
     if (!slots.nights) missingSlots.push('nights');
   }
+  if (!slots.name) missingSlots.push('name');
+  if (!slots.phone) missingSlots.push('phone');
   if (!slots.callback_time) missingSlots.push('callback_time');
 
   return { intent, stage, source, slots, missingSlots, complete, leadShouldBeSaved };
@@ -983,9 +992,8 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
     return (
       '😊 To proceed, please share your contact details:\n\n' +
       '👤 Full Name\n' +
-      '📞 Contact Number\n' +
-      '📧 Email ID\n\n' +
-      'Example: Rahul, +91 9876543210, rahul@gmail.com'
+      '📞 Contact Number\n\n' +
+      'Example: Rahul, +91 9876543210'
     );
   }
 
@@ -1255,7 +1263,8 @@ Use realistic INR pricing only. Never mention USD or $.`;
     }
 
   } else if (stage === 'collect_lead') {
-    task = `Ask the customer for their Full Name, Phone Number, and Email ID — all three are required.
+    task = `Ask the customer for their Full Name and Phone Number — both are required.
+Email can be requested as optional, but do not block the flow if email is missing.
 Ask in one friendly message. Do NOT ask for travel details, they are already collected.
 Already have: ${collected}.`;
 
