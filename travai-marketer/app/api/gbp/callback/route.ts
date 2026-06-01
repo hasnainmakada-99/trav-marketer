@@ -23,11 +23,13 @@ import {
  *     "Refresh from Google".
  */
 export async function GET(request: NextRequest) {
-  let origin = '';
+  // Use the configured app URL for redirects — never derive from request.url
+  // which resolves to localhost:3000 behind Nginx reverse proxy.
+  const appOrigin = (process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/+$/, '');
   let fallbackPath = '/dashboard/gbp';
   try {
-    const { searchParams, origin: reqOrigin } = new URL(request.url);
-    origin = reqOrigin;
+    const { searchParams } = new URL(request.url);
+    const origin = appOrigin;
     const code = searchParams.get('code');
     const state = searchParams.get('state');
     const oauthError = searchParams.get('error');
