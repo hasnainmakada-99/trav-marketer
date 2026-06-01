@@ -125,15 +125,15 @@ function GbpPageInner() {
   const checkStatus = useCallback(async (tid: string) => {
     setStatusLoading(true);
     try {
-      const res = await fetch(`/api/gbp/status?teamId=${encodeURIComponent(tid)}`);
+      const res = await fetch(`/api/gbp/status?teamId=${encodeURIComponent(tid)}`, { cache: 'no-store' });
       const data = await res.json();
       if (!data.connected) {
         // Auto-migrate any orphaned Google config to this canonical teamId.
         const migRes = await fetch('/api/gbp/migrate', { method: 'POST' });
         const migData = await migRes.json();
         if (migData.migrated) {
-          // Re-fetch status now that the teamId is updated.
-          const res2 = await fetch(`/api/gbp/status?teamId=${encodeURIComponent(tid)}`);
+          // Re-fetch status — skip browser cache so we see the just-migrated state.
+          const res2 = await fetch(`/api/gbp/status?teamId=${encodeURIComponent(tid)}&_=${Date.now()}`, { cache: 'no-store' });
           const data2 = await res2.json();
           setConnected(!!data2.connected);
           setHasLocation(!!data2.hasLocation);
