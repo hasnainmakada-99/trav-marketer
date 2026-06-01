@@ -1,6 +1,43 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
-import { listDocuments } from '@/lib/appwrite';
+import { listDocuments, createDocument } from '@/lib/appwrite';
+
+const TEAM_ID = process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json() as {
+      phone?: string; name?: string; email?: string;
+      notes?: string; serviceInterest?: string; source?: string; teamId?: string;
+    };
+    const phone = (body.phone || '').replace(/[^\d+]/g, '').trim();
+    if (!phone || phone.length < 8) {
+      return NextResponse.json({ error: 'Valid phone number is required' }, { status: 400 });
+    }
+    const now = new Date().toISOString();
+    const notes = [
+      body.serviceInterest ? `Service Interest: ${body.serviceInterest}` : '',
+      body.notes || '',
+    ].filter(Boolean).join('\n') || null;
+
+    const lead = await createDocument('leads', {
+      teamId: body.teamId || TEAM_ID,
+      phone,
+      name: body.name?.trim() || null,
+      email: body.email?.trim() || null,
+      notes,
+      source: body.source || 'walk_in',
+      status: 'new',
+      lastContactedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return NextResponse.json({ lead }, { status: 201 });
+  } catch (err) {
+    console.error('[POST /api/leads]', err);
+    return NextResponse.json({ error: 'Failed to create lead' }, { status: 500 });
+  }
+}
 
 export async function GET(request: NextRequest) {
   try {
