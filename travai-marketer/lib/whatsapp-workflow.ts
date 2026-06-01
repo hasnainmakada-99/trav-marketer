@@ -738,6 +738,7 @@ export function resolveWorkflowState(args: {
   // lead collection (by tapping Arrange Callback / Get Details) — old-session contact
   // info would otherwise skip the collect_lead stage entirely.
   // Strategy:
+  // This is a sample change at line 741 to make sure oracle is keeping up with the new changes
   //   1. Parse only travel/service slots from full session history.
   //   2. Find the last message in session history that set post_package_action.
   //   3. Only if that anchor exists (we're CONTINUING lead collection, not starting it),
