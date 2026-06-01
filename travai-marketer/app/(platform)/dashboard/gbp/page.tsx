@@ -107,9 +107,10 @@ function GbpPageInner() {
   useEffect(() => {
     getCurrentUser().then(u => {
       if (!u) { router.push('/login'); return; }
-      const ud = u as AppwriteUser;
-      setUser(ud);
-      setTeamId(ud.$id);
+      setUser(u as AppwriteUser);
+      // GBP always operates under the canonical client team ID,
+      // not the demo CRM user's Appwrite ID.
+      setTeamId(process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || (u as AppwriteUser).$id);
     });
   }, [router]);
 
@@ -126,6 +127,20 @@ function GbpPageInner() {
     try {
       const res = await fetch(`/api/gbp/status?teamId=${encodeURIComponent(tid)}`);
       const data = await res.json();
+      if (!data.connected) {
+        // Auto-migrate any orphaned Google config to this canonical teamId.
+        const migRes = await fetch('/api/gbp/migrate', { method: 'POST' });
+        const migData = await migRes.json();
+        if (migData.migrated) {
+          // Re-fetch status now that the teamId is updated.
+          const res2 = await fetch(`/api/gbp/status?teamId=${encodeURIComponent(tid)}`);
+          const data2 = await res2.json();
+          setConnected(!!data2.connected);
+          setHasLocation(!!data2.hasLocation);
+          setSavedLocationId(data2.googleLocationId || null);
+          return;
+        }
+      }
       setConnected(!!data.connected);
       setHasLocation(!!data.hasLocation);
       setSavedLocationId(data.googleLocationId || null);
