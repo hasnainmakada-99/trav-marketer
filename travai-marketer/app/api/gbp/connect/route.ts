@@ -22,8 +22,10 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const runtimeCallbackUri = `${origin}/api/gbp/callback`;
-    const consentUrl = buildGoogleConsentUrl(teamId, redirectTo, runtimeCallbackUri);
+    // Always use GOOGLE_REDIRECT_URI from env — never derive from request origin.
+    // Dynamic derivation breaks behind reverse proxies (Nginx → localhost:3000).
+    void origin;
+    const consentUrl = buildGoogleConsentUrl(teamId, redirectTo);
     return NextResponse.redirect(consentUrl);
   } catch (error) {
     console.error('[GBP Connect] Error:', error);
