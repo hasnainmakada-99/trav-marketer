@@ -900,17 +900,7 @@ async function generateAndSendResponse(
         return;
       }
 
-      let greetingMessageId: string | null = null;
-      let greetingMessageType = 'interactive';
-      try {
-        const greetingSend = await sendYCloudGreetingExperience({ phone, requestUrl });
-        greetingMessageId = greetingSend.menuMessageId || null;
-      } catch (interactiveErr) {
-        console.warn('[WhatsApp] Interactive greeting failed, falling back to plain text:', interactiveErr instanceof Error ? interactiveErr.message : String(interactiveErr));
-        greetingMessageType = 'text';
-        const fallback = await sendAutoReply({ phone, message: greetingMenu }).catch(() => ({ success: false, messageId: null, mode: 'unknown' }));
-        greetingMessageId = (fallback as { messageId?: string | null }).messageId || null;
-      }
+      const greetingSendResult = await sendAutoReply({ phone, message: greetingMenu }).catch(() => ({ success: false, messageId: null, mode: 'unknown' }));
 
       await createDocument('conversations', {
         teamId: resolvedTeamId,
@@ -918,12 +908,15 @@ async function generateAndSendResponse(
         phone: phone,
         role: 'assistant',
         message: greetingMenu,
-        messageType: greetingMessageType,
+        messageType: 'text',
         sentBy: 'ai',
-        metaMessageId: greetingMessageId,
-        deliveryStatus: 'sent',
+        metaMessageId: (greetingSendResult as { messageId?: string | null }).messageId || null,
+        deliveryStatus: greetingSendResult.success ? 'sent' : 'failed',
         createdAt: new Date().toISOString(),
       });
+      if (greetingSendResult.success) {
+        console.log(`[OK] Greeting sent to ${phone} via ycloud`);
+      }
       return;
     }
 
