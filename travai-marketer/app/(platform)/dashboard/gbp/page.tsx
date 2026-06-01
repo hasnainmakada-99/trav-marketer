@@ -277,7 +277,7 @@ function GbpPageInner() {
     try {
       const res = await fetch('/api/gbp/posts', {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ postId: post.$id, status: 'posted', publishNow: true }),
+        body: JSON.stringify({ postId: post.$id, publishNow: true, teamId: post.teamId || teamId, content: post.content }),
       });
       if (res.ok) { flash('Published!'); loadPosts(); }
       else { const e = await res.json(); flash(e.error || 'Failed', false); }
