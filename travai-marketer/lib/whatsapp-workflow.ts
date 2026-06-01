@@ -633,6 +633,7 @@ function findLockedIntentFromHistory(historyMessages: string[]): WorkflowIntent 
 // Returns the index in historyMessages from which to START parsing slots.
 // Scopes slot accumulation to the current session + current service selection
 // so old-session data and switched-service data never pollute the current flow.
+// This is a sample change at line 741 to make sure oracle is keeping up with the new changes
 function findSlotStartIndex(historyMessages: string[], intent: WorkflowIntent): number {
   // Step 1: last greeting = session boundary
   let sessionStart = 0;
