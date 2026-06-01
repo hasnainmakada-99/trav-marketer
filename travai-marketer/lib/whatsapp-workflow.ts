@@ -274,7 +274,16 @@ const NON_CITY_WORDS = new Set([
   'personalized', 'personalised', 'itinerary', 'traventions', 'details',
   'sini', 'example', 'callback', 'contact', 'arrange', 'book', 'confirm',
   'yes', 'no', 'okay', 'ok', 'sure', 'thanks', 'thank', 'please', 'help',
+  'support', 'speak', 'human', 'agent', 'team', 'name', 'number', 'phone',
 ]);
+
+const CALLBACK_PHRASES = [
+  'arrange callback', 'arrange a callback', 'arrange call back',
+  'call me back', 'call back', 'callback', 'speak to support',
+  'customer support', 'speak to human', 'speak to agent', 'speak to team',
+  'contact support', 'talk to human', 'talk to agent', 'need help',
+  'i want to speak', 'want callback', 'want a callback', 'need callback',
+];
 
 // Try to parse comma-separated inputs:
 // Travel: "2 Adults, July, Bangalore, 5 Nights"
@@ -424,7 +433,12 @@ function parseGeneralSlots(
     const hasTravelSlots =
       Boolean(slots.travellers) || Boolean(slots.travel_time) ||
       Boolean(slots.departure_city) || Boolean(slots.nights);
-    if (isShortAlpha && !hasTravelSlots && !NOT_DESTINATIONS.has(normalize(raw))) {
+    const normalizedRaw = normalize(raw);
+    const looksLikeCallback =
+      Boolean(slots.post_package_action) ||
+      CALLBACK_PHRASES.some((p) => normalizedRaw.includes(p)) ||
+      /\b(callback|call me|call back|arrange|support|speak to|contact us|speak to human|help me)\b/i.test(raw);
+    if (isShortAlpha && !hasTravelSlots && !looksLikeCallback && !NOT_DESTINATIONS.has(normalizedRaw)) {
       slots.destination = raw.trim();
     }
   }
@@ -544,6 +558,14 @@ function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowS
     return slots.callback_time ? 'confirmed' : 'ask_callback';
   }
 
+  // If user explicitly requests a callback at ANY stage, skip travel collection
+  // and go straight to collecting contact info → callback time.
+  if (slots.post_package_action === 'arrange_callback') {
+    const hasRequiredLead = Boolean(slots.name && slots.phone);
+    if (!hasRequiredLead) return 'collect_lead';
+    return slots.callback_time ? 'confirmed' : 'ask_callback';
+  }
+
   if (intent === 'plan_holiday') {
     if (!slots.destination) return 'ask_destination';
     if (!slots.holiday_type) return 'ask_holiday_type';
@@ -554,8 +576,6 @@ function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowS
 
     if (travelMissing || needsHotelPref) return 'ask_travel_details';
 
-    // Travel details complete — once user selects a package action, force
-    // name + phone collection before asking callback time.
     const hasPostAction = Boolean(slots.post_package_action);
     const hasContactStart = Boolean(slots.name || slots.phone);
     const hasRequiredLead = Boolean(slots.name && slots.phone);
@@ -1289,9 +1309,10 @@ Ask in one friendly message. Do NOT ask for travel details, they are already col
 Already have: ${collected}.`;
 
   } else if (stage === 'ask_callback') {
-    task = `Ask for the customer's preferred callback time only.
-ask for name, phone in this stage.
-Tell them a travel expert will call at that time.`;
+    task = `Ask ONLY for the customer's preferred callback time.
+DO NOT ask for name or phone — those are already collected.
+Already have: ${collected}.
+Tell them a travel expert will call them at their preferred time.`;
 
   } else if (stage === 'confirmed') {
     const name = slots?.name ? `, ${slots.name}` : '';
