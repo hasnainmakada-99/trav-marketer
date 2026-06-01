@@ -175,18 +175,61 @@ export async function GET(request: NextRequest) {
 
 /**
  * PATCH /api/gbp/posts
- * Update a GBP post
+ * Update or publish a GBP post
  */
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
-    const { postId, ...updates } = body;
+    const { postId, publishNow, teamId, googleLocationName, languageCode, callToAction, ...updates } = body;
 
     if (!postId) {
-      return NextResponse.json(
-        { error: 'Missing postId' },
-        { status: 400 }
+      return NextResponse.json({ error: 'Missing postId' }, { status: 400 });
+    }
+
+    // If publishNow, call the Google API to actually publish the post
+    if (publishNow) {
+      const resolvedTeamId = teamId || process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || '';
+      if (!resolvedTeamId) {
+        return NextResponse.json({ error: 'Missing teamId for publish' }, { status: 400 });
+      }
+
+      const accessToken = await getAccessTokenForTeam(resolvedTeamId);
+      const business = await getBusinessConfigByTeamId(resolvedTeamId);
+      const connectedLocation =
+        typeof business?.googleLocationId === 'string' ? business.googleLocationId : null;
+      const locationName =
+        typeof googleLocationName === 'string' && googleLocationName.length > 0
+          ? googleLocationName
+          : connectedLocation;
+
+      if (!locationName) {
+        return NextResponse.json(
+          { error: 'No Google location selected. Click your business name in the Setup tab first.' },
+          { status: 400 }
+        );
+      }
+
+      const content = updates.content || '';
+      if (!content.trim()) {
+        return NextResponse.json({ error: 'Post content is empty' }, { status: 400 });
+      }
+
+      const resolvedCta: GbpCallToAction | undefined =
+        callToAction?.actionType && callToAction.actionType !== 'NONE'
+          ? (callToAction as GbpCallToAction)
+          : undefined;
+
+      const createdPost = await createGoogleLocalPost(
+        accessToken,
+        locationName,
+        content,
+        typeof languageCode === 'string' ? languageCode : 'en',
+        resolvedCta
       );
+
+      updates.googlePostId = createdPost.name || null;
+      updates.status = 'posted';
+      updates.postedAt = new Date().toISOString();
     }
 
     updates.updatedAt = new Date().toISOString();
@@ -195,10 +238,8 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json(post, { status: 200 });
   } catch (error) {
     console.error('[GBP PATCH] Error:', error);
-    return NextResponse.json(
-      { error: 'Failed to update GBP post' },
-      { status: 500 }
-    );
+    const msg = error instanceof Error ? error.message : 'Failed to update GBP post';
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
 
