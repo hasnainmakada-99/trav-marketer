@@ -1010,10 +1010,12 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
   // ── collect_lead ──
   if (stage === 'collect_lead') {
     return (
-      '😊 To proceed, please share your contact details:\n\n' +
+      '😊 To arrange your callback, please share:\n\n' +
       '👤 Full Name\n' +
-      '📞 Contact Number\n\n' +
-      'Example: Rahul, +91 9876543210'
+      '📞 Contact Number\n' +
+      '🕒 Preferred Callback Time\n\n' +
+      'Example: Rahul, +91 9876543210, Today at 5 PM\n\n' +
+      'Our travel expert will call you at your preferred time! ✨'
     );
   }
 
@@ -1303,10 +1305,11 @@ Use realistic INR pricing only. Never mention USD or $.`;
     }
 
   } else if (stage === 'collect_lead') {
-    task = `Ask the customer for their Full Name and Phone Number — both are required.
-Email can be requested as optional, but do not block the flow if email is missing.
-Ask in one friendly message. Do NOT ask for travel details, they are already collected.
-Already have: ${collected}.`;
+    task = `Ask the customer for their Full Name, Phone Number, and Preferred Callback Time — all three in one friendly message.
+Format example: "Rahul, +91 9876543210, Today at 5 PM"
+Do NOT ask for travel details, they are already collected.
+Already have: ${collected}.
+Tell them our travel expert will call at their preferred time.`;
 
   } else if (stage === 'ask_callback') {
     task = `Ask ONLY for the customer's preferred callback time.
