@@ -8,6 +8,7 @@ export type WorkflowIntent =
   | 'insurance'
   | 'mice'
   | 'booking_status'
+  | 'callback_request'   // NEW: standalone "arrange callback" / "call me" requests
   | 'unknown';
 
 export type WorkflowStage =
@@ -15,7 +16,7 @@ export type WorkflowStage =
   | 'ask_holiday_type'
   | 'ask_travel_details'
   | 'show_packages'          // deterministic (exclusive) or AI (personalized)
-  | 'collect_lead'           // ask name + phone + email
+  | 'collect_lead'           // ask name + phone
   | 'ask_callback'           // ask preferred callback time
   | 'confirmed'              // all done — save lead to CRM
   | 'unknown';
@@ -165,6 +166,8 @@ function autoCorrect(text: string): string {
     tranfer: 'transfer', transfar: 'transfer', trasnfer: 'transfer',
     vsisa: 'visa', visaa: 'visa',
     forx: 'forex', froex: 'forex',
+    // call me variants
+    'cal me': 'call me', 'call me': 'call me',
   };
 
   return text
@@ -271,7 +274,16 @@ const NON_CITY_WORDS = new Set([
   'personalized', 'personalised', 'itinerary', 'traventions', 'details',
   'sini', 'example', 'callback', 'contact', 'arrange', 'book', 'confirm',
   'yes', 'no', 'okay', 'ok', 'sure', 'thanks', 'thank', 'please', 'help',
+  'support', 'speak', 'human', 'agent', 'team', 'name', 'number', 'phone',
 ]);
+
+const CALLBACK_PHRASES = [
+  'arrange callback', 'arrange a callback', 'arrange call back',
+  'call me back', 'call back', 'callback', 'speak to support',
+  'customer support', 'speak to human', 'speak to agent', 'speak to team',
+  'contact support', 'talk to human', 'talk to agent', 'need help',
+  'i want to speak', 'want callback', 'want a callback', 'need callback',
+];
 
 // Try to parse comma-separated inputs:
 // Travel: "2 Adults, July, Bangalore, 5 Nights"
@@ -421,7 +433,12 @@ function parseGeneralSlots(
     const hasTravelSlots =
       Boolean(slots.travellers) || Boolean(slots.travel_time) ||
       Boolean(slots.departure_city) || Boolean(slots.nights);
-    if (isShortAlpha && !hasTravelSlots && !NOT_DESTINATIONS.has(normalize(raw))) {
+    const normalizedRaw = normalize(raw);
+    const looksLikeCallback =
+      Boolean(slots.post_package_action) ||
+      CALLBACK_PHRASES.some((p) => normalizedRaw.includes(p)) ||
+      /\b(callback|call me|call back|arrange|support|speak to|contact us|speak to human|help me)\b/i.test(raw);
+    if (isShortAlpha && !hasTravelSlots && !looksLikeCallback && !NOT_DESTINATIONS.has(normalizedRaw)) {
       slots.destination = raw.trim();
     }
   }
@@ -535,6 +552,20 @@ function mergeSlots(base: WorkflowSlotMap, next: WorkflowSlotMap): WorkflowSlotM
 function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowStage {
   if (intent === 'unknown') return 'unknown';
 
+  // Standalone callback request (no prior travel service)
+  if (intent === 'callback_request') {
+    if (!slots.name || !slots.phone) return 'collect_lead';
+    return slots.callback_time ? 'confirmed' : 'ask_callback';
+  }
+
+  // If user explicitly requests a callback at ANY stage, skip travel collection
+  // and go straight to collecting contact info → callback time.
+  if (slots.post_package_action === 'arrange_callback') {
+    const hasRequiredLead = Boolean(slots.name && slots.phone);
+    if (!hasRequiredLead) return 'collect_lead';
+    return slots.callback_time ? 'confirmed' : 'ask_callback';
+  }
+
   if (intent === 'plan_holiday') {
     if (!slots.destination) return 'ask_destination';
     if (!slots.holiday_type) return 'ask_holiday_type';
@@ -545,12 +576,12 @@ function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowS
 
     if (travelMissing || needsHotelPref) return 'ask_travel_details';
 
-    // Travel details complete — proceed to callback stage directly once the user
-    // selects any post-package action. Lead collection is intentionally skipped.
     const hasPostAction = Boolean(slots.post_package_action);
     const hasContactStart = Boolean(slots.name || slots.phone);
+    const hasRequiredLead = Boolean(slots.name && slots.phone);
 
     if (hasPostAction || hasContactStart) {
+      if (!hasRequiredLead) return 'collect_lead';
       return slots.callback_time ? 'confirmed' : 'ask_callback';
     }
 
@@ -563,7 +594,9 @@ function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowS
     }
     const hasPostAction = Boolean(slots.post_package_action);
     const hasContactStart = Boolean(slots.name || slots.phone);
+    const hasRequiredLead = Boolean(slots.name && slots.phone);
     if (hasPostAction || hasContactStart) {
+      if (!hasRequiredLead) return 'collect_lead';
       return slots.callback_time ? 'confirmed' : 'ask_callback';
     }
     return 'show_packages';
@@ -575,13 +608,16 @@ function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowS
     }
     const hasPostAction = Boolean(slots.post_package_action);
     const hasContactStart = Boolean(slots.name || slots.phone);
+    const hasRequiredLead = Boolean(slots.name && slots.phone);
     if (hasPostAction || hasContactStart) {
+      if (!hasRequiredLead) return 'collect_lead';
       return slots.callback_time ? 'confirmed' : 'ask_callback';
     }
     return 'show_packages';
   }
 
   // Other intents: transfer, forex, visa, insurance, mice, booking_status
+  if (!slots.name || !slots.phone) return 'collect_lead';
   return slots.callback_time ? 'confirmed' : 'ask_callback';
 }
 
@@ -606,18 +642,6 @@ export function isQuestionLike(message: string): boolean {
   return false;
 }
 
-// Returns true when the message looks like the user echoing the quick-reply menu
-// (contains all three primary service keywords at once). These messages must be
-// skipped when scanning history for a locked intent.
-function isMenuRepeatMessage(text: string): boolean {
-  const t = normalize(text);
-  return (
-    (t.includes('plan a holiday') || t.includes('plan holiday')) &&
-    (t.includes('flight') || t.includes('flights')) &&
-    (t.includes('hotel') || t.includes('hotels'))
-  );
-}
-
 function findLockedIntentFromHistory(historyMessages: string[]): WorkflowIntent | null {
   for (let i = historyMessages.length - 1; i >= 0; i--) {
     const msg = historyMessages[i] || '';
@@ -633,7 +657,6 @@ function findLockedIntentFromHistory(historyMessages: string[]): WorkflowIntent 
 // Returns the index in historyMessages from which to START parsing slots.
 // Scopes slot accumulation to the current session + current service selection
 // so old-session data and switched-service data never pollute the current flow.
-// This is a sample change at line 741 to make sure oracle is keeping up with the new changes
 function findSlotStartIndex(historyMessages: string[], intent: WorkflowIntent): number {
   // Step 1: last greeting = session boundary
   let sessionStart = 0;
@@ -729,15 +752,75 @@ export function resolveWorkflowState(args: {
     ? historyMessages.length
     : findSlotStartIndex(historyMessages, intent);
   const sessionMessages = historyMessages.slice(slotStart);
+
+  // Lead slots (name, phone, email, callback_time) require special scoping.
+  // They must NOT be pulled from session history when the user has just triggered
+  // lead collection (by tapping Arrange Callback / Get Details) — old-session contact
+  // info would otherwise skip the collect_lead stage entirely.
+  // Strategy:
+  // This is a sample change at line 741 to make sure oracle is keeping up with the new changes
+  //   1. Parse only travel/service slots from full session history.
+  //   2. Find the last message in session history that set post_package_action.
+  //   3. Only if that anchor exists (we're CONTINUING lead collection, not starting it),
+  //      pull lead slots from messages strictly AFTER the anchor — and only if no
+  //      service-selection reset happened after it.
+  //   4. Always parse all slots from the current message.
+  const LEAD_SLOT_KEYS = ['name', 'phone', 'email', 'callback_time'] as const;
+
   let slots: WorkflowSlotMap = {};
   for (const item of sessionMessages) {
-    slots = mergeSlots(slots, parseGeneralSlots(item, intent, slots));
+    const parsed = parseGeneralSlots(item, intent, slots);
+    const travelOnly = { ...parsed };
+    for (const k of LEAD_SLOT_KEYS) delete travelOnly[k];
+    slots = mergeSlots(slots, travelOnly);
   }
+
+  // Find last post_package_action anchor in session history
+  let lastPpaIdx = -1;
+  for (let i = sessionMessages.length - 1; i >= 0; i--) {
+    const p = parseGeneralSlots(sessionMessages[i], intent, {});
+    if (p.post_package_action) { lastPpaIdx = i; break; }
+  }
+  if (lastPpaIdx !== -1) {
+    // Verify no service-selection reset happened after the anchor
+    const afterAnchor = sessionMessages.slice(lastPpaIdx + 1);
+    const resetAfter = afterAnchor.some(m => isDirectServiceSelection(m) || isGreetingLike(m));
+    if (!resetAfter) {
+      for (const item of afterAnchor) {
+        const parsed = parseGeneralSlots(item, intent, slots);
+        for (const k of LEAD_SLOT_KEYS) {
+          if (parsed[k] && !slots[k]) (slots as Record<string, string>)[k] = parsed[k] as string;
+        }
+      }
+    }
+  }
+
   slots = mergeSlots(slots, parseGeneralSlots(args.userMessage, intent, slots));
   // AI-extracted slot hints are a fallback layer: they only fill still-missing fields
   // and never override slots already captured by deterministic parsing.
   if (args.aiSlots) {
     slots = mergeSlots(slots, args.aiSlots);
+  }
+
+  // SAFETY: Prevent lead bleed from skipping collect_lead.
+  // If the current message sets post_package_action AND no lead has been
+  // explicitly provided AFTER the last post_package_action in session history,
+  // clear any accidentally accumulated lead slots so the bot always asks fresh.
+  const currentMsgPpa = parseGeneralSlots(args.userMessage, intent, {}).post_package_action;
+  if (currentMsgPpa) {
+    const msgsAfterLastPpa = lastPpaIdx !== -1
+      ? sessionMessages.slice(lastPpaIdx + 1)
+      : [];
+    const leadProvidedAfterPpa = msgsAfterLastPpa.some(m => {
+      const p = parseGeneralSlots(m, intent, {});
+      return Boolean(p.name || p.phone || p.email);
+    });
+    if (!leadProvidedAfterPpa) {
+      delete slots.name;
+      delete slots.phone;
+      delete slots.email;
+      delete slots.callback_time;
+    }
   }
 
   // If "customize" is selected as post_package_action, switch to personalized
@@ -807,7 +890,11 @@ export function resolveWorkflowState(args: {
     if (!slots.travellers) missingSlots.push('travellers');
     if (!slots.travel_time) missingSlots.push('travel_time');
     if (!slots.nights) missingSlots.push('nights');
+  } else if (intent === 'callback_request') {
+    // only lead slots matter
   }
+  if (!slots.name) missingSlots.push('name');
+  if (!slots.phone) missingSlots.push('phone');
   if (!slots.callback_time) missingSlots.push('callback_time');
 
   return { intent, stage, source, slots, missingSlots, complete, leadShouldBeSaved };
@@ -907,7 +994,7 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
       );
     }
 
-    // Other intents
+    // Other intents (should not reach here under current logic, but safe fallback)
     return (
       '✨ Sure! Please share the following details:\n\n' +
       '👤 Full Name\n📞 Contact Number\n🕒 Preferred Callback Time\n\n' +
@@ -922,19 +1009,21 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
 
   // ── collect_lead ──
   if (stage === 'collect_lead') {
-    // Lead collection is disabled in the current flow; hand off to AI callback step.
-    return null;
+    return (
+      '😊 To proceed, please share your contact details:\n\n' +
+      '👤 Full Name\n' +
+      '📞 Contact Number\n\n' +
+      'Example: Rahul, +91 9876543210'
+    );
   }
 
   // ── ask_callback ──
   if (stage === 'ask_callback') {
     const name = slots.name ? `, ${slots.name}` : '';
     return (
-      `✨ Thank you${name}! Your details have been received successfully 😊\n\n` +
-      '✨ Step 2: Callback Collection\n\n' +
-      '📞 Please share your preferred callback time\n\n' +
-      'Example:\nToday at 5 PM\nTomorrow Morning\n\n' +
-      'Once shared, we\'ll confirm your callback ✨'
+      `✨ Thank you${name}! Your details have been received 😊\n\n` +
+      '📞 When would you like us to call you?\n\n' +
+      'Example: Today at 5 PM  /  Tomorrow Morning'
     );
   }
 
@@ -1007,6 +1096,17 @@ export function detectWorkflowIntent(message: string, classifiedIntent?: string)
   if (fuzzyAny(text, ['insurance'])) return 'insurance';
   if (/(mice|corporate event|meetings incentives conferences exhibitions)/.test(joined)) return 'mice';
   if (/(booking status|status|pnr|reference|booking id)/.test(joined)) return 'booking_status';
+
+  // ── NEW: standalone callback request ──
+  // Match explicit phrases like "arrange callback", "call me", "callback please" etc.
+  // Only if no other service intent has been triggered.
+  if (
+    /\b(arrange\s*(a\s)?callback|call\s*me|call\s*back|callback\s*request|request\s*callback|get\s*callback)\b/i.test(joined) ||
+    (/\bcallback\b/i.test(joined) && joined.length < 30)  // short message containing only "callback"
+  ) {
+    return 'callback_request';
+  }
+
   return 'unknown';
 }
 
@@ -1066,6 +1166,15 @@ Guidelines:
 - Profanity or frustration → stay calm, empathize: "I understand your concern. Let me connect you with our team who can help you better."
 - Random characters/test messages → respond friendly: "Hello! 😊 I'm Sini, your travel assistant. How can I help you today?"
 Always end with the main menu if intent is unclear.`;
+
+  } else if (intent === 'callback_request') {
+    if (stage === 'collect_lead') {
+      task = `The customer has requested a callback. Ask for their Full Name and Phone Number (both are required). Email is optional. Do NOT ask about travel details.`;
+    } else if (stage === 'ask_callback') {
+      task = `Ask for the preferred callback time only. Already have name and phone.`;
+    } else if (stage === 'confirmed') {
+      task = `Confirm that the callback has been scheduled, as described for the 'confirmed' stage below.`;
+    }
 
   } else if (stage === 'ask_destination') {
     task = `Ask the customer which destination they want to visit.
@@ -1194,14 +1303,16 @@ Use realistic INR pricing only. Never mention USD or $.`;
     }
 
   } else if (stage === 'collect_lead') {
-    task = `Lead collection is disabled for this workflow.
-Do NOT ask for name, phone, or email.
-Instead, ask only for the customer's preferred callback time.`;
+    task = `Ask the customer for their Full Name and Phone Number — both are required.
+Email can be requested as optional, but do not block the flow if email is missing.
+Ask in one friendly message. Do NOT ask for travel details, they are already collected.
+Already have: ${collected}.`;
 
   } else if (stage === 'ask_callback') {
-    task = `Ask for the customer's preferred callback time only.
-Do NOT ask for name, phone, or email in this stage.
-Tell them a travel expert will call at that time.`;
+    task = `Ask ONLY for the customer's preferred callback time.
+DO NOT ask for name or phone — those are already collected.
+Already have: ${collected}.
+Tell them a travel expert will call them at their preferred time.`;
 
   } else if (stage === 'confirmed') {
     const name = slots?.name ? `, ${slots.name}` : '';
