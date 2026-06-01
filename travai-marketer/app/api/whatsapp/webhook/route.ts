@@ -900,10 +900,17 @@ async function generateAndSendResponse(
         return;
       }
 
-      const greetingSend = await sendYCloudGreetingExperience({
-        phone,
-        requestUrl,
-      });
+      let greetingMessageId: string | null = null;
+      let greetingMessageType = 'interactive';
+      try {
+        const greetingSend = await sendYCloudGreetingExperience({ phone, requestUrl });
+        greetingMessageId = greetingSend.menuMessageId || null;
+      } catch (interactiveErr) {
+        console.warn('[WhatsApp] Interactive greeting failed, falling back to plain text:', interactiveErr instanceof Error ? interactiveErr.message : String(interactiveErr));
+        greetingMessageType = 'text';
+        const fallback = await sendAutoReply({ phone, message: greetingMenu }).catch(() => ({ success: false, messageId: null, mode: 'unknown' }));
+        greetingMessageId = (fallback as { messageId?: string | null }).messageId || null;
+      }
 
       await createDocument('conversations', {
         teamId: resolvedTeamId,
@@ -911,9 +918,9 @@ async function generateAndSendResponse(
         phone: phone,
         role: 'assistant',
         message: greetingMenu,
-        messageType: 'interactive',
+        messageType: greetingMessageType,
         sentBy: 'ai',
-        metaMessageId: greetingSend.menuMessageId || null,
+        metaMessageId: greetingMessageId,
         deliveryStatus: 'sent',
         createdAt: new Date().toISOString(),
       });
