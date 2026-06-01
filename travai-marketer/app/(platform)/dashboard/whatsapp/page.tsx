@@ -3,9 +3,8 @@
 import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react';
 
 const TEAM_ID = process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
-const IS_YCLOUD_MODE = (process.env.NEXT_PUBLIC_WHATSAPP_OUTBOUND_MODE || 'ycloud').toLowerCase() === 'ycloud';
-const POLL_INTERVAL_RAW = Number(process.env.NEXT_PUBLIC_WHATSAPP_POLL_MS || '180000');
-// Default 3 min when visible; polling pauses automatically when the tab is hidden.
+const POLL_INTERVAL_RAW = Number(process.env.NEXT_PUBLIC_WHATSAPP_POLL_MS || '15000');
+// Default 15s when visible; polling pauses automatically when the tab is hidden.
 const POLL_INTERVAL_MS = Number.isFinite(POLL_INTERVAL_RAW)
   ? Math.max(30_000, POLL_INTERVAL_RAW)
   : 180_000;
@@ -151,7 +150,7 @@ export default function WhatsAppPage() {
           </div>
           <div className="flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full font-medium">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            {IS_YCLOUD_MODE ? 'YCloud API' : 'WA Bridge'}
+            YCloud API
           </div>
         </div>
         <div className="flex gap-0 mt-4 border-b border-gray-200 -mb-4">
@@ -189,13 +188,20 @@ function InboxTab({ showToast }: { showToast: (m: string, t?: 'success' | 'error
   const [search, setSearch] = useState('');
   const threadRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const prevUnreadRef = useRef<number>(0);
 
   const loadConvos = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
       const res = await fetch(`/api/whatsapp/conversations?teamId=${encodeURIComponent(TEAM_ID)}`);
       const data = await res.json();
-      setConvos(data.conversations || []);
+      const newConvos: Conversation[] = data.conversations || [];
+      const newUnread = newConvos.reduce((s, c) => s + (c.unreadCount || 0), 0);
+      if (silent && newUnread > prevUnreadRef.current) {
+        showToast(`New message received`);
+      }
+      prevUnreadRef.current = newUnread;
+      setConvos(newConvos);
     } catch { /* keep stale */ } finally {
       if (!silent) setLoading(false);
     }
@@ -425,11 +431,15 @@ function InboxTab({ showToast }: { showToast: (m: string, t?: 'success' | 'error
   );
 }
 
+const GOOGLE_REVIEW_LINK = process.env.NEXT_PUBLIC_GOOGLE_REVIEW_LINK || 'https://g.page/r/traventions/review';
+
 // ── SEND TAB ───────────────────────────────────────────────────────────────────
 function SendTab({ showToast }: { showToast: (m: string, t?: 'success' | 'error') => void }) {
   const [phone, setPhone] = useState('');
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
+  const [reviewPhone, setReviewPhone] = useState('');
+  const [sendingReview, setSendingReview] = useState(false);
 
   const handleSend = async () => {
     const normalizedPhone = phone.replace(/[^\d]/g, '');
@@ -459,9 +469,34 @@ function SendTab({ showToast }: { showToast: (m: string, t?: 'success' | 'error'
     }
   };
 
+  const handleSendReview = async () => {
+    const normalizedPhone = reviewPhone.replace(/[^\d]/g, '');
+    if (!normalizedPhone || normalizedPhone.length < 8) {
+      showToast('Enter a valid phone with country code', 'error');
+      return;
+    }
+    setSendingReview(true);
+    try {
+      const reviewMsg = `Hi! 😊 Thank you for choosing *Traventions* for your travel needs.\n\nWe'd love to hear your feedback! Please take a moment to rate your experience:\n\n⭐ ${GOOGLE_REVIEW_LINK}\n\nYour review means a lot to us and helps other travelers too! 🙏`;
+      const res = await fetch('/api/whatsapp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: normalizedPhone, message: reviewMsg, teamId: TEAM_ID }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed');
+      showToast('Review request sent');
+      setReviewPhone('');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed to send', 'error');
+    } finally {
+      setSendingReview(false);
+    }
+  };
+
   return (
     <div className="h-full overflow-y-auto p-6">
-      <div className="max-w-xl mx-auto">
+      <div className="max-w-xl mx-auto space-y-5">
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
           <h2 className="text-lg font-bold text-gray-900 mb-1">Send Message</h2>
           <p className="text-sm text-gray-400 mb-6">Send a manual message to any WhatsApp number. Works within the 24-hour window.</p>
@@ -500,6 +535,36 @@ function SendTab({ showToast }: { showToast: (m: string, t?: 'success' | 'error'
               className="w-full py-3 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 transition-colors"
             >
               {sending ? 'Sending…' : 'Send Message'}
+            </button>
+          </div>
+        </div>
+
+        {/* Google Review Request */}
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-xl">⭐</span>
+            <h2 className="text-lg font-bold text-gray-900">Request Google Review</h2>
+          </div>
+          <p className="text-sm text-gray-400 mb-5">Send a WhatsApp message asking a customer to leave a Google review.</p>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Customer Phone</label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">+</span>
+                <input type="tel" value={reviewPhone} onChange={e => setReviewPhone(e.target.value)}
+                  placeholder="919876543210"
+                  className="w-full pl-7 pr-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400" />
+              </div>
+            </div>
+            <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3 text-xs text-gray-600 whitespace-pre-line font-mono">
+              {`Hi! 😊 Thank you for choosing *Traventions* for your travel needs.\n\nWe'd love to hear your feedback!\n⭐ ${GOOGLE_REVIEW_LINK}\n\nYour review means a lot to us! 🙏`}
+            </div>
+            <button
+              onClick={handleSendReview}
+              disabled={sendingReview || !reviewPhone.trim()}
+              className="w-full py-3 bg-yellow-500 text-white rounded-xl text-sm font-semibold hover:bg-yellow-600 disabled:opacity-50 transition-colors"
+            >
+              {sendingReview ? 'Sending…' : 'Send Review Request'}
             </button>
           </div>
         </div>

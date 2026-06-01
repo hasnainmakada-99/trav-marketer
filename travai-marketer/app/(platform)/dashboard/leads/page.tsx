@@ -4,9 +4,9 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { getCurrentUser } from '@/lib/appwrite-client';
 
-const POLL_MS_RAW = Number(process.env.NEXT_PUBLIC_LEADS_POLL_MS || '180000');
-// Default 3 min when visible; skipped when tab is hidden.
-const POLL_MS = Number.isFinite(POLL_MS_RAW) ? Math.max(30_000, POLL_MS_RAW) : 180_000;
+const POLL_MS_RAW = Number(process.env.NEXT_PUBLIC_LEADS_POLL_MS || '15000');
+const POLL_MS = Number.isFinite(POLL_MS_RAW) ? Math.max(10_000, POLL_MS_RAW) : 15_000;
+const TEAM_ID = process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
 const STATUS_OPTIONS = ['new', 'contacted', 'converted', 'closed'] as const;
 type LeadStatus = (typeof STATUS_OPTIONS)[number];
 
@@ -60,6 +60,17 @@ export default function LeadsPage() {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Walk-in lead capture
+  const [showAddLead, setShowAddLead] = useState(false);
+  const [addForm, setAddForm] = useState({ name: '', phone: '', email: '', serviceInterest: '', notes: '' });
+  const [addingLead, setAddingLead] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+
+  // Invoice modal
+  const [invoiceLead, setInvoiceLead] = useState<Lead | null>(null);
+  const [invoiceForm, setInvoiceForm] = useState({ service: '', amount: '', date: new Date().toISOString().slice(0, 10), notes: '' });
+  const [sendingInvoice, setSendingInvoice] = useState(false);
 
   useEffect(() => {
     getCurrentUser().then(u => { if (!u) router.push('/login'); });
@@ -145,6 +156,62 @@ export default function LeadsPage() {
     }
   }
 
+  async function handleAddLead() {
+    setAddError(null);
+    const phone = addForm.phone.replace(/[^\d+]/g, '');
+    if (!phone || phone.length < 8) { setAddError('Valid phone number required'); return; }
+    setAddingLead(true);
+    try {
+      const res = await fetch('/api/leads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...addForm, phone, teamId: TEAM_ID, source: 'walk_in' }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to create');
+      setShowAddLead(false);
+      setAddForm({ name: '', phone: '', email: '', serviceInterest: '', notes: '' });
+      await fetchLeads();
+    } catch (e) {
+      setAddError(e instanceof Error ? e.message : 'Failed to create lead');
+    } finally {
+      setAddingLead(false);
+    }
+  }
+
+  async function handleSendInvoice() {
+    if (!invoiceLead) return;
+    if (!invoiceForm.service.trim() || !invoiceForm.amount) { alert('Service and amount are required'); return; }
+    setSendingInvoice(true);
+    try {
+      const msg = [
+        '*TRAVENTIONS — INVOICE*',
+        '━━━━━━━━━━━━━━━━━━━━',
+        `Customer: ${invoiceLead.name || invoiceLead.phone}`,
+        `Date: ${invoiceForm.date}`,
+        `Service: ${invoiceForm.service}`,
+        `Amount: ₹${Number(invoiceForm.amount).toLocaleString('en-IN')}`,
+        invoiceForm.notes ? `Notes: ${invoiceForm.notes}` : '',
+        '━━━━━━━━━━━━━━━━━━━━',
+        'Thank you for choosing Traventions! 🙏',
+        'For queries, reply to this message.',
+      ].filter(Boolean).join('\n');
+      const res = await fetch('/api/whatsapp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: invoiceLead.phone, message: msg, teamId: TEAM_ID }),
+      });
+      if (!res.ok) throw new Error('Failed to send');
+      alert(`Invoice sent to ${invoiceLead.name || invoiceLead.phone}`);
+      setInvoiceLead(null);
+      setInvoiceForm({ service: '', amount: '', date: new Date().toISOString().slice(0, 10), notes: '' });
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Failed to send invoice');
+    } finally {
+      setSendingInvoice(false);
+    }
+  }
+
   const counts = STATUS_OPTIONS.reduce(
     (acc, s) => ({ ...acc, [s]: leads.filter(l => l.status === s).length }),
     {} as Record<LeadStatus, number>
@@ -197,6 +264,12 @@ export default function LeadsPage() {
               ) : (
                 'Sync from WhatsApp'
               )}
+            </button>
+            <button
+              onClick={() => setShowAddLead(true)}
+              className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 transition-colors"
+            >
+              + Add Lead
             </button>
             <button
               onClick={() => fetchLeads()}
@@ -389,6 +462,13 @@ export default function LeadsPage() {
                               ))}
                             </select>
                             <button
+                              onClick={() => { setInvoiceLead(lead); setInvoiceForm({ service: '', amount: '', date: new Date().toISOString().slice(0, 10), notes: '' }); }}
+                              title="Send Invoice"
+                              className="text-xs px-2 py-1 rounded-lg text-indigo-500 hover:bg-indigo-50 hover:text-indigo-700 transition-colors"
+                            >
+                              📄
+                            </button>
+                            <button
                               onClick={() => deleteLead(lead.$id)}
                               disabled={deleting === lead.$id}
                               title="Delete lead"
@@ -446,6 +526,108 @@ export default function LeadsPage() {
           </div>
         )}
       </div>
+
+      {/* Walk-in Lead Capture Modal */}
+      {showAddLead && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+            <div className="flex items-center justify-between p-5 border-b border-gray-200">
+              <h2 className="font-bold text-gray-900">Add Walk-in Lead</h2>
+              <button onClick={() => setShowAddLead(false)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
+            </div>
+            <div className="p-5 space-y-4">
+              {addError && <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{addError}</p>}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number *</label>
+                <input value={addForm.phone} onChange={e => setAddForm({ ...addForm, phone: e.target.value })}
+                  placeholder="919876543210" type="tel"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                <p className="text-xs text-gray-400 mt-0.5">Include country code (e.g. 91 for India)</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                <input value={addForm.name} onChange={e => setAddForm({ ...addForm, name: e.target.value })}
+                  placeholder="Customer name"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                <input value={addForm.email} onChange={e => setAddForm({ ...addForm, email: e.target.value })}
+                  placeholder="email@example.com" type="email"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Service Interest</label>
+                <input value={addForm.serviceInterest} onChange={e => setAddForm({ ...addForm, serviceInterest: e.target.value })}
+                  placeholder="e.g. Goa Trip, Honeymoon Package"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+                <textarea value={addForm.notes} onChange={e => setAddForm({ ...addForm, notes: e.target.value })}
+                  rows={3} placeholder="Any additional notes…"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              </div>
+            </div>
+            <div className="flex gap-3 p-5 border-t border-gray-200">
+              <button onClick={() => setShowAddLead(false)} className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">Cancel</button>
+              <button onClick={handleAddLead} disabled={addingLead} className="flex-1 px-4 py-2.5 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50">
+                {addingLead ? 'Adding…' : 'Add Lead'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Invoice Modal */}
+      {invoiceLead && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+            <div className="flex items-center justify-between p-5 border-b border-gray-200">
+              <div>
+                <h2 className="font-bold text-gray-900">Send Invoice</h2>
+                <p className="text-xs text-gray-500">To: {invoiceLead.name || invoiceLead.phone}</p>
+              </div>
+              <button onClick={() => setInvoiceLead(null)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Service *</label>
+                <input value={invoiceForm.service} onChange={e => setInvoiceForm({ ...invoiceForm, service: e.target.value })}
+                  placeholder="e.g. Goa Honeymoon Package 3N/4D"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Amount (₹) *</label>
+                <input value={invoiceForm.amount} onChange={e => setInvoiceForm({ ...invoiceForm, amount: e.target.value })}
+                  placeholder="35000" type="number"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                <input value={invoiceForm.date} onChange={e => setInvoiceForm({ ...invoiceForm, date: e.target.value })}
+                  type="date"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Notes / Terms</label>
+                <textarea value={invoiceForm.notes} onChange={e => setInvoiceForm({ ...invoiceForm, notes: e.target.value })}
+                  rows={2} placeholder="Payment due within 7 days…"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3 text-xs font-mono text-gray-600 whitespace-pre-line">
+                {`*TRAVENTIONS — INVOICE*\n━━━━━━━━━━━━━━━━━━━━\nCustomer: ${invoiceLead.name || invoiceLead.phone}\nDate: ${invoiceForm.date}\nService: ${invoiceForm.service || '[service]'}\nAmount: ₹${invoiceForm.amount ? Number(invoiceForm.amount).toLocaleString('en-IN') : '0'}\n━━━━━━━━━━━━━━━━━━━━\nThank you for choosing Traventions! 🙏`}
+              </div>
+            </div>
+            <div className="flex gap-3 p-5 border-t border-gray-200">
+              <button onClick={() => setInvoiceLead(null)} className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">Cancel</button>
+              <button onClick={handleSendInvoice} disabled={sendingInvoice} className="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
+                {sendingInvoice ? 'Sending…' : 'Send via WhatsApp'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

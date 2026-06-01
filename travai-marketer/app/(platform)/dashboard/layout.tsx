@@ -4,14 +4,22 @@ import { useState, useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { account, getCurrentUser } from '@/lib/appwrite-client';
+import { useRole, canAccess, type StaffRole } from '@/lib/use-role';
 
-const NAV_ITEMS = [
-  { href: '/dashboard', label: 'Dashboard', icon: '🏠', exact: true },
-  { href: '/dashboard/gbp', label: 'Google Business', icon: '🌐' },
-  { href: '/dashboard/whatsapp', label: 'WhatsApp', icon: '💬' },
-  { href: '/dashboard/campaigns', label: 'Campaigns', icon: '📢', comingSoon: true },
-  { href: '/dashboard/leads', label: 'Leads CRM', icon: '🎯' },
+const ALL_NAV_ITEMS = [
+  { href: '/dashboard', label: 'Dashboard', icon: '🏠', exact: true, feature: 'dashboard' as keyof ReturnType<typeof canAccess> | null },
+  { href: '/dashboard/whatsapp', label: 'WhatsApp', icon: '💬', feature: 'whatsapp' as const },
+  { href: '/dashboard/gbp', label: 'Google Business', icon: '🌐', feature: 'gbp' as const },
+  { href: '/dashboard/campaigns', label: 'Campaigns', icon: '📢', feature: 'campaigns' as const },
+  { href: '/dashboard/leads', label: 'Leads CRM', icon: '🎯', feature: 'leads' as const },
 ];
+
+const ROLE_BADGE: Record<StaffRole, string> = {
+  owner: 'bg-purple-100 text-purple-700',
+  admin: 'bg-indigo-100 text-indigo-700',
+  manager: 'bg-blue-100 text-blue-700',
+  staff: 'bg-gray-100 text-gray-600',
+};
 
 interface AppwriteUser {
   $id: string;
@@ -24,6 +32,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const pathname = usePathname();
   const [user, setUser] = useState<AppwriteUser | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { role, loading: roleLoading } = useRole();
+
+  const NAV_ITEMS = ALL_NAV_ITEMS.filter((item) =>
+    !item.feature || canAccess(role, item.feature as Parameters<typeof canAccess>[1])
+  );
 
   useEffect(() => {
     getCurrentUser().then((u) => {
@@ -107,7 +120,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               {user.name?.[0]?.toUpperCase() || 'U'}
             </div>
             <div className="ml-2 min-w-0 flex-1">
-              <p className="text-sm font-medium text-gray-900 truncate">{user.name}</p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-sm font-medium text-gray-900 truncate">{user.name}</p>
+                {!roleLoading && (
+                  <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium capitalize flex-shrink-0 ${ROLE_BADGE[role]}`}>
+                    {role}
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-gray-500 truncate">{user.email}</p>
             </div>
           </div>
