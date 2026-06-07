@@ -17,15 +17,12 @@ export async function GET(request: NextRequest) {
       ? config.googleAccessToken
       : null;
 
-    return NextResponse.json(
-      {
-        connected: !!token,
-        hasLocation: !!config?.googleLocationId,
-        googleLocationId: config?.googleLocationId || null,
-        businessName: config?.businessName || null,
-      },
-      { headers: { 'Cache-Control': 'private, max-age=60, stale-while-revalidate=30' } }
-    );
+    return NextResponse.json({
+      connected: !!token,
+      hasLocation: !!config?.googleLocationId,
+      googleLocationId: config?.googleLocationId || null,
+      businessName: config?.businessName || null,
+    });
   } catch {
     return NextResponse.json({ connected: false }, { status: 200 });
   }

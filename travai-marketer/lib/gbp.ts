@@ -363,6 +363,17 @@ export async function listGoogleReviews(
   return response.reviews || [];
 }
 
+export async function deleteGoogleLocalPost(
+  accessToken: string,
+  postName: string
+): Promise<void> {
+  await googleFetch<Record<string, never>>(
+    `https://mybusiness.googleapis.com/v4/${postName}`,
+    accessToken,
+    { method: 'DELETE' }
+  );
+}
+
 export async function updateGoogleReviewReply(
   accessToken: string,
   reviewName: string,

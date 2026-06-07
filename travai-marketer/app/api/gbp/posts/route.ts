@@ -3,12 +3,14 @@ import { Query } from 'node-appwrite';
 import { generateGBPPost } from '@/lib/openai';
 import {
   createGoogleLocalPost,
+  deleteGoogleLocalPost,
   getAccessTokenForTeam,
   getBusinessConfigByTeamId,
   type GbpCallToAction,
 } from '@/lib/gbp';
 import {
   createDocument,
+  getDocument,
   listDocuments,
   updateDocument,
   deleteDocument,
@@ -96,13 +98,18 @@ Description: ${String((business as unknown as Record<string, unknown>).businessD
           ? (callToAction as GbpCallToAction)
           : undefined;
 
-      const createdPost = await createGoogleLocalPost(
-        accessToken,
-        locationName,
-        String(finalContent || ''),
-        typeof languageCode === 'string' ? languageCode : 'en',
-        resolvedCta
-      );
+      const postLang = typeof languageCode === 'string' ? languageCode : 'en';
+      const postContent = String(finalContent || '');
+      let createdPost: { name?: string; state?: string };
+      try {
+        createdPost = await createGoogleLocalPost(accessToken, locationName, postContent, postLang, resolvedCta);
+      } catch (googleErr) {
+        const errMsg = googleErr instanceof Error ? googleErr.message : '';
+        const isAuthError = errMsg.includes('invalid authentication') || errMsg.includes('UNAUTHENTICATED') || errMsg.includes('401');
+        if (!isAuthError) throw googleErr;
+        const freshToken = await getAccessTokenForTeam(teamId, { forceRefresh: true });
+        createdPost = await createGoogleLocalPost(freshToken, locationName, postContent, postLang, resolvedCta);
+      }
 
       googlePostId = createdPost.name || null;
       status = 'posted';
@@ -219,13 +226,18 @@ export async function PATCH(request: NextRequest) {
           ? (callToAction as GbpCallToAction)
           : undefined;
 
-      const createdPost = await createGoogleLocalPost(
-        accessToken,
-        locationName,
-        content,
-        typeof languageCode === 'string' ? languageCode : 'en',
-        resolvedCta
-      );
+      const lang = typeof languageCode === 'string' ? languageCode : 'en';
+      let createdPost: { name?: string; state?: string };
+      try {
+        createdPost = await createGoogleLocalPost(accessToken, locationName, content, lang, resolvedCta);
+      } catch (googleErr) {
+        const errMsg = googleErr instanceof Error ? googleErr.message : '';
+        const isAuthError = errMsg.includes('invalid authentication') || errMsg.includes('UNAUTHENTICATED') || errMsg.includes('401');
+        if (!isAuthError) throw googleErr;
+        // Token expired — refresh and retry once
+        const freshToken = await getAccessTokenForTeam(resolvedTeamId, { forceRefresh: true });
+        createdPost = await createGoogleLocalPost(freshToken, locationName, content, lang, resolvedCta);
+      }
 
       updates.googlePostId = createdPost.name || null;
       updates.status = 'posted';
@@ -244,32 +256,53 @@ export async function PATCH(request: NextRequest) {
 }
 
 /**
- * DELETE /api/gbp/posts
- * Delete a GBP post
+ * DELETE /api/gbp/posts?postId=...
+ * Delete a post from Appwrite and, if it was published, from Google too.
  */
 export async function DELETE(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { postId } = body;
+    const { searchParams } = new URL(request.url);
+    const postId = searchParams.get('postId');
 
     if (!postId) {
-      return NextResponse.json(
-        { error: 'Missing postId' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Missing postId' }, { status: 400 });
+    }
+
+    const doc = await getDocument('gbp_posts', postId) as unknown as {
+      teamId: string; status: string; googlePostId: string | null;
+    };
+
+    // If the post is live on Google, delete it there first.
+    if (doc.status === 'posted' && doc.googlePostId) {
+      const teamId = doc.teamId || process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || '';
+      if (teamId) {
+        try {
+          const accessToken = await getAccessTokenForTeam(teamId);
+          try {
+            await deleteGoogleLocalPost(accessToken, doc.googlePostId);
+          } catch (googleErr) {
+            const msg = googleErr instanceof Error ? googleErr.message : '';
+            const isAuth = msg.includes('invalid authentication') || msg.includes('UNAUTHENTICATED') || msg.includes('401');
+            if (isAuth) {
+              const freshToken = await getAccessTokenForTeam(teamId, { forceRefresh: true });
+              await deleteGoogleLocalPost(freshToken, doc.googlePostId);
+            } else if (!msg.includes('NOT_FOUND') && !msg.includes('404')) {
+              throw googleErr;
+            }
+            // NOT_FOUND means already deleted from Google — continue to delete from Appwrite
+          }
+        } catch (tokenErr) {
+          console.warn('[GBP DELETE] Could not delete from Google (token issue):', tokenErr);
+          // Continue — still remove from Appwrite
+        }
+      }
     }
 
     await deleteDocument('gbp_posts', postId);
-
-    return NextResponse.json(
-      { success: true, message: 'Post deleted' },
-      { status: 200 }
-    );
+    return NextResponse.json({ success: true });
   } catch (error) {
     console.error('[GBP DELETE] Error:', error);
-    return NextResponse.json(
-      { error: 'Failed to delete post' },
-      { status: 500 }
-    );
+    const msg = error instanceof Error ? error.message : 'Failed to delete post';
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
