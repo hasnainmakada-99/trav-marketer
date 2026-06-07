@@ -218,7 +218,7 @@ export default function WhatsAppPage() {
   return (
     <div className="flex h-full flex-col">
       {toast && <Toast {...toast} onClose={() => setToast(null)} />}
-      <div className="border-b border-slate-200/70 bg-white/80 px-5 py-3.5 backdrop-blur">
+      <div className="border-b border-slate-200/70 bg-white/80 px-4 py-3.5 backdrop-blur sm:px-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-emerald-600/70">
@@ -235,20 +235,22 @@ export default function WhatsAppPage() {
             YCloud channel live
           </div>
         </div>
-        <div className="mt-3 flex gap-2 border-b border-slate-200">
-          {(['inbox', 'send'] as Tab[]).map((item) => (
-            <button
-              key={item}
-              onClick={() => setTab(item)}
-              className={`-mb-px rounded-t-2xl border-b-2 px-5 py-3 text-sm font-semibold transition ${
-                tab === item
-                  ? 'border-emerald-500 text-emerald-700'
-                  : 'border-transparent text-slate-500 hover:text-slate-700'
-              }`}
-            >
-              {item === 'inbox' ? 'Inbox' : 'Send Message'}
-            </button>
-          ))}
+        <div className="mt-3 overflow-x-auto border-b border-slate-200">
+          <div className="flex min-w-max gap-2">
+            {(['inbox', 'send'] as Tab[]).map((item) => (
+              <button
+                key={item}
+                onClick={() => setTab(item)}
+                className={`-mb-px rounded-t-2xl border-b-2 px-5 py-3 text-sm font-semibold transition ${
+                  tab === item
+                    ? 'border-emerald-500 text-emerald-700'
+                    : 'border-transparent text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {item === 'inbox' ? 'Inbox' : 'Send Message'}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -530,8 +532,8 @@ function InboxTab({
       <div className="flex h-full min-h-0">
         <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.08),transparent_24%),linear-gradient(180deg,#f8fbff_0%,#eef6ff_100%)]">
           {!selectedPhone ? (
-            <div className="flex flex-1 items-center justify-center px-6">
-              <div className="max-w-md rounded-[32px] border border-slate-200 bg-white/80 p-10 text-center shadow-xl shadow-slate-200/60 backdrop-blur">
+            <div className="flex flex-1 items-center justify-center px-4 sm:px-6">
+              <div className="max-w-md rounded-[32px] border border-slate-200 bg-white/80 p-6 text-center shadow-xl shadow-slate-200/60 backdrop-blur sm:p-10">
                 <p className="text-sm font-semibold uppercase tracking-[0.2em] text-emerald-600">
                   Inbox ready
                 </p>
@@ -545,10 +547,10 @@ function InboxTab({
             </div>
           ) : (
             <>
-              <div className="border-b border-slate-200/70 bg-white/80 px-5 py-4 backdrop-blur">
+              <div className="border-b border-slate-200/70 bg-white/80 px-4 py-4 backdrop-blur sm:px-5">
                 <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className={`flex h-14 w-14 items-center justify-center rounded-[20px] bg-gradient-to-br ${CRM_STATUS_META[threadInfo?.crmStatus || selectedConversation?.crmStatus || 'normal_conversation'].panel} text-base font-bold text-white shadow-lg`}>
+                  <div className="flex items-start gap-3 sm:items-center sm:gap-4">
+                    <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-[20px] bg-gradient-to-br ${CRM_STATUS_META[threadInfo?.crmStatus || selectedConversation?.crmStatus || 'normal_conversation'].panel} text-base font-bold text-white shadow-lg sm:h-14 sm:w-14`}>
                       {initials(threadInfo?.name || selectedConversation?.name, selectedPhone)}
                     </div>
                     <div className="min-w-0">
@@ -564,16 +566,16 @@ function InboxTab({
                       )}
                     </div>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                     <button
                       onClick={() => setShowContactsDrawer(true)}
-                      className="rounded-2xl border border-slate-200 bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+                      className="w-full rounded-2xl border border-slate-200 bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 sm:w-auto"
                     >
                       Contacts
                     </button>
                     <button
                       onClick={() => setShowEditContact(true)}
-                      className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 sm:w-auto"
                     >
                       Edit contact
                     </button>
@@ -581,7 +583,7 @@ function InboxTab({
                       href={`https://wa.me/${selectedPhone}`}
                       target="_blank"
                       rel="noreferrer"
-                      className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                      className="w-full rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-center text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 sm:w-auto"
                     >
                       Open in WhatsApp
                     </a>
@@ -615,7 +617,7 @@ function InboxTab({
                 </div>
               </div>
 
-              <div ref={threadRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-5 lg:px-6">
+              <div ref={threadRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-5 sm:px-5 lg:px-6">
                 {threadLoading ? (
                   <div className="flex items-center justify-center py-16">
                     <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-emerald-600" />
@@ -630,7 +632,7 @@ function InboxTab({
                     return (
                       <div key={message.$id} className={`flex ${outgoing ? 'justify-end' : 'justify-start'}`}>
                         <div
-                          className={`max-w-[78%] rounded-[24px] px-4 py-3 shadow-sm ${
+                          className={`max-w-[92%] rounded-[24px] px-4 py-3 shadow-sm sm:max-w-[82%] xl:max-w-[78%] ${
                             outgoing
                               ? 'rounded-tr-sm bg-emerald-500 text-white'
                               : 'rounded-tl-sm border border-white/80 bg-white text-slate-800'
@@ -654,8 +656,8 @@ function InboxTab({
                 )}
               </div>
 
-              <div className="border-t border-slate-200/70 bg-white/90 px-4 py-4 backdrop-blur lg:px-6">
-                <div className="flex gap-3">
+              <div className="border-t border-slate-200/70 bg-white/90 px-4 py-4 backdrop-blur sm:px-5 lg:px-6">
+                <div className="flex flex-col gap-3 sm:flex-row">
                   <textarea
                     value={reply}
                     onChange={(event) => setReply(event.target.value)}
@@ -672,7 +674,7 @@ function InboxTab({
                   <button
                     onClick={handleSend}
                     disabled={sending || !reply.trim()}
-                    className="rounded-[22px] bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="w-full rounded-[22px] bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
                   >
                     {sending ? 'Sending...' : 'Send'}
                   </button>
@@ -690,7 +692,7 @@ function InboxTab({
             className="flex-1"
             onClick={() => setShowContactsDrawer(false)}
           />
-          <aside className="flex h-full w-full max-w-[420px] min-w-[320px] flex-col border-l border-slate-200 bg-white shadow-2xl">
+          <aside className="flex h-full w-[min(100vw,24rem)] min-w-0 flex-col border-l border-slate-200 bg-white shadow-2xl sm:max-w-[420px]">
             <div className="border-b border-slate-100 px-4 py-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -708,7 +710,7 @@ function InboxTab({
                 </button>
               </div>
 
-              <div className="mt-4 flex gap-2">
+              <div className="mt-4 flex flex-col gap-2 sm:flex-row">
                 <button
                   onClick={() => loadConversations()}
                   className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
@@ -1009,9 +1011,9 @@ function SendTab({
   };
 
   return (
-    <div className="h-full overflow-y-auto px-6 py-6">
-        <div className="mx-auto grid max-w-6xl gap-5 xl:grid-cols-[1.18fr_0.82fr]">
-          <section className="rounded-[32px] border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
+    <div className="h-full overflow-y-auto px-4 py-4 sm:px-6 sm:py-6">
+      <div className="mx-auto grid max-w-6xl gap-5 xl:grid-cols-[1.18fr_0.82fr]">
+        <section className="rounded-[32px] border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/60 backdrop-blur sm:p-6">
           <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400/80">
             Manual outreach
           </p>
@@ -1061,14 +1063,14 @@ function SendTab({
             <button
               onClick={handleSend}
               disabled={sending || !phone.trim() || !message.trim()}
-              className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50"
+              className="w-full rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50 sm:w-auto"
             >
               {sending ? 'Sending...' : 'Send message'}
             </button>
           </div>
         </section>
 
-        <section className="rounded-[32px] border border-amber-200 bg-[linear-gradient(180deg,#fff9ed_0%,#ffffff_100%)] p-6 shadow-xl shadow-amber-100/70">
+        <section className="rounded-[32px] border border-amber-200 bg-[linear-gradient(180deg,#fff9ed_0%,#ffffff_100%)] p-5 shadow-xl shadow-amber-100/70 sm:p-6">
           <p className="text-xs font-medium uppercase tracking-[0.18em] text-amber-500/75">
             Review growth
           </p>
@@ -1115,7 +1117,7 @@ function SendTab({
             <button
               onClick={handleSendReview}
               disabled={sendingReview || !reviewPhone.trim()}
-              className="rounded-2xl bg-amber-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-amber-600 disabled:opacity-50"
+              className="w-full rounded-2xl bg-amber-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-amber-600 disabled:opacity-50 sm:w-auto"
             >
               {sendingReview ? 'Sending...' : 'Send review request'}
             </button>

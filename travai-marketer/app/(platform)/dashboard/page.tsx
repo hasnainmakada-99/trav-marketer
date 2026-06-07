@@ -144,7 +144,7 @@ export default function DashboardPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
+      <div className="flex min-h-[60vh] items-center justify-center px-4">
         <div className="text-center">
           <div className="inline-block h-10 w-10 animate-spin rounded-full border-b-2 border-emerald-600" />
           <p className="mt-3 text-sm text-slate-500">Loading dashboard...</p>
@@ -154,14 +154,14 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="min-h-screen px-6 py-6">
-      <div className="rounded-[34px] border border-slate-200 bg-[linear-gradient(135deg,#07111f_0%,#0f172a_42%,#0f766e_100%)] px-6 py-7 text-white shadow-2xl shadow-slate-200/70">
+    <div className="min-h-full px-4 py-4 sm:px-6 sm:py-6 xl:px-8">
+      <div className="rounded-[34px] border border-slate-200 bg-[linear-gradient(135deg,#07111f_0%,#0f172a_42%,#0f766e_100%)] px-5 py-6 text-white shadow-2xl shadow-slate-200/70 sm:px-6 sm:py-7 lg:px-8">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.24em] text-emerald-200">
               Traventions Command Center
             </p>
-            <h1 className="mt-3 text-4xl font-semibold">
+            <h1 className="mt-3 text-3xl font-semibold sm:text-4xl xl:text-5xl">
               {greeting}
               {user?.name ? `, ${user.name.split(' ')[0]}` : ''}
             </h1>
@@ -172,31 +172,31 @@ export default function DashboardPage() {
           </div>
           <button
             onClick={loadStats}
-            className="rounded-2xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/20"
+            className="w-full rounded-2xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/20 sm:w-auto xl:self-start"
           >
             Refresh dashboard
           </button>
         </div>
       </div>
 
-      <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-6 grid gap-4 sm:grid-cols-2 2xl:grid-cols-4">
         {statCards.map((card) => (
           <button
             key={card.label}
             onClick={() => router.push(card.href)}
-            className="rounded-[28px] border border-slate-200 bg-white/90 p-5 text-left shadow-xl shadow-slate-200/60 transition hover:-translate-y-0.5 hover:shadow-2xl"
+            className="rounded-[28px] border border-slate-200 bg-white/90 p-4 text-left shadow-xl shadow-slate-200/60 transition hover:-translate-y-0.5 hover:shadow-2xl sm:p-5"
           >
             <div className={`inline-flex rounded-2xl bg-gradient-to-br ${card.panel} px-3 py-2 text-sm font-semibold text-white`}>
               {card.label}
             </div>
-            <p className="mt-5 text-4xl font-semibold text-slate-950">{card.value}</p>
+            <p className="mt-5 text-3xl font-semibold text-slate-950 sm:text-4xl">{card.value}</p>
             <p className="mt-1 text-sm text-slate-500">{card.sub}</p>
           </button>
         ))}
       </div>
 
       {stats && totalPipeline > 0 && (
-        <div className="mt-6 rounded-[30px] border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60">
+        <div className="mt-6 rounded-[30px] border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/60 sm:p-6">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="text-sm font-semibold uppercase tracking-[0.24em] text-slate-500">Lead pipeline</p>
@@ -207,7 +207,7 @@ export default function DashboardPage() {
             <p className="text-sm text-slate-400">{totalPipeline} total tracked leads</p>
           </div>
 
-          <div className="mt-5 flex h-5 overflow-hidden rounded-full bg-slate-100">
+          <div className="mt-5 flex h-4 overflow-hidden rounded-full bg-slate-100 sm:h-5">
             {CRM_STATUS_ORDER.map((status) => {
               const count = stats.leadsByStatus?.[status] || 0;
               if (!count) return null;
@@ -247,7 +247,7 @@ export default function DashboardPage() {
       )}
 
       <div className="mt-6 grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
-        <div className="rounded-[30px] border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60">
+        <div className="rounded-[30px] border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/60 sm:p-6">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-semibold uppercase tracking-[0.24em] text-slate-500">Recent activity</p>
@@ -255,7 +255,7 @@ export default function DashboardPage() {
             </div>
             <button
               onClick={() => router.push('/dashboard/whatsapp')}
-              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              className="hidden rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 sm:inline-flex"
             >
               Open inbox
             </button>
@@ -318,7 +318,7 @@ export default function DashboardPage() {
           {featureCards.map((card) => (
             <div
               key={card.title}
-              className="rounded-[30px] border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60"
+              className="h-full rounded-[30px] border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/60 sm:p-6"
             >
               <h3 className="text-2xl font-semibold text-slate-950">{card.title}</h3>
               <p className="mt-2 text-sm text-slate-500">{card.desc}</p>

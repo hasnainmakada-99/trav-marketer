@@ -227,6 +227,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     }
   }, [sidebarCollapsed]);
 
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
+
   const handleLogout = async () => {
     try {
       await account.deleteSession('current');
@@ -236,12 +240,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     }
   };
 
-  const desktopSidebarWidth = useMemo(() => (sidebarCollapsed ? '5rem' : '16rem'), [sidebarCollapsed]);
+  const desktopSidebarWidth = useMemo(() => (sidebarCollapsed ? '5.5rem' : '17rem'), [sidebarCollapsed]);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-transparent">
+    <div className="flex min-h-screen bg-transparent lg:h-screen lg:overflow-hidden">
       <aside
-        className="hidden border-r border-slate-200/10 lg:flex lg:flex-col"
+        className="hidden shrink-0 border-r border-slate-200/10 lg:flex lg:flex-col"
         style={{ width: desktopSidebarWidth }}
       >
         <SidebarInner
@@ -263,7 +267,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-80 transform transition-transform duration-200 lg:hidden ${
+        className={`fixed inset-y-0 left-0 z-50 w-[min(20rem,calc(100vw-1rem))] max-w-full transform transition-transform duration-200 lg:hidden ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
@@ -278,8 +282,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         />
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex h-16 items-center justify-between border-b border-slate-200/70 bg-white/82 px-4 backdrop-blur lg:hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-slate-200/70 bg-white/88 px-4 backdrop-blur lg:hidden">
           <button
             onClick={() => setMobileOpen(true)}
             className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm"
@@ -293,7 +297,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
         </div>
 
-        <main className="flex-1 overflow-y-auto">{children}</main>
+        <main className="min-h-0 flex-1 overflow-x-hidden lg:overflow-y-auto">{children}</main>
       </div>
     </div>
   );

@@ -18,15 +18,18 @@
 /* Force light mode for the platform – we don't have a dark theme yet. */
 html {
   color-scheme: light;
+  min-height: 100%;
 }
 
 body {
+  min-height: 100vh;
   background:
     radial-gradient(circle at top left, rgba(14, 165, 233, 0.08), transparent 28%),
     radial-gradient(circle at top right, rgba(16, 185, 129, 0.08), transparent 24%),
     linear-gradient(180deg, #f8fbff 0%, var(--background) 45%, #eef2ff 100%);
   color: var(--foreground);
   font-family: var(--font-plus-jakarta), sans-serif;
+  overflow-x: hidden;
 }
 
 h1,

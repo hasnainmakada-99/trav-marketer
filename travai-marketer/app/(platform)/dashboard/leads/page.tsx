@@ -290,12 +290,12 @@ export default function LeadsPage() {
 
   return (
     <>
-      <div className="min-h-screen px-6 py-6">
-        <div className="rounded-[32px] border border-slate-200 bg-white/85 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
+      <div className="min-h-full px-4 py-4 sm:px-6 sm:py-6 xl:px-8">
+        <div className="rounded-[32px] border border-slate-200 bg-white/85 p-5 shadow-xl shadow-slate-200/60 backdrop-blur sm:p-6 lg:p-7">
           <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
             <div>
               <p className="text-sm font-semibold uppercase tracking-[0.24em] text-emerald-600">Lead CRM</p>
-              <h1 className="mt-2 text-3xl font-semibold text-slate-950">Sales pipeline with AI-aware lead stages</h1>
+              <h1 className="mt-2 text-2xl font-semibold text-slate-950 sm:text-3xl xl:text-4xl">Sales pipeline with AI-aware lead stages</h1>
               <p className="mt-2 max-w-3xl text-sm text-slate-500">
                 WhatsApp leads now move through New Lead, Normal Conversation, Connected, Converted,
                 and Closed. Callback requests, contact identity, and manual sales actions all stay in sync.
@@ -306,7 +306,7 @@ export default function LeadsPage() {
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center xl:w-auto xl:justify-end">
               {syncResult && (
                 <span
                   className={`rounded-full px-3 py-2 text-xs font-semibold ${
@@ -342,7 +342,7 @@ export default function LeadsPage() {
             </div>
           </div>
 
-          <div className="mt-6 grid gap-3 md:grid-cols-3 xl:grid-cols-5">
+          <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
             {CRM_STATUS_ORDER.map((status) => {
               const meta = CRM_STATUS_META[status];
               const isActive = filter === status;
@@ -411,7 +411,7 @@ export default function LeadsPage() {
             <div className="h-10 w-10 animate-spin rounded-full border-b-2 border-emerald-600" />
           </div>
         ) : filteredLeads.length === 0 ? (
-          <div className="mt-6 rounded-[32px] border border-slate-200 bg-white p-16 text-center shadow-xl shadow-slate-200/60">
+          <div className="mt-6 rounded-[32px] border border-slate-200 bg-white p-8 text-center shadow-xl shadow-slate-200/60 sm:p-12 lg:p-16">
             <h2 className="text-2xl font-semibold text-slate-900">No leads found</h2>
             <p className="mt-2 text-sm text-slate-500">
               New WhatsApp enquiries and manual walk-ins will appear here automatically.
@@ -447,7 +447,7 @@ export default function LeadsPage() {
                         </a>
                         {lead.email && <p className="mt-1 text-sm text-slate-500">{lead.email}</p>}
                       </div>
-                      <div className="text-right text-xs text-slate-400">
+                      <div className="text-left text-xs text-slate-400 sm:text-right">
                         <p>Last touch {ago(lead.lastContactedAt || lead.createdAt || lead.$createdAt)}</p>
                         <p className="mt-1">Source: {lead.source || 'whatsapp'}</p>
                       </div>
@@ -501,12 +501,12 @@ export default function LeadsPage() {
                           Send invoice
                         </button>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                         <select
                           value={lead.status}
                           onChange={(event) => updateStatus(lead.$id, event.target.value as CrmLeadStatus)}
                           disabled={updating === lead.$id}
-                          className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-emerald-300"
+                          className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-emerald-300 sm:w-auto"
                         >
                           {CRM_STATUS_ORDER.map((status) => (
                             <option key={status} value={status}>
@@ -517,7 +517,7 @@ export default function LeadsPage() {
                         <button
                           onClick={() => deleteLead(lead.$id)}
                           disabled={deleting === lead.$id}
-                          className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-50"
+                          className="w-full rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-50 sm:w-auto"
                         >
                           {deleting === lead.$id ? 'Deleting...' : 'Delete'}
                         </button>

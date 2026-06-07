@@ -34,20 +34,34 @@ const STATUS_STYLES: Record<CampaignStatus, string> = {
 
 const SEGMENT_LABELS: Record<string, string> = {
   all: 'All Customers',
-  'high-value': 'High Value (₹5K+)',
+  'high-value': 'High Value (Rs5,000+)',
   inactive: 'Inactive (30+ days)',
   service: 'By Service',
 };
 
 function formatDate(ts?: string | null) {
-  if (!ts) return '—';
-  return new Date(ts).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  if (!ts) return '-';
+  return new Date(ts).toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function Toast({ msg, type, onClose }: { msg: string; type: 'success' | 'error'; onClose: () => void }) {
-  useEffect(() => { const t = setTimeout(onClose, 3500); return () => clearTimeout(t); }, [onClose]);
+  useEffect(() => {
+    const t = setTimeout(onClose, 3500);
+    return () => clearTimeout(t);
+  }, [onClose]);
+
   return (
-    <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-sm text-white ${type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'}`}>
+    <div
+      className={`fixed left-4 right-4 top-4 z-50 rounded-lg px-4 py-3 text-sm text-white shadow-lg sm:left-auto sm:right-4 ${
+        type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'
+      }`}
+    >
       {msg}
     </div>
   );
@@ -64,7 +78,6 @@ export default function CampaignsPage() {
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => setToast({ msg, type });
 
-  // Create form state
   const [form, setForm] = useState({ title: '', message: '', segment: 'all', scheduledAt: '' });
   const [creating, setCreating] = useState(false);
 
@@ -75,7 +88,9 @@ export default function CampaignsPage() {
         const data = await res.json();
         setCampaigns(data.campaigns || data.documents || []);
       }
-    } catch { /* silent */ } finally {
+    } catch {
+      // ignore refresh errors so the current list stays visible
+    } finally {
       setLoading(false);
     }
   }, []);
@@ -101,8 +116,12 @@ export default function CampaignsPage() {
     setCreating(true);
     try {
       const body: Record<string, unknown> = {
-        teamId: TEAM_ID, title: form.title.trim(), message: form.message.trim(),
-        segment: form.segment, type: 'promotional', createdBy: currentUserId || 'dashboard-user',
+        teamId: TEAM_ID,
+        title: form.title.trim(),
+        message: form.message.trim(),
+        segment: form.segment,
+        type: 'promotional',
+        createdBy: currentUserId || 'dashboard-user',
       };
       if (form.scheduledAt) body.scheduledAt = new Date(form.scheduledAt).toISOString();
       const res = await fetch('/api/campaigns', {
@@ -163,87 +182,103 @@ export default function CampaignsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-full px-4 py-4 sm:px-6 sm:py-6 xl:px-8">
       {toast && <Toast {...toast} onClose={() => setToast(null)} />}
 
-      <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">Campaigns</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Broadcast WhatsApp messages to your customer segments</p>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={loadCampaigns} className="px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-50 border border-gray-200 rounded-lg">
-            Refresh
-          </button>
-          <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">
-            + New Campaign
-          </button>
+      <div className="rounded-[32px] border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/60 sm:p-6">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-indigo-600">Campaign Engine</p>
+            <h1 className="mt-2 text-2xl font-semibold text-slate-950 sm:text-3xl">Broadcast WhatsApp campaigns</h1>
+            <p className="mt-2 max-w-3xl text-sm text-slate-500">
+              Draft, schedule, and send polished outreach campaigns without losing visibility into delivery progress.
+            </p>
+          </div>
+          <div className="flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap lg:w-auto">
+            <button
+              onClick={loadCampaigns}
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+            >
+              Refresh
+            </button>
+            <button
+              onClick={() => setShowCreate(true)}
+              className="rounded-2xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700"
+            >
+              + New Campaign
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="p-6">
+      <div className="mt-6">
         {loading ? (
           <div className="flex items-center justify-center py-20">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
+            <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-indigo-600" />
           </div>
         ) : campaigns.length === 0 ? (
-          <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
-            <p className="text-4xl mb-3">📢</p>
-            <h3 className="text-sm font-semibold text-gray-900 mb-1">No campaigns yet</h3>
-            <p className="text-xs text-gray-500 mb-4">Create your first campaign to reach your customers on WhatsApp.</p>
-            <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">
+          <div className="rounded-[28px] border border-slate-200 bg-white/90 p-8 text-center shadow-lg shadow-slate-200/50 sm:p-12">
+            <p className="mb-3 text-sm font-semibold uppercase tracking-[0.24em] text-indigo-500">Campaigns</p>
+            <h3 className="mb-1 text-sm font-semibold text-gray-900">No campaigns yet</h3>
+            <p className="mb-4 text-xs text-gray-500">Create your first campaign to reach your customers on WhatsApp.</p>
+            <button
+              onClick={() => setShowCreate(true)}
+              className="rounded-2xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700"
+            >
               Create Campaign
             </button>
           </div>
         ) : (
           <div className="space-y-3">
             {campaigns.map((c) => (
-              <div key={c.$id} className="bg-white rounded-xl border border-gray-200 p-5">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <h3 className="font-semibold text-gray-900 text-sm">{c.title}</h3>
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_STYLES[c.status] || STATUS_STYLES.draft}`}>
+              <div
+                key={c.$id}
+                className="rounded-[28px] border border-slate-200 bg-white/90 p-4 shadow-lg shadow-slate-200/40 sm:p-5"
+              >
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-1 flex flex-wrap items-center gap-2">
+                      <h3 className="text-sm font-semibold text-gray-900">{c.title}</h3>
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[c.status] || STATUS_STYLES.draft}`}>
                         {c.status}
                       </span>
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
+                      <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
                         {SEGMENT_LABELS[c.segment] || c.segment}
                       </span>
                     </div>
-                    <p className="text-xs text-gray-500 line-clamp-2 mb-3">{c.message}</p>
+                    <p className="mb-3 line-clamp-2 text-xs text-gray-500">{c.message}</p>
 
-                    {/* Stats row */}
                     {(c.totalSent || 0) > 0 && (
-                      <div className="flex gap-4 mb-3">
+                      <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1">
                         <span className="text-xs text-gray-500">Sent: <strong className="text-gray-800">{c.totalSent ?? 0}</strong></span>
                         <span className="text-xs text-gray-500">Delivered: <strong className="text-gray-800">{c.totalDelivered ?? 0}</strong></span>
                         <span className="text-xs text-gray-500">Read: <strong className="text-gray-800">{c.totalRead ?? 0}</strong></span>
                       </div>
                     )}
 
-                    <div className="flex gap-4 text-xs text-gray-400">
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400">
                       {c.scheduledAt && <span>Scheduled: {formatDate(c.scheduledAt)}</span>}
                       {c.sentAt && <span>Sent: {formatDate(c.sentAt)}</span>}
                       {!c.sentAt && !c.scheduledAt && <span>Created: {formatDate(c.$createdAt || c.createdAt)}</span>}
                     </div>
                   </div>
 
-                  <div className="flex flex-col gap-2 flex-shrink-0">
+                  <div className="flex flex-col gap-2 sm:flex-row lg:flex-col">
                     {c.status !== 'sent' && c.status !== 'sending' && (
                       <button
                         onClick={() => handleSend(c)}
                         disabled={sendingId === c.$id}
-                        className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 disabled:opacity-50"
+                        className="rounded-2xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-50"
                       >
-                        {sendingId === c.$id ? 'Sending…' : 'Send Now'}
+                        {sendingId === c.$id ? 'Sending...' : 'Send Now'}
                       </button>
                     )}
                     <button
                       onClick={() => handleDelete(c.$id)}
                       disabled={deletingId === c.$id || c.status === 'sending'}
-                      className="px-3 py-1.5 border border-red-200 text-red-600 rounded-lg text-xs font-medium hover:bg-red-50 disabled:opacity-40"
+                      className="rounded-2xl border border-red-200 px-4 py-2 text-xs font-semibold text-red-600 transition hover:bg-red-50 disabled:opacity-40"
                     >
-                      {deletingId === c.$id ? 'Deleting…' : 'Delete'}
+                      {deletingId === c.$id ? 'Deleting...' : 'Delete'}
                     </button>
                   </div>
                 </div>
@@ -253,68 +288,70 @@ export default function CampaignsPage() {
         )}
       </div>
 
-      {/* Create Campaign Modal */}
       {showCreate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg">
-            <div className="flex items-center justify-between p-5 border-b border-gray-200">
+          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-gray-200 p-5">
               <h2 className="font-bold text-gray-900">New Campaign</h2>
-              <button onClick={() => setShowCreate(false)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
+              <button onClick={() => setShowCreate(false)} className="text-xl text-gray-400 hover:text-gray-600">x</button>
             </div>
-            <div className="p-5 space-y-4">
+            <div className="space-y-4 p-5">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Campaign Title *</label>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Campaign Title *</label>
                 <input
                   value={form.title}
                   onChange={(e) => setForm({ ...form, title: e.target.value })}
                   placeholder="e.g. June Summer Deals"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Message *</label>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Message *</label>
                 <textarea
                   value={form.message}
                   onChange={(e) => setForm({ ...form, message: e.target.value })}
                   rows={5}
                   maxLength={1000}
-                  placeholder="Hi! Exciting travel deals are waiting for you this summer. Plan your dream holiday with Traventions — reply to know more!"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="Hi! Exciting travel deals are waiting for you this summer. Plan your dream holiday with Traventions - reply to know more!"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
-                <p className="text-xs text-gray-400 mt-1">{form.message.length}/1000 characters</p>
+                <p className="mt-1 text-xs text-gray-400">{form.message.length}/1000 characters</p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Target Segment</label>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Target Segment</label>
                 <select
                   value={form.segment}
                   onChange={(e) => setForm({ ...form, segment: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 >
                   <option value="all">All Customers</option>
-                  <option value="high-value">High Value (spent ₹5,000+)</option>
+                  <option value="high-value">High Value (spent Rs5,000+)</option>
                   <option value="inactive">Inactive (no contact in 30+ days)</option>
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Schedule (optional — leave blank to save as draft)</label>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Schedule (optional - leave blank to save as draft)</label>
                 <input
                   type="datetime-local"
                   value={form.scheduledAt}
                   onChange={(e) => setForm({ ...form, scheduledAt: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
             </div>
-            <div className="flex gap-3 p-5 border-t border-gray-200">
-              <button onClick={() => setShowCreate(false)} className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">
+            <div className="flex flex-col-reverse gap-3 border-t border-gray-200 p-5 sm:flex-row">
+              <button
+                onClick={() => setShowCreate(false)}
+                className="flex-1 rounded-xl border border-gray-300 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
                 Cancel
               </button>
               <button
                 onClick={handleCreate}
                 disabled={creating}
-                className="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+                className="flex-1 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
               >
-                {creating ? 'Creating…' : 'Create Campaign'}
+                {creating ? 'Creating...' : 'Create Campaign'}
               </button>
             </div>
           </div>

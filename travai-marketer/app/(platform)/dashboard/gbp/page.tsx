@@ -380,7 +380,7 @@ function GbpPageInner() {
 
   if (!user || statusLoading) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-50">
+      <div className="flex min-h-[60vh] items-center justify-center px-4">
         <div className="text-center">
           <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600 mb-4" />
           <p className="text-sm text-gray-500">Loading Google Business Profile…</p>
@@ -390,7 +390,7 @@ function GbpPageInner() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-full px-4 py-4 sm:px-6 sm:py-6 xl:px-8">
       {/* Toast */}
       {toast && (
         <div className={`fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg text-sm font-medium ${toast.ok ? 'bg-green-600 text-white' : 'bg-red-600 text-white'}`}>
@@ -399,8 +399,8 @@ function GbpPageInner() {
       )}
 
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+      <div className="rounded-[32px] border border-slate-200 bg-white/90 px-5 py-5 shadow-xl shadow-slate-200/60 sm:px-6">
+        <div className="mx-auto flex max-w-6xl flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-xl font-bold text-gray-900">Google Business Profile</h1>
             <p className="text-sm text-gray-500 mt-0.5">AI-powered posts, reviews & local SEO</p>
@@ -415,11 +415,11 @@ function GbpPageInner() {
         </div>
       </div>
 
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+      <div className="max-w-6xl mx-auto py-6">
 
         {/* ── NOT CONNECTED ── */}
         {!connected && (
-          <div className="bg-white rounded-2xl border border-dashed border-gray-300 p-12 text-center">
+          <div className="bg-white rounded-2xl border border-dashed border-gray-300 p-8 text-center sm:p-12">
             <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">🌐</div>
             <h2 className="text-xl font-semibold text-gray-900 mb-2">Connect Google Business Profile</h2>
             <p className="text-sm text-gray-500 max-w-md mx-auto mb-6">
@@ -438,7 +438,7 @@ function GbpPageInner() {
             {/* Location picker banner */}
             {!hasLocation && (
               <div className="mb-5 bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
-                <div className="flex items-start justify-between gap-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <p className="text-sm font-semibold text-amber-800">Select your Google Business location</p>
                     <p className="text-xs text-amber-600 mt-0.5">Required to publish posts and sync reviews from Google.</p>
@@ -518,7 +518,7 @@ function GbpPageInner() {
                     <span className="font-mono bg-amber-100 px-1 rounded">…/n/<strong>ACCOUNT_ID</strong>/location/<strong>LOCATION_ID</strong>/…</span>{' '}
                     then enter <span className="font-mono bg-amber-100 px-1 rounded">accounts/ACCOUNT_ID/locations/LOCATION_ID</span> below.
                   </p>
-                  <div className="flex gap-2">
+                  <div className="flex flex-col gap-2 sm:flex-row">
                     <input type="text" value={manualLocationId} onChange={e => setManualLocationId(e.target.value)}
                       placeholder="accounts/123456789/locations/987654321"
                       className="flex-1 border border-amber-300 bg-white rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-amber-400" />
@@ -533,7 +533,7 @@ function GbpPageInner() {
             )}
 
             {/* Stats row */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div className="mb-6 grid grid-cols-2 gap-4 xl:grid-cols-4">
               {[
                 { label: 'Total Posts', value: postStats.total, sub: `${postStats.live} live`, color: 'text-gray-900' },
                 { label: 'Draft Posts', value: postStats.drafts, sub: 'Awaiting publish', color: 'text-yellow-600' },
@@ -549,7 +549,7 @@ function GbpPageInner() {
             </div>
 
             {/* Tabs */}
-            <div className="flex border-b border-gray-200 mb-6 bg-white rounded-t-xl overflow-hidden">
+            <div className="mb-6 overflow-x-auto rounded-t-xl border-b border-gray-200 bg-white">
               {(['posts', 'reviews', 'setup'] as Tab[]).map(t => (
                 <button key={t} onClick={() => setTab(t)}
                   className={`px-6 py-3.5 text-sm font-medium capitalize transition-colors border-b-2 -mb-px ${tab === t ? 'border-indigo-600 text-indigo-600 bg-indigo-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
@@ -591,7 +591,7 @@ function GbpPageInner() {
                 ) : (
                   <div className="space-y-3">
                     {posts.map(post => (
-                      <div key={post.$id} className="bg-white rounded-xl border border-gray-200 p-4 flex items-start justify-between gap-4">
+                      <div key={post.$id} className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1">
                             <Badge status={post.status} />
@@ -662,7 +662,7 @@ function GbpPageInner() {
                   <div className="space-y-3">
                     {reviews.map((review, idx) => (
                       <div key={review.$id || review.reviewId || idx} className="bg-white rounded-xl border border-gray-200 p-4">
-                        <div className="flex items-start justify-between gap-3">
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-3 mb-2">
                               <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
@@ -678,7 +678,7 @@ function GbpPageInner() {
                             </div>
                             <p className="text-sm text-gray-600 ml-12">{review.reviewText || 'No text'}</p>
                             {review.reply && (
-                              <div className="mt-3 ml-12 bg-indigo-50 border border-indigo-100 rounded-lg p-3">
+                              <div className="mt-3 rounded-lg border border-indigo-100 bg-indigo-50 p-3 sm:ml-12">
                                 <p className="text-xs font-semibold text-indigo-600 mb-1">Your reply:</p>
                                 <p className="text-sm text-gray-700">{review.reply}</p>
                               </div>
@@ -708,7 +708,7 @@ function GbpPageInner() {
 
                 {/* Location selector */}
                 <div className="bg-white rounded-xl border border-gray-200 p-5">
-                  <div className="flex items-center justify-between mb-1">
+                  <div className="mb-1 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <h3 className="text-sm font-semibold text-gray-700">Google Business Location</h3>
                     <button onClick={() => loadGoogleLocations(teamId, true)} disabled={locationsLoading}
                       className="text-xs text-indigo-600 hover:text-indigo-800 underline disabled:opacity-50">
@@ -734,7 +734,7 @@ function GbpPageInner() {
                   ) : (
                     <div className="space-y-2">
                       {allLocations.map((loc, i) => (
-                        <div key={i} className={`flex items-center justify-between p-3 rounded-lg border transition-colors ${savedLocationId === loc.v4LocationName ? 'border-indigo-400 bg-indigo-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                        <div key={i} className={`flex flex-col gap-3 rounded-lg border p-3 transition-colors sm:flex-row sm:items-center sm:justify-between ${savedLocationId === loc.v4LocationName ? 'border-indigo-400 bg-indigo-50' : 'border-gray-200 hover:border-gray-300'}`}>
                           <div>
                             <p className="text-sm font-medium text-gray-900">{loc.title || 'Unnamed Location'}</p>
                             <p className="text-xs text-gray-400 font-mono mt-0.5">{loc.v4LocationName}</p>
@@ -782,7 +782,7 @@ function GbpPageInner() {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[95vh] flex flex-col">
 
             {/* Header */}
-            <div className="flex items-center gap-3 px-5 py-4 border-b border-gray-200">
+            <div className="flex flex-wrap items-center gap-3 px-5 py-4 border-b border-gray-200">
               <button onClick={() => { setShowPostModal(false); setAiPostPreview(''); }}
                 className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -916,7 +916,7 @@ function GbpPageInner() {
             </div>
 
             {/* Footer */}
-            <div className="px-5 py-4 border-t border-gray-200 flex items-center justify-between gap-3 bg-white rounded-b-2xl">
+            <div className="flex flex-col-reverse gap-3 rounded-b-2xl bg-white px-5 py-4 border-t border-gray-200 sm:flex-row sm:items-center sm:justify-between">
               <button onClick={() => { setShowPostModal(false); setAiPostPreview(''); }}
                 className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition-colors">
                 Cancel
@@ -959,7 +959,7 @@ function GbpPageInner() {
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none" />
               </div>
             </div>
-            <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+            <div className="flex flex-col-reverse gap-3 px-6 py-4 border-t border-gray-200 sm:flex-row sm:justify-end">
               <button onClick={() => setReplyModal(null)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
               <button onClick={handleSubmitReply} disabled={!replyModal.text.trim() || replyModal.loading}
                 className="flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium disabled:opacity-60 transition-colors">
@@ -977,7 +977,7 @@ function GbpPageInner() {
 export default function GbpPage() {
   return (
     <Suspense fallback={
-      <div className="flex items-center justify-center min-h-screen bg-gray-50">
+      <div className="flex min-h-[60vh] items-center justify-center px-4">
         <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600" />
       </div>
     }>
