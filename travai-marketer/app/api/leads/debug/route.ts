@@ -35,7 +35,7 @@ export async function GET() {
       name: 'Debug Test',
       email: null,
       source: 'debug',
-      status: 'new',
+      status: 'new_lead',
       notes: 'debug probe',
       lastContactedAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),

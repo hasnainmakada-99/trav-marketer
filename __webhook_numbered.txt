@@ -1,0 +1,1182 @@
+   1: import { NextRequest, NextResponse } from 'next/server';
+   2: import { Query } from 'node-appwrite';
+   3: import {
+   4:   extractMessage,
+   5:   extractStatus,
+   6:   parseWhatsAppWebhook,
+   7:   verifyWebhookToken,
+   8: } from '@/lib/whatsapp';
+   9: import {
+  10:   sendYCloudTextMessage,
+  11:   sendYCloudReplyButtonsMessage,
+  12:   showYCloudTypingIndicator,
+  13: } from '@/lib/whatsapp-ycloud';
+  14: import { getChatResponse, extractCustomerInfo, preprocessMessage, extractWorkflowSlots } from '@/lib/openai';
+  15: import { createDocument, listDocuments, updateDocument } from '@/lib/appwrite';
+  16: import { normalizeToWhatsAppMarkdown } from '@/lib/whatsapp-format';
+  17: import { createHmac, timingSafeEqual } from 'crypto';
+  18: import { loadTravelKnowledge } from '@/lib/travel-knowledge';
+  19: import {
+  20:   enforceSafeUrlsInReply,
+  21:   getBotRoutePolicyPromptBlock,
+  22:   sanitizeWebsiteSnippetsForBot,
+  23:   sanitizeWebsiteUrlForBot,
+  24: } from '@/lib/whatsapp-bot-routing';
+  25: import {
+  26:   getGreetingMenuText,
+  27:   PRIMARY_QUICK_MENU_OPTIONS,
+  28:   resolveWorkflowState,
+  29:   buildWorkflowReply,
+  30:   getWorkflowSystemPromptBlock,
+  31:   buildConversationMemoryBlock,
+  32:   buildLeadNotes,
+  33:   isQuestionLike,
+  34:   type WorkflowIntent,
+  35:   type WorkflowStage,
+  36: } from '@/lib/whatsapp-workflow';
+  37: 
+  38: // Verify webhook token from Meta
+  39: const WEBHOOK_VERIFY_TOKEN = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || 'travai_secure_token_2024';
+  40: const WEBSITE_FALLBACK_URL =
+  41:   process.env.TRAVENTIONS_WEBSITE_URL || 'https://traventions-ai.vercel.app';
+  42: const HUMAN_HANDOVER_MINUTES = Number(process.env.WA_HUMAN_HANDOVER_MINUTES || '15');
+  43: const DISABLE_HUMAN_HANDOVER = process.env.WA_DISABLE_HUMAN_HANDOVER === 'true';
+  44: const YCLOUD_WEBHOOK_SECRET = (process.env.YCLOUD_WEBHOOK_SECRET || '')
+  45:   .trim()
+  46:   .replace(/^['"]+|['"]+$/g, '');
+  47: const YCLOUD_ENFORCE_SIGNATURE = process.env.YCLOUD_ENFORCE_SIGNATURE === 'true';
+  48: const RECENT_INBOUND_TTL_MS = 2 * 60 * 1000;
+  49: const RECENT_AI_DUPLICATE_WINDOW_MS = 45 * 1000;
+  50: const CLASSIFY_TIMEOUT_MS = Number(process.env.WA_CLASSIFY_TIMEOUT_MS || '1200');
+  51: const KNOWLEDGE_TIMEOUT_MS = Number(process.env.WA_KNOWLEDGE_TIMEOUT_MS || '1800');
+  52: const TYPING_REFRESH_MS = Number(process.env.WA_TYPING_REFRESH_MS || '2200');
+  53: const TYPING_MAX_MS = Number(process.env.WA_TYPING_MAX_MS || '45000');
+  54: const recentInboundKeys = new Map<string, number>();
+  55: const GREETING_BUTTONS = [
+  56:   { id: 'svc_1', title: PRIMARY_QUICK_MENU_OPTIONS[0] },
+  57:   { id: 'svc_2', title: PRIMARY_QUICK_MENU_OPTIONS[1] },
+  58:   { id: 'svc_3', title: PRIMARY_QUICK_MENU_OPTIONS[2] },
+  59: ] as const;
+  60: const GREETING_MENU_TEXT = getGreetingMenuText();
+  61: const TRAVEL_SALES_INTENTS: WorkflowIntent[] = ['plan_holiday', 'flights', 'hotels'];
+  62: const TRAVEL_KEYWORDS_REGEX =
+  63:   /\b(travel|trip|tour|holiday|holidays|package|packages|itinerary|destination|visa|forex|insurance|airport transfer|transfer|hotel|hotels|stay|resort|flight|flights|ticket|fare|booking|callback)\b/i;
+  64: const OFF_TOPIC_KEYWORDS_REGEX =
+  65:   /\b(weather|temperature|rain|sports|cricket|football|ipl|stocks?|share market|crypto|bitcoin|ethereum|politics|election|movie|movies|song|songs|joke|memes?|programming|code|debug|python|javascript|java|c\+\+|exam|homework|math|recipe|cooking|gym|workout|astrology|zodiac)\b/i;
+  66: 
+  67: function isGreetingMessage(text: string) {
+  68:   const normalized = String(text || '')
+  69:     .toLowerCase()
+  70:     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+  71:     .replace(/\s+/g, ' ')
+  72:     .trim();
+  73:   return /^(hi|hello|hey|hlo|helo|namaste|yo|good morning|good afternoon|good evening)$/.test(
+  74:     normalized
+  75:   );
+  76: }
+  77: 
+  78: function isTravelSalesIntent(intent: WorkflowIntent): boolean {
+  79:   return TRAVEL_SALES_INTENTS.includes(intent);
+  80: }
+  81: 
+  82: function isHardOffTopicInput(message: string, workflowIntent: WorkflowIntent): boolean {
+  83:   const normalized = normalizeTextForDedupe(message || '');
+  84:   if (!normalized) return false;
+  85:   if (isTravelSalesIntent(workflowIntent)) return false;
+  86:   if (TRAVEL_KEYWORDS_REGEX.test(normalized)) return false;
+  87:   return OFF_TOPIC_KEYWORDS_REGEX.test(normalized);
+  88: }
+  89: 
+  90: function buildOffTopicReply(name?: string | null): string {
+  91:   const prefix = name ? `${name.split(' ')[0]}, ` : '';
+  92:   return (
+  93:     `😊 ${prefix}I can help only with travel planning and bookings.\n\n` +
+  94:     `Please choose one option to continue:\n\n` +
+  95:     `1️⃣ Plan a Holiday\n2️⃣ Flights\n3️⃣ Hotels`
+  96:   );
+  97: }
+  98: 
+  99: function shouldEnforceDatabaseFirst(params: {
+ 100:   workflowIntent: WorkflowIntent;
+ 101:   workflowStage: WorkflowStage;
+ 102:   userMessage: string;
+ 103: }): boolean {
+ 104:   if (!isTravelSalesIntent(params.workflowIntent)) return false;
+ 105:   if (params.workflowStage === 'show_packages') return true;
+ 106:   return /\b(package|packages|itinerary|price|pricing|cost|budget|offer|deals?|hotel options?|flight options?|fare)\b/i.test(
+ 107:     params.userMessage
+ 108:   );
+ 109: }
+ 110: 
+ 111: function getGreetingImageUrl(requestUrl: string) {
+ 112:   const configured = (process.env.WA_GREETING_IMAGE_URL || '').trim();
+ 113:   if (configured) {
+ 114:     return configured;
+ 115:   }
+ 116:   const appUrl = (process.env.NEXT_PUBLIC_APP_URL || '').trim();
+ 117:   if (appUrl) {
+ 118:     return `${appUrl.replace(/\/+$/, '')}/sini.png`;
+ 119:   }
+ 120:   const fallbackOrigin = new URL(requestUrl).origin;
+ 121:   return `${fallbackOrigin}/sini.png`;
+ 122: }
+ 123: 
+ 124: function verifyYCloudSignature(rawBody: string, signatureHeader: string, secret: string): boolean {
+ 125:   const parts = signatureHeader
+ 126:     .split(',')
+ 127:     .map((part) => part.trim())
+ 128:     .filter(Boolean);
+ 129:   const timestamp = parts.find((part) => part.startsWith('t='))?.slice(2);
+ 130:   const signatureHex = parts.find((part) => part.startsWith('s='))?.slice(2);
+ 131:   if (!timestamp || !signatureHex) return false;
+ 132: 
+ 133:   const signedPayload = `${timestamp}.${rawBody}`;
+ 134:   const expectedHex = createHmac('sha256', secret).update(signedPayload).digest('hex');
+ 135:   const expected = Buffer.from(expectedHex, 'hex');
+ 136:   const provided = Buffer.from(signatureHex, 'hex');
+ 137:   if (expected.length !== provided.length) return false;
+ 138:   return timingSafeEqual(expected, provided);
+ 139: }
+ 140: 
+ 141: function normalizeTextForDedupe(input: string): string {
+ 142:   return String(input || '')
+ 143:     .trim()
+ 144:     .replace(/\s+/g, ' ')
+ 145:     .toLowerCase();
+ 146: }
+ 147: 
+ 148: async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+ 149:   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+ 150:   try {
+ 151:     return await Promise.race([
+ 152:       promise,
+ 153:       new Promise<T>((resolve) => {
+ 154:         timeoutHandle = setTimeout(() => resolve(fallback), Math.max(300, timeoutMs));
+ 155:       }),
+ 156:     ]);
+ 157:   } finally {
+ 158:     if (timeoutHandle) clearTimeout(timeoutHandle);
+ 159:   }
+ 160: }
+ 161: 
+ 162: function buildInboundDedupeKey(params: {
+ 163:   teamId: string;
+ 164:   phone: string;
+ 165:   messageId: string | null;
+ 166:   type: string;
+ 167:   text: string;
+ 168: }): string {
+ 169:   const team = String(params.teamId || 'system');
+ 170:   const phone = String(params.phone || '');
+ 171:   if (params.messageId) {
+ 172:     return `mid:${team}:${phone}:${params.messageId}`;
+ 173:   }
+ 174:   return `content:${team}:${phone}:${params.type}:${normalizeTextForDedupe(params.text)}`;
+ 175: }
+ 176: 
+ 177: function wasRecentlyProcessedInbound(key: string): boolean {
+ 178:   const now = Date.now();
+ 179:   const expiry = recentInboundKeys.get(key);
+ 180:   if (!expiry) return false;
+ 181:   if (expiry <= now) {
+ 182:     recentInboundKeys.delete(key);
+ 183:     return false;
+ 184:   }
+ 185:   return true;
+ 186: }
+ 187: 
+ 188: function markInboundProcessed(key: string) {
+ 189:   const now = Date.now();
+ 190:   for (const [candidate, expiry] of recentInboundKeys.entries()) {
+ 191:     if (expiry <= now) {
+ 192:       recentInboundKeys.delete(candidate);
+ 193:     }
+ 194:   }
+ 195:   recentInboundKeys.set(key, now + RECENT_INBOUND_TTL_MS);
+ 196: }
+ 197: 
+ 198: async function hasHumanTakeover(teamId: string, phone: string) {
+ 199:   if (DISABLE_HUMAN_HANDOVER) {
+ 200:     return false;
+ 201:   }
+ 202:   const rows = await listDocuments('conversations', [
+ 203:     Query.equal('teamId', teamId),
+ 204:     Query.equal('phone', phone),
+ 205:     Query.orderDesc('$createdAt'),
+ 206:     Query.limit(100),
+ 207:   ]);
+ 208: 
+ 209:   let latestStaffTs = 0;
+ 210:   let latestAiTs = 0;
+ 211: 
+ 212:   for (const doc of rows.documents as Array<{
+ 213:     sentBy?: string;
+ 214:     createdAt?: string;
+ 215:     $createdAt?: string;
+ 216:   }>) {
+ 217:     const ts = new Date(doc.createdAt || doc.$createdAt || 0).getTime();
+ 218:     if (!Number.isFinite(ts) || ts <= 0) continue;
+ 219: 
+ 220:     if (doc.sentBy === 'staff' && ts > latestStaffTs) {
+ 221:       latestStaffTs = ts;
+ 222:     }
+ 223:     if (doc.sentBy === 'ai' && ts > latestAiTs) {
+ 224:       latestAiTs = ts;
+ 225:     }
+ 226:   }
+ 227: 
+ 228:   if (!(latestStaffTs > 0 && latestStaffTs > latestAiTs)) {
+ 229:     return false;
+ 230:   }
+ 231: 
+ 232:   const safeMinutes =
+ 233:     Number.isFinite(HUMAN_HANDOVER_MINUTES) && HUMAN_HANDOVER_MINUTES > 0
+ 234:       ? HUMAN_HANDOVER_MINUTES
+ 235:       : 45;
+ 236:   const handoverWindowMs = safeMinutes * 60 * 1000;
+ 237:   return Date.now() - latestStaffTs <= handoverWindowMs;
+ 238: }
+ 239: 
+ 240: async function sendViaYCloud(params: {
+ 241:   phone: string;
+ 242:   message: string;
+ 243: }) {
+ 244:   const apiKey = (process.env.YCLOUD_API_KEY || '').trim();
+ 245:   const fromPhone = (process.env.YCLOUD_WHATSAPP_FROM || '').trim();
+ 246:   if (!apiKey || !fromPhone) {
+ 247:     throw new Error('YCloud send is not configured. Set YCLOUD_API_KEY and YCLOUD_WHATSAPP_FROM.');
+ 248:   }
+ 249:   let lastError = 'YCloud send failed';
+ 250:   for (let attempt = 1; attempt <= 3; attempt++) {
+ 251:     try {
+ 252:       const result = await sendYCloudTextMessage({
+ 253:         apiKey,
+ 254:         fromPhoneE164: fromPhone,
+ 255:         toPhone: params.phone,
+ 256:         message: params.message,
+ 257:       });
+ 258:       if (result.success) {
+ 259:         return {
+ 260:           success: true,
+ 261:           mode: 'ycloud',
+ 262:           messageId: result.messageId || null,
+ 263:         };
+ 264:       }
+ 265:       lastError = result.error || lastError;
+ 266:     } catch (err) {
+ 267:       lastError = err instanceof Error ? err.message : String(err || lastError);
+ 268:     }
+ 269:     if (attempt < 3) {
+ 270:       await new Promise((r) => setTimeout(r, 600 * attempt));
+ 271:     }
+ 272:   }
+ 273:   throw new Error(lastError);
+ 274: }
+ 275: 
+ 276: async function sendYCloudGreetingExperience(params: {
+ 277:   phone: string;
+ 278:   requestUrl: string;
+ 279: }) {
+ 280:   const apiKey = (process.env.YCLOUD_API_KEY || '').trim();
+ 281:   const fromPhone = (process.env.YCLOUD_WHATSAPP_FROM || '').trim();
+ 282:   if (!apiKey || !fromPhone) {
+ 283:     throw new Error('YCloud send is not configured. Set YCLOUD_API_KEY and YCLOUD_WHATSAPP_FROM.');
+ 284:   }
+ 285: 
+ 286:   const imageUrl = getGreetingImageUrl(params.requestUrl);
+ 287:   const menuResult = await sendYCloudReplyButtonsMessage({
+ 288:     apiKey,
+ 289:     fromPhoneE164: fromPhone,
+ 290:     toPhone: params.phone,
+ 291:     bodyText: GREETING_MENU_TEXT,
+ 292:     buttons: [...GREETING_BUTTONS],
+ 293:     headerImageUrl: imageUrl,
+ 294:   });
+ 295:   if (!menuResult.success) {
+ 296:     throw new Error(menuResult.error || 'Failed to send greeting interactive card via YCloud');
+ 297:   }
+ 298: 
+ 299:   return {
+ 300:     menuMessageId: menuResult.messageId || null,
+ 301:   };
+ 302: }
+ 303: 
+ 304: async function startYCloudTypingKeepAlive(inboundMessageId: string | null) {
+ 305:   if (!inboundMessageId) {
+ 306:     return { stop: async () => {} };
+ 307:   }
+ 308:   const apiKey = (process.env.YCLOUD_API_KEY || '').trim();
+ 309:   if (!apiKey) {
+ 310:     return { stop: async () => {} };
+ 311:   }
+ 312: 
+ 313:   const inboundId = String(inboundMessageId || '').trim();
+ 314:   if (!inboundId) {
+ 315:     return { stop: async () => {} };
+ 316:   }
+ 317: 
+ 318:   let stopped = false;
+ 319:   let inFlight: Promise<void> | null = null;
+ 320:   const startedAt = Date.now();
+ 321: 
+ 322:   const emitTyping = async () => {
+ 323:     const typingResult = await showYCloudTypingIndicator({
+ 324:       apiKey,
+ 325:       inboundMessageId: inboundId,
+ 326:     });
+ 327:     if (!typingResult.success) {
+ 328:       console.warn('[WhatsApp] Typing indicator failed:', typingResult.error);
+ 329:     }
+ 330:   };
+ 331: 
+ 332:   await emitTyping();
+ 333: 
+ 334:   const interval = setInterval(() => {
+ 335:     if (stopped) return;
+ 336:     if (Date.now() - startedAt >= Math.max(8000, TYPING_MAX_MS)) {
+ 337:       stopped = true;
+ 338:       clearInterval(interval);
+ 339:       return;
+ 340:     }
+ 341:     if (inFlight) return;
+ 342:     inFlight = emitTyping().finally(() => {
+ 343:       inFlight = null;
+ 344:     });
+ 345:   }, Math.max(1200, TYPING_REFRESH_MS));
+ 346: 
+ 347:   return {
+ 348:     stop: async () => {
+ 349:       if (stopped) return;
+ 350:       stopped = true;
+ 351:       clearInterval(interval);
+ 352:       if (inFlight) {
+ 353:         await inFlight;
+ 354:       }
+ 355:     },
+ 356:   };
+ 357: }
+ 358: 
+ 359: async function loadTravelKnowledgeFast(
+ 360:   teamId: string,
+ 361:   userMessage: string
+ 362: ): Promise<Awaited<ReturnType<typeof loadTravelKnowledge>>> {
+ 363:   const fallback: Awaited<ReturnType<typeof loadTravelKnowledge>> = {
+ 364:     databaseSnippets: [] as string[],
+ 365:     hasPackageData: false,
+ 366:     bestWebsiteUrl: sanitizeWebsiteUrlForBot(WEBSITE_FALLBACK_URL),
+ 367:     bestWebsiteTitle: 'Traventions',
+ 368:     websiteSnippets: [] as string[],
+ 369:     diagnostics: {
+ 370:       collectionsScanned: [] as string[],
+ 371:       collectionDocCounts: {} as Record<string, number>,
+ 372:       crawledPages: 0,
+ 373:     },
+ 374:   };
+ 375: 
+ 376:   return withTimeout(
+ 377:     loadTravelKnowledge(teamId, userMessage).catch(() => fallback),
+ 378:     KNOWLEDGE_TIMEOUT_MS,
+ 379:     fallback
+ 380:   );
+ 381: }
+ 382: 
+ 383: async function sendAutoReply(params: {
+ 384:   phone: string;
+ 385:   message: string;
+ 386: }) {
+ 387:   return sendViaYCloud({ phone: params.phone, message: params.message });
+ 388: }
+ 389: 
+ 390: async function saveLead(params: {
+ 391:   teamId: string;
+ 392:   phone: string;
+ 393:   customer: { $id: string; name?: string; email?: string };
+ 394:   intent?: string;
+ 395:   notes?: string;
+ 396: }) {
+ 397:   const { teamId, phone, customer, intent, notes } = params;
+ 398:   const name = customer.name || null;
+ 399:   const email = customer.email || null;
+ 400: 
+ 401:   const existing = await listDocuments('leads', [
+ 402:     Query.equal('teamId', teamId),
+ 403:     Query.equal('phone', phone),
+ 404:     Query.orderDesc('$createdAt'),
+ 405:     Query.limit(1),
+ 406:   ]).catch(() => ({ documents: [] }));
+ 407: 
+ 408:   const now = new Date().toISOString();
+ 409:   const existingLead = existing.documents[0] as { $id?: string } | undefined;
+ 410: 
+ 411:   if (existingLead?.$id) {
+ 412:     await updateDocument('leads', existingLead.$id, {
+ 413:       name: name || undefined,
+ 414:       email: email || undefined,
+ 415:       notes: notes || undefined,
+ 416:       status: 'new',
+ 417:       lastContactedAt: now,
+ 418:       updatedAt: now,
+ 419:     }).catch(() => {});
+ 420:   } else {
+ 421:     await createDocument('leads', {
+ 422:       teamId,
+ 423:       phone,
+ 424:       name,
+ 425:       email,
+ 426:       source: 'whatsapp',
+ 427:       status: 'new',
+ 428:       notes: notes || (intent ? `Service interest: ${intent}` : null),
+ 429:       lastContactedAt: now,
+ 430:       createdAt: now,
+ 431:       updatedAt: now,
+ 432:     }).catch(() => {});
+ 433:   }
+ 434: }
+ 435: 
+ 436: /**
+ 437:  * GET /api/whatsapp/webhook
+ 438:  * Meta's webhook verification endpoint
+ 439:  */
+ 440: export async function GET(request: NextRequest) {
+ 441:   try {
+ 442:     const { searchParams } = new URL(request.url);
+ 443:     const mode = searchParams.get('hub.mode');
+ 444:     const token = searchParams.get('hub.verify_token');
+ 445:     const challenge = searchParams.get('hub.challenge');
+ 446: 
+ 447:     if (mode !== 'subscribe' || !token || !challenge) {
+ 448:       return NextResponse.json(
+ 449:         { error: 'Invalid webhook parameters' },
+ 450:         { status: 400 }
+ 451:       );
+ 452:     }
+ 453: 
+ 454:     // Verify the token
+ 455:     if (!verifyWebhookToken(token, WEBHOOK_VERIFY_TOKEN)) {
+ 456:       return NextResponse.json(
+ 457:         { error: 'Invalid verification token' },
+ 458:         { status: 403 }
+ 459:       );
+ 460:     }
+ 461: 
+ 462:     // Return the challenge to complete verification
+ 463:     return new NextResponse(challenge, { status: 200 });
+ 464:   } catch (error) {
+ 465:     console.error('[WhatsApp Webhook] GET Error:', error);
+ 466:     return NextResponse.json(
+ 467:       { error: 'Webhook verification failed' },
+ 468:       { status: 500 }
+ 469:     );
+ 470:   }
+ 471: }
+ 472: 
+ 473: /**
+ 474:  * POST /api/whatsapp/webhook
+ 475:  * Receive and process messages from Meta
+ 476:  */
+ 477: export async function POST(request: NextRequest) {
+ 478:   try {
+ 479:     const rawBody = await request.text();
+ 480:     const body = rawBody ? JSON.parse(rawBody) : {};
+ 481: 
+ 482:     const ycloudSignature = request.headers.get('YCloud-Signature');
+ 483:     if (YCLOUD_ENFORCE_SIGNATURE && ycloudSignature && YCLOUD_WEBHOOK_SECRET) {
+ 484:       const validYCloudSignature = verifyYCloudSignature(
+ 485:         rawBody || '{}',
+ 486:         ycloudSignature,
+ 487:         YCLOUD_WEBHOOK_SECRET
+ 488:       );
+ 489:       if (!validYCloudSignature) {
+ 490:         return NextResponse.json({ error: 'Invalid YCloud webhook signature' }, { status: 401 });
+ 491:       }
+ 492:     }
+ 493: 
+ 494:     // Validate webhook signature (implement X-Hub-Signature verification in production)
+ 495:     // const signature = request.headers.get('X-Hub-Signature-256');
+ 496: 
+ 497:     // Parse the webhook payload
+ 498:     const webhook = parseWhatsAppWebhook(body);
+ 499: 
+ 500:     if (!webhook) {
+ 501:       return NextResponse.json({ success: true }, { status: 200 });
+ 502:     }
+ 503: 
+ 504:     const { messages, statuses, phoneNumberId } = webhook;
+ 505: 
+ 506:     // Process incoming messages
+ 507:     if (messages && messages.length > 0) {
+ 508:       for (const msg of messages) {
+ 509:         await processIncomingMessage(msg, phoneNumberId || '', request.url);
+ 510:       }
+ 511:     }
+ 512: 
+ 513:     // Process message statuses (delivered, read, failed)
+ 514:     if (statuses && statuses.length > 0) {
+ 515:       for (const status of statuses) {
+ 516:         await processMessageStatus(status, phoneNumberId || '');
+ 517:       }
+ 518:     }
+ 519: 
+ 520:     return NextResponse.json({ success: true }, { status: 200 });
+ 521:   } catch (error) {
+ 522:     console.error('[WhatsApp Webhook] POST Error:', error);
+ 523:     return NextResponse.json(
+ 524:       { error: 'Failed to process webhook' },
+ 525:       { status: 500 }
+ 526:     );
+ 527:   }
+ 528: }
+ 529: 
+ 530: /**
+ 531:  * Process an incoming message from WhatsApp
+ 532:  */
+ 533: async function processIncomingMessage(
+ 534:   message: Parameters<typeof extractMessage>[0],
+ 535:   webhookPhoneNumberId: string,
+ 536:   requestUrl: string
+ 537: ) {
+ 538:   try {
+ 539:     const incoming = extractMessage(message);
+ 540:     if (!incoming || !incoming.phone) {
+ 541:       console.warn('[WhatsApp] Skipping message: missing sender phone');
+ 542:       return;
+ 543:     }
+ 544: 
+ 545:     const phone = incoming.phone;
+ 546:     const type = incoming.type || 'text';
+ 547:     const text = 'text' in incoming ? (incoming.text || '') : '';
+ 548:     const messageId = incoming.messageId || null;
+ 549: 
+ 550:     // Drop messages from the Traventions own number (self-loop) and auto-replies
+ 551:     const ownPhone = (process.env.YCLOUD_WHATSAPP_FROM || '').replace(/\D/g, '');
+ 552:     if (ownPhone && phone.replace(/\D/g, '') === ownPhone) {
+ 553:       console.log(`[WhatsApp] Skipping self-message from own number ${phone}`);
+ 554:       return;
+ 555:     }
+ 556:     const AUTOREPLY_PATTERNS = [
+ 557:       /reach out to us/i, /thanks for reaching out/i, /out of (office|town)/i,
+ 558:       /automated (message|reply|response)/i, /do not (reply|respond)/i,
+ 559:       /this is an? (auto|automated)/i, /unsubscribe/i,
+ 560:     ];
+ 561:     if (text && AUTOREPLY_PATTERNS.some(p => p.test(text))) {
+ 562:       console.log(`[WhatsApp] Skipping auto-reply from ${phone}: "${text.slice(0, 80)}"`);
+ 563:       return;
+ 564:     }
+ 565: 
+ 566:     const teamId = await resolveTeamIdByPhoneNumberId(webhookPhoneNumberId);
+ 567:     const dedupeKey = buildInboundDedupeKey({
+ 568:       teamId,
+ 569:       phone,
+ 570:       messageId,
+ 571:       type,
+ 572:       text,
+ 573:     });
+ 574: 
+ 575:     if (wasRecentlyProcessedInbound(dedupeKey)) {
+ 576:       console.log(`[WhatsApp] Skipping duplicate inbound (memory cache) ${dedupeKey}`);
+ 577:       return;
+ 578:     }
+ 579: 
+ 580:     let existingInbound: { customerId?: string; createdAt?: string; $createdAt?: string } | null = null;
+ 581:     if (messageId) {
+ 582:       const existing = await listDocuments('conversations', [
+ 583:         Query.equal('teamId', teamId),
+ 584:         Query.equal('phone', phone),
+ 585:         Query.equal('sentBy', 'customer'),
+ 586:         Query.equal('metaMessageId', messageId),
+ 587:         Query.limit(1),
+ 588:       ]);
+ 589:       if (existing.documents.length > 0) {
+ 590:         existingInbound = existing.documents[0] as {
+ 591:           customerId?: string;
+ 592:           createdAt?: string;
+ 593:           $createdAt?: string;
+ 594:         };
+ 595:         const inboundTs = new Date(
+ 596:           existingInbound.createdAt || existingInbound.$createdAt || 0
+ 597:         ).getTime();
+ 598:         const existingCustomerId = existingInbound.customerId;
+ 599: 
+ 600:         let hasAiReplyAfterInbound = false;
+ 601:         if (existingCustomerId && Number.isFinite(inboundTs) && inboundTs > 0) {
+ 602:           const aiAfterInbound = await listDocuments('conversations', [
+ 603:             Query.equal('teamId', teamId),
+ 604:             Query.equal('customerId', existingCustomerId),
+ 605:             Query.equal('sentBy', 'ai'),
+ 606:             Query.orderDesc('$createdAt'),
+ 607:             Query.limit(1),
+ 608:           ]);
+ 609:           const latestAi = aiAfterInbound.documents[0] as
+ 610:             | { createdAt?: string; $createdAt?: string }
+ 611:             | undefined;
+ 612:           const latestAiTs = new Date(latestAi?.createdAt || latestAi?.$createdAt || 0).getTime();
+ 613:           hasAiReplyAfterInbound = Number.isFinite(latestAiTs) && latestAiTs >= inboundTs;
+ 614:         }
+ 615: 
+ 616:         if (hasAiReplyAfterInbound) {
+ 617:           console.log(`[WhatsApp] Skipping duplicate inbound messageId=${messageId}`);
+ 618:           markInboundProcessed(dedupeKey);
+ 619:           return;
+ 620:         }
+ 621: 
+ 622:         console.log(
+ 623:           `[WhatsApp] Reprocessing inbound messageId=${messageId} because no AI reply was found after first receive`
+ 624:         );
+ 625:       }
+ 626:     }
+ 627: 
+ 628:     console.log(`[Incoming] Incoming ${type} message from ${phone}:`, text || messageId);
+ 629: 
+ 630:     // Find or create customer record
+ 631:     let customer = await findOrCreateCustomer(phone, teamId);
+ 632: 
+ 633:     // Save the conversation message
+ 634:     if (!existingInbound) {
+ 635:       await createDocument('conversations', {
+ 636:         teamId,
+ 637:         customerId: customer.$id,
+ 638:         phone: phone,
+ 639:         role: 'user',
+ 640:         message: text || `[${type}]`,
+ 641:         messageType: type,
+ 642:         sentBy: 'customer',
+ 643:         metaMessageId: messageId || null,
+ 644:         deliveryStatus: 'received',
+ 645:         createdAt: new Date().toISOString(),
+ 646:       });
+ 647:     }
+ 648:     markInboundProcessed(dedupeKey);
+ 649: 
+ 650:     if (!text) {
+ 651:       // Non-text message (audio, image, video, sticker) — send a friendly nudge
+ 652:       const nonTextReply = type === 'audio' || type === 'voice'
+ 653:         ? '😊 I received your voice note! Unfortunately I can only read text right now. Please type your message and I\'ll be happy to help!'
+ 654:         : type === 'image' || type === 'video'
+ 655:           ? '📸 Thanks for sharing! I work best with text messages. Please describe what you need and I\'ll assist you right away 😊'
+ 656:           : '😊 I work best with text messages. Please type your query and I\'ll help you plan your trip!';
+ 657: 
+ 658:       const handoverCheck = await hasHumanTakeover(teamId, phone);
+ 659:       if (!handoverCheck) {
+ 660:         const sendResult = await sendAutoReply({
+ 661:           phone,
+ 662:           message: nonTextReply,
+ 663:         }).catch(() => ({ success: false, messageId: null, mode: 'unknown' }));
+ 664:         if (sendResult.success) {
+ 665:           await createDocument('conversations', {
+ 666:             teamId, customerId: customer.$id, phone,
+ 667:             role: 'assistant', message: nonTextReply, messageType: 'text',
+ 668:             sentBy: 'ai', metaMessageId: sendResult.messageId || null,
+ 669:             deliveryStatus: 'sent', createdAt: new Date().toISOString(),
+ 670:           });
+ 671:         }
+ 672:       }
+ 673:       return;
+ 674:     }
+ 675: 
+ 676:     // Extract customer info synchronously (alongside hasHumanTakeover) so lead save
+ 677:     // happens within the request lifecycle rather than as a detached background promise.
+ 678:     const [handover, extractedInfo] = await Promise.all([
+ 679:       hasHumanTakeover(teamId, phone),
+ 680:       process.env.OPENAI_API_KEY
+ 681:         ? extractCustomerInfo(text).catch(() => ({} as { name?: string; email?: string; phone?: string }))
+ 682:         : Promise.resolve({} as { name?: string; email?: string; phone?: string }),
+ 683:     ]);
+ 684: 
+ 685:     if (extractedInfo?.name && !customer.name) {
+ 686:       customer = await updateDocument('customers', customer.$id, {
+ 687:         name: extractedInfo.name,
+ 688:         email: extractedInfo.email || null,
+ 689:         updatedAt: new Date().toISOString(),
+ 690:       }).catch(() => customer);
+ 691:     }
+ 692: 
+ 693:     if (handover) {
+ 694:       console.log(`[WhatsApp] AI suppressed for ${phone} due to staff takeover`);
+ 695:       return;
+ 696:     }
+ 697: 
+ 698:     const greetingMessage = isGreetingMessage(text);
+ 699:     // Preprocess: fix typos via AI + classify intent in one call
+ 700:     const businessContext = `Team: ${teamId}, channel: whatsapp`;
+ 701:     let intent = 'other';
+ 702:     let correctedText = text; // AI-corrected version used for workflow/slot extraction
+ 703:     if (!greetingMessage && process.env.OPENAI_API_KEY) {
+ 704:       const preprocessed = await withTimeout(
+ 705:         preprocessMessage(text, businessContext).catch(() => ({ correctedText: text, intent: 'other' })),
+ 706:         CLASSIFY_TIMEOUT_MS,
+ 707:         { correctedText: text, intent: 'other' }
+ 708:       );
+ 709:       correctedText = preprocessed.correctedText;
+ 710:       intent = preprocessed.intent;
+ 711:       if (correctedText !== text) {
+ 712:         console.log(`[WhatsApp] Typo corrected: "${text}" → "${correctedText}"`);
+ 713:       }
+ 714:     } else if (greetingMessage) {
+ 715:       intent = 'greeting';
+ 716:     }
+ 717: 
+ 718:     // Generate AI response for all non-complaint intents.
+ 719:     if (intent !== 'complaint') {
+ 720:       await generateAndSendResponse(
+ 721:         customer,
+ 722:         text,           // original stored in DB
+ 723:         correctedText,  // typo-corrected used for logic
+ 724:         phone,
+ 725:         intent,
+ 726:         teamId,
+ 727:         requestUrl,
+ 728:         messageId
+ 729:       );
+ 730:     } else {
+ 731:       // Route complaints to staff
+ 732:       saveLead({
+ 733:         teamId,
+ 734:         phone,
+ 735:         customer,
+ 736:         intent: 'complaint',
+ 737:         notes: `Customer complaint: ${text}`,
+ 738:       }).catch(() => {});
+ 739:     }
+ 740:   } catch (error) {
+ 741:     console.error('[WhatsApp] Error processing message:', error);
+ 742:   }
+ 743: }
+ 744: 
+ 745: /**
+ 746:  * Process a message status update (delivery, read, failed)
+ 747:  */
+ 748: async function processMessageStatus(
+ 749:   status: Parameters<typeof extractStatus>[0],
+ 750:   webhookPhoneNumberId: string
+ 751: ) {
+ 752:   try {
+ 753:     const parsed = extractStatus(status);
+ 754:     if (!parsed || !parsed.messageId) {
+ 755:       return;
+ 756:     }
+ 757: 
+ 758:     const { phone, messageId, status: msgStatus } = parsed;
+ 759:     const teamId = await resolveTeamIdByPhoneNumberId(webhookPhoneNumberId);
+ 760: 
+ 761:     console.log(`[Status] Message ${messageId} from ${phone}: ${msgStatus}`);
+ 762: 
+ 763:     // Find the conversation with this messageId
+ 764:     const conversations = await listDocuments('conversations', [
+ 765:       Query.equal('teamId', teamId),
+ 766:       Query.equal('metaMessageId', messageId),
+ 767:       Query.limit(1),
+ 768:     ]);
+ 769: 
+ 770:     if (conversations.documents.length > 0) {
+ 771:       const convo = conversations.documents[0];
+ 772:       await updateDocument('conversations', convo.$id, {
+ 773:         deliveryStatus: msgStatus,
+ 774:       });
+ 775:     }
+ 776:   } catch (error) {
+ 777:     console.error('[WhatsApp] Error processing status:', error);
+ 778:   }
+ 779: }
+ 780: 
+ 781: /**
+ 782:  * Find or create a customer record
+ 783:  */
+ 784: async function findOrCreateCustomer(phone: string, teamId: string) {
+ 785:   try {
+ 786:     const result = await listDocuments('customers', [
+ 787:       Query.equal('teamId', teamId),
+ 788:       Query.equal('phone', phone),
+ 789:       Query.limit(1),
+ 790:     ]);
+ 791: 
+ 792:     if (result.documents.length > 0) {
+ 793:       return result.documents[0];
+ 794:     }
+ 795: 
+ 796:     // Create new customer
+ 797:     return await createDocument('customers', {
+ 798:       teamId,
+ 799:       phone: phone,
+ 800:       source: 'whatsapp',
+ 801:       createdAt: new Date().toISOString(),
+ 802:       updatedAt: new Date().toISOString(),
+ 803:     });
+ 804:   } catch (error) {
+ 805:     console.error('[WhatsApp] Error finding/creating customer:', error);
+ 806:     throw error;
+ 807:   }
+ 808: }
+ 809: 
+ 810: /**
+ 811:  * Generate an AI response and send it via WhatsApp
+ 812:  */
+ 813: async function generateAndSendResponse(
+ 814:   customer: { $id: string; teamId?: string; name?: string; email?: string },
+ 815:   userMessage: string,      // original text — stored in DB
+ 816:   correctedText: string,    // AI typo-corrected — used for intent/slot logic
+ 817:   phone: string,
+ 818:   intent: string,
+ 819:   teamId: string,
+ 820:   requestUrl: string,
+ 821:   inboundMessageId: string | null
+ 822: ) {
+ 823:   try {
+ 824:     const resolvedTeamId =
+ 825:       teamId || customer.teamId || process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'system';
+ 826: 
+ 827:     // Save lead only when the bot actively responds — prevents junk/spam numbers
+ 828:     // from appearing in the CRM just because they sent an unhandled message.
+ 829:     saveLead({
+ 830:       teamId: resolvedTeamId,
+ 831:       phone,
+ 832:       customer,
+ 833:       intent,
+ 834:       notes: correctedText.slice(0, 300),
+ 835:     }).catch(() => {});
+ 836: 
+ 837:     const typingKeepAlive = await startYCloudTypingKeepAlive(inboundMessageId);
+ 838:     try {
+ 839: 
+ 840:       // Fetch up to 40 messages so the workflow engine never loses the intent-lock
+ 841:       // signal even in long conversations. OpenAI only receives the last 20.
+ 842:       const convos = await listDocuments('conversations', [
+ 843:         Query.equal('teamId', resolvedTeamId),
+ 844:         Query.equal('customerId', customer.$id),
+ 845:         Query.orderDesc('$createdAt'),
+ 846:         Query.limit(40),
+ 847:       ]);
+ 848: 
+ 849:     const historyRows = convos.documents as Array<{ role?: string; message?: string; sentBy?: string }>;
+ 850: 
+ 851:     // Full chronological history (all 40) — used for workflow state resolution
+ 852:     const fullHistory = [...historyRows].reverse().map((c) => ({
+ 853:       role: (c.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+ 854:       content: c.message || '[media]',
+ 855:     }));
+ 856: 
+ 857:     // Remove the current inbound message from the tail (already stored above)
+ 858:     if (fullHistory.length > 0) {
+ 859:       const last = fullHistory[fullHistory.length - 1];
+ 860:       if (
+ 861:         last.role === 'user' &&
+ 862:         normalizeTextForDedupe(last.content) === normalizeTextForDedupe(userMessage)
+ 863:       ) {
+ 864:         fullHistory.pop();
+ 865:       }
+ 866:     }
+ 867: 
+ 868:     // Truncated history sent to OpenAI — last 20 messages keeps token budget sane
+ 869:     const history = fullHistory.slice(-20);
+ 870: 
+ 871:     const recentAi = await listDocuments('conversations', [
+ 872:       Query.equal('teamId', resolvedTeamId),
+ 873:       Query.equal('customerId', customer.$id),
+ 874:       Query.equal('sentBy', 'ai'),
+ 875:       Query.orderDesc('$createdAt'),
+ 876:       Query.limit(1),
+ 877:     ]);
+ 878:     const recentAiDoc = recentAi.documents[0] as
+ 879:       | { message?: string; createdAt?: string; $createdAt?: string }
+ 880:       | undefined;
+ 881:     const recentAiText = normalizeTextForDedupe(recentAiDoc?.message || '');
+ 882:     const recentAiTs = new Date(recentAiDoc?.createdAt || recentAiDoc?.$createdAt || 0).getTime();
+ 883: 
+ 884:     const businessConfigResult = await listDocuments('business_configs', [
+ 885:       Query.equal('teamId', resolvedTeamId),
+ 886:       Query.limit(1),
+ 887:     ]);
+ 888:     const businessConfig = businessConfigResult.documents[0] as
+ 889:       | { businessName?: string; openaiSystemPrompt?: string }
+ 890:       | undefined;
+ 891:     if (isGreetingMessage(correctedText)) {
+ 892:       const greetingMenu = getGreetingMenuText(customer.name || null);
+ 893:       const priorGreeting = normalizeTextForDedupe(greetingMenu);
+ 894:       if (
+ 895:         recentAiText === priorGreeting &&
+ 896:         Number.isFinite(recentAiTs) &&
+ 897:         Date.now() - recentAiTs <= RECENT_AI_DUPLICATE_WINDOW_MS
+ 898:       ) {
+ 899:         console.log('[WhatsApp] Skipping duplicate greeting auto-reply');
+ 900:         return;
+ 901:       }
+ 902: 
+ 903:       const greetingSendResult = await sendAutoReply({ phone, message: greetingMenu }).catch(() => ({ success: false, messageId: null, mode: 'unknown' }));
+ 904: 
+ 905:       await createDocument('conversations', {
+ 906:         teamId: resolvedTeamId,
+ 907:         customerId: customer.$id,
+ 908:         phone: phone,
+ 909:         role: 'assistant',
+ 910:         message: greetingMenu,
+ 911:         messageType: 'text',
+ 912:         sentBy: 'ai',
+ 913:         metaMessageId: (greetingSendResult as { messageId?: string | null }).messageId || null,
+ 914:         deliveryStatus: greetingSendResult.success ? 'sent' : 'failed',
+ 915:         createdAt: new Date().toISOString(),
+ 916:       });
+ 917:       if (greetingSendResult.success) {
+ 918:         console.log(`[OK] Greeting sent to ${phone} via ycloud`);
+ 919:       }
+ 920:       return;
+ 921:     }
+ 922: 
+ 923:     // Resolve structured workflow state using the FULL history (all 40 messages)
+ 924:     // so the intent lock and slot values are never lost in long conversations.
+ 925:     const historyUserMessages = fullHistory.filter(h => h.role === 'user').map(h => h.content);
+ 926:     const rawAiSlotHints = process.env.OPENAI_API_KEY
+ 927:       ? await withTimeout(
+ 928:           extractWorkflowSlots(correctedText, intent).catch(() => ({})),
+ 929:           CLASSIFY_TIMEOUT_MS,
+ 930:           {}
+ 931:         )
+ 932:       : {};
+ 933:     // Strip lead fields from AI hints — AI must never hallucinate name/phone/email/callback_time
+ 934:     // from action phrases like "Arrange Callback", which would skip the collect_lead stage.
+ 935:     // Only travel/service slots are safe to accept from AI extraction.
+ 936:     // eslint-disable-next-line @typescript-eslint/no-unused-vars
+ 937:     const { name: _n, phone: _p, email: _e, callback_time: _ct, ...aiSlotHints } =
+ 938:       rawAiSlotHints as Record<string, string>;
+ 939: 
+ 940:     const workflowState = resolveWorkflowState({
+ 941:       userMessage: correctedText,
+ 942:       classifiedIntent: intent,
+ 943:       aiSlots: aiSlotHints,
+ 944:       historyMessages: historyUserMessages,
+ 945:     });
+ 946: 
+ 947:     if (isHardOffTopicInput(correctedText, workflowState.intent)) {
+ 948:       const offTopicReply = normalizeToWhatsAppMarkdown(buildOffTopicReply(customer.name || null));
+ 949:       const sendResult = await sendAutoReply({
+ 950:         phone,
+ 951:         message: offTopicReply,
+ 952:       });
+ 953:       await createDocument('conversations', {
+ 954:         teamId: resolvedTeamId,
+ 955:         customerId: customer.$id,
+ 956:         phone,
+ 957:         role: 'assistant',
+ 958:         message: offTopicReply,
+ 959:         messageType: 'text',
+ 960:         sentBy: 'ai',
+ 961:         metaMessageId: sendResult.messageId || null,
+ 962:         deliveryStatus: sendResult.success ? 'sent' : 'failed',
+ 963:         createdAt: new Date().toISOString(),
+ 964:       });
+ 965:       return;
+ 966:     }
+ 967: 
+ 968:     // Deterministic-first: for structured stages (ask_destination, ask_holiday_type,
+ 969:     // ask_travel_details, collect_lead, ask_callback) send the reply directly without AI.
+ 970:     // AI is only used for creative stages (show_packages, confirmed, unknown) where
+ 971:     // buildWorkflowReply returns null. This prevents AI from being anchored to bad
+ 972:     // patterns in conversation history and ignoring the system prompt task.
+ 973:     const deterministicReply = isQuestionLike(correctedText)
+ 974:       ? null
+ 975:       : buildWorkflowReply(workflowState);
+ 976: 
+ 977:     if (deterministicReply !== null) {
+ 978:       const waReply = normalizeToWhatsAppMarkdown(deterministicReply);
+ 979:       const sendResult = await sendAutoReply({
+ 980:         phone,
+ 981:         message: waReply,
+ 982:       });
+ 983:       await createDocument('conversations', {
+ 984:         teamId: resolvedTeamId, customerId: customer.$id, phone,
+ 985:         role: 'assistant', message: waReply, messageType: 'text',
+ 986:         sentBy: 'ai', metaMessageId: sendResult.messageId || null,
+ 987:         deliveryStatus: sendResult.success ? 'sent' : 'failed',
+ 988:         createdAt: new Date().toISOString(),
+ 989:       });
+ 990:       if (sendResult.success) {
+ 991:         console.log(`[OK] Deterministic reply sent to ${phone} (stage=${workflowState.stage})`);
+ 992:       }
+ 993:       return;
+ 994:     }
+ 995: 
+ 996:     const stageDraftReply = null; // AI stages only (show_packages, confirmed, unknown)
+ 997: 
+ 998:     // Call AI with workflow-aware system prompt
+ 999:     const knowledgeQuery = [
+1000:       correctedText,
+1001:       workflowState.intent,
+1002:       workflowState.slots.destination,
+1003:       workflowState.slots.from_city,
+1004:       workflowState.slots.to_city,
+1005:       workflowState.slots.travel_time,
+1006:       workflowState.slots.nights,
+1007:       workflowState.slots.hotel_preference,
+1008:     ]
+1009:       .filter(Boolean)
+1010:       .join(' ');
+1011:     const knowledge = await loadTravelKnowledgeFast(resolvedTeamId, knowledgeQuery || correctedText);
+1012:     const safeWebsiteSnippets = sanitizeWebsiteSnippetsForBot(knowledge.websiteSnippets);
+1013:     const safeBestWebsiteUrl = sanitizeWebsiteUrlForBot(
+1014:       knowledge.bestWebsiteUrl || WEBSITE_FALLBACK_URL
+1015:     );
+1016:     const enforceDatabaseFirst = shouldEnforceDatabaseFirst({
+1017:       workflowIntent: workflowState.intent,
+1018:       workflowStage: workflowState.stage,
+1019:       userMessage: correctedText,
+1020:     });
+1021:     const customerProfileBlock = [
+1022:       `CUSTOMER PROFILE:`,
+1023:       `- Name: ${customer.name || 'Unknown'}`,
+1024:       `- Phone: ${phone}`,
+1025:       `- Team: ${resolvedTeamId}`,
+1026:       `Always keep replies personalized and context-aware for this customer.`,
+1027:     ].join('\n');
+1028:     const databasePolicyBlock = enforceDatabaseFirst
+1029:       ? knowledge.databaseSnippets.length > 0
+1030:         ? `DATABASE-FIRST POLICY (STRICT):
+1031: - Use Appwrite package/flight/hotel data as the PRIMARY truth source.
+1032: - Do not invent package names, inclusions, durations, or prices when DB data is available.
+1033: - If the user asks for options, extract and present options from the provided PACKAGE KNOWLEDGE.
+1034: - If some detail is missing in DB, say it clearly and ask one follow-up question.`
+1035:         : `DATABASE-FIRST POLICY:
+1036: - No matching package data found in Appwrite for this query.
+1037: - You may provide curated sample options, but label them as "sample/estimated".
+1038: - Keep pricing realistic in INR and avoid claiming confirmed live inventory.
+1039: - Ask the user if they want a human expert callback for exact live inventory.`
+1040:       : '';
+1041: 
+1042:     const workflowBlock = getWorkflowSystemPromptBlock(
+1043:       workflowState.intent,
+1044:       workflowState.stage,
+1045:       workflowState.slots,
+1046:       stageDraftReply
+1047:     );
+1048:     const memoryBlock = buildConversationMemoryBlock({
+1049:       state: workflowState,
+1050:       recentUserMessages: historyUserMessages.slice(-12),
+1051:     });
+1052: 
+1053:     const systemPrompt = [
+1054:       businessConfig?.openaiSystemPrompt || '',
+1055:       `You are Sini, a warm and knowledgeable travel sales assistant for Traventions (a full-service travel agency in India).
+1056: You ALWAYS respond — no matter what the customer sends (short, long, confusing, off-topic, emoji-only, Hindi, Hinglish, random text).`,
+1057:       getBotRoutePolicyPromptBlock(),
+1058:       workflowBlock,
+1059:       memoryBlock,
+1060:       customerProfileBlock,
+1061:       databasePolicyBlock,
+1062:       `HANDLING UNEXPECTED INPUTS (mandatory):
+1063: - Emoji-only or very short messages (ok, yes, no, 👍, 🙏) → interpret in context of current stage; if ambiguous, re-ask the stage question warmly.
+1064: - Questions mid-flow (Is Dubai visa-free? What currency does Bali use?) → briefly answer in 1-2 sentences, then re-ask the stage question.
+1065: - Hindi or Hinglish → respond in the same language if possible, continue the flow.
+1066: - Angry or frustrated customer → empathize first ("I completely understand your concern 😊"), then offer to help.
+1067: - "Speak to human" / "agent" / "staff" → "Sure! Our team can be reached at info@traventions.com. I can also continue helping you right now 😊"
+1068: - Completely off-topic (weather, sports, jokes, coding, etc.) → politely refuse and steer back to travel only.
+1069: - Random characters or test messages → "Hello! 😊 I'm Sini from Traventions. How can I help you plan your next trip?"
+1070: - User wants to change their mind (different destination, different dates) → accept gracefully and update the plan.
+1071: 
+1072: GLOBAL RULES:
+1073: - WhatsApp formatting only: *bold*, _italic_, numbered lists, bullet * lists. NEVER markdown links [text](url) — plain URLs only.
+1074: - INR only for all pricing — never USD or $.
+1075: - Keep reply concise and focused. Under 250 words unless generating packages.
+1076: - Never repeat questions already answered by the customer.
+1077: - ALWAYS send a reply — never respond with empty text.
+1078: - Website: ${safeBestWebsiteUrl}`,
+1079:       knowledge.databaseSnippets.length
+1080:         ? `\nPACKAGE KNOWLEDGE:\n${knowledge.databaseSnippets.slice(0, 6).map((v, i) => `${i + 1}. ${v}`).join('\n')}`
+1081:         : '',
+1082:       safeWebsiteSnippets.length
+1083:         ? `\nWEBSITE PAGES:\n${safeWebsiteSnippets.slice(0, 4).map((v, i) => `${i + 1}. ${v}`).join('\n')}`
+1084:         : '',
+1085:     ]
+1086:       .filter(Boolean)
+1087:       .join('\n')
+1088:       .trim();
+1089: 
+1090:     let response: string;
+1091:     if (process.env.OPENAI_API_KEY) {
+1092:       try {
+1093:         response = await getChatResponse(correctedText, systemPrompt, history);
+1094:         response = enforceSafeUrlsInReply(response);
+1095:       } catch (err) {
+1096:         console.error('[WhatsApp] OpenAI reply failed:', err);
+1097:         response = stageDraftReply || 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
+1098:       }
+1099:     } else {
+1100:       response = stageDraftReply || 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
+1101:     }
+1102: 
+1103:     // Update lead notes with workflow data when stage is confirmed
+1104:     if (workflowState.stage === 'confirmed' && workflowState.slots) {
+1105:       const leadNotes = buildLeadNotes(workflowState.intent, workflowState.slots);
+1106:       saveLead({
+1107:         teamId: resolvedTeamId,
+1108:         phone,
+1109:         customer: {
+1110:           ...customer,
+1111:           name: workflowState.slots.name || customer.name,
+1112:           email: workflowState.slots.email || customer.email,
+1113:         },
+1114:         intent: workflowState.intent,
+1115:         notes: leadNotes,
+1116:       }).catch(() => {});
+1117:     }
+1118: 
+1119:     const waFormattedResponse = normalizeToWhatsAppMarkdown(enforceSafeUrlsInReply(response));
+1120:     // Never silence the bot on a real user turn. We still keep inbound dedupe guards
+1121:     // earlier in the pipeline, so sending a repeated AI message here is safer than
+1122:     // dropping the reply entirely.
+1123:     if (
+1124:       recentAiText === normalizeTextForDedupe(waFormattedResponse) &&
+1125:       Number.isFinite(recentAiTs) &&
+1126:       Date.now() - recentAiTs <= RECENT_AI_DUPLICATE_WINDOW_MS
+1127:     ) {
+1128:       console.log('[WhatsApp] AI response text matches recent reply; sending anyway to avoid silent turns');
+1129:     }
+1130: 
+1131:     const sendResult = await sendAutoReply({
+1132:       phone,
+1133:       message: waFormattedResponse,
+1134:     });
+1135: 
+1136:     // Save the outgoing message with the actual provider message ID
+1137:     await createDocument('conversations', {
+1138:       teamId: resolvedTeamId,
+1139:       customerId: customer.$id,
+1140:       phone: phone,
+1141:       role: 'assistant',
+1142:       message: waFormattedResponse,
+1143:       messageType: 'text',
+1144:       sentBy: 'ai',
+1145:       metaMessageId: sendResult.messageId || null,
+1146:       deliveryStatus: sendResult.success ? 'sent' : 'failed',
+1147:       createdAt: new Date().toISOString(),
+1148:     });
+1149: 
+1150:       if (sendResult.success) {
+1151:         console.log(`[OK] AI response sent to ${phone} via ${sendResult.mode}`);
+1152:       } else {
+1153:         console.error('Failed to send AI response');
+1154:       }
+1155:     } finally {
+1156:       await typingKeepAlive.stop();
+1157:     }
+1158:   } catch (error) {
+1159:     console.error('[WhatsApp] Error generating/sending response:', error);
+1160:   }
+1161: }
+1162: 
+1163: async function resolveTeamIdByPhoneNumberId(phoneNumberId: string): Promise<string> {
+1164:   if (!phoneNumberId) {
+1165:     return process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'system';
+1166:   }
+1167: 
+1168:   const configs = await listDocuments('business_configs', [
+1169:     Query.equal('whatsappPhoneNumberId', phoneNumberId),
+1170:     Query.limit(1),
+1171:   ]);
+1172: 
+1173:   if (configs.documents.length > 0) {
+1174:     const teamId = (configs.documents[0] as { teamId?: string }).teamId;
+1175:     if (teamId) {
+1176:       return teamId;
+1177:     }
+1178:   }
+1179: 
+1180:   return process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'system';
+1181: }
+1182: 

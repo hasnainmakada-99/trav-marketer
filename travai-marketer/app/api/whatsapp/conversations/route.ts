@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
 import { listDocuments } from '@/lib/appwrite';
+import {
+  buildPhoneVariants,
+  buildStatusCounts,
+  coerceLeadStatus,
+  getDisplayName,
+  normalizePhoneForMatch,
+  type CrmLeadStatus,
+} from '@/lib/crm';
 
 interface ConversationDoc {
   $id: string;
@@ -21,6 +29,17 @@ interface CustomerDoc {
   $id: string;
   phone?: string;
   name?: string | null;
+  email?: string | null;
+  teamId?: string;
+}
+
+interface LeadDoc {
+  $id: string;
+  phone?: string;
+  name?: string | null;
+  email?: string | null;
+  status?: string | null;
+  notes?: string | null;
   teamId?: string;
 }
 
@@ -34,6 +53,54 @@ interface ThreadDoc {
   deliveryStatus?: string;
   createdAt?: string;
   $createdAt?: string;
+}
+
+function formatPreview(message?: string | null, messageType?: string) {
+  if (message && message.trim()) return message;
+  if (!messageType || messageType === 'text') return 'Text message';
+  return `[${messageType}]`;
+}
+
+function buildContactMaps(customers: CustomerDoc[], leads: LeadDoc[]) {
+  const customerByPhone = new Map<string, CustomerDoc>();
+  const leadByPhone = new Map<string, LeadDoc>();
+
+  for (const customer of customers) {
+    for (const variant of buildPhoneVariants(customer.phone)) {
+      if (!customerByPhone.has(variant)) {
+        customerByPhone.set(variant, customer);
+      }
+    }
+  }
+
+  for (const lead of leads) {
+    for (const variant of buildPhoneVariants(lead.phone)) {
+      if (!leadByPhone.has(variant)) {
+        leadByPhone.set(variant, lead);
+      }
+    }
+  }
+
+  return { customerByPhone, leadByPhone };
+}
+
+function resolveContact(phone: string, maps: ReturnType<typeof buildContactMaps>) {
+  const normalized = normalizePhoneForMatch(phone);
+  const customer = maps.customerByPhone.get(normalized);
+  const lead = maps.leadByPhone.get(normalized);
+
+  return {
+    customer,
+    lead,
+    displayName: getDisplayName({
+      customerName: customer?.name || null,
+      leadName: lead?.name || null,
+      phone,
+    }),
+    email: customer?.email || lead?.email || null,
+    status: coerceLeadStatus(lead?.status),
+    notes: lead?.notes || null,
+  };
 }
 
 /**
@@ -50,35 +117,55 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'teamId required' }, { status: 400 });
     }
 
+    const [customerResult, leadResult] = await Promise.all([
+      listDocuments('customers', [Query.equal('teamId', teamId), Query.limit(500)]).catch(() => ({
+        documents: [] as CustomerDoc[],
+      })),
+      listDocuments('leads', [Query.equal('teamId', teamId), Query.limit(500)]).catch(() => ({
+        documents: [] as LeadDoc[],
+      })),
+    ]);
+
+    const contactMaps = buildContactMaps(
+      (customerResult.documents || []) as unknown as CustomerDoc[],
+      (leadResult.documents || []) as unknown as LeadDoc[]
+    );
+
     if (phone) {
+      const decodedPhone = decodeURIComponent(phone);
       const result = await listDocuments('conversations', [
         Query.equal('teamId', teamId),
-        Query.equal('phone', decodeURIComponent(phone)),
+        Query.equal('phone', buildPhoneVariants(decodedPhone)),
         Query.orderAsc('$createdAt'),
         Query.limit(500),
       ]);
+      const contact = resolveContact(decodedPhone, contactMaps);
 
-      const messages = ((result.documents || []) as unknown as ThreadDoc[]).map(
-        (doc) => {
-          const isOutgoing =
-            doc.role === 'assistant' || doc.sentBy === 'ai' || doc.sentBy === 'staff';
-          return {
-            $id: doc.$id,
-            phone: doc.phone,
-            type: (isOutgoing ? 'outgoing' : 'incoming') as 'incoming' | 'outgoing',
-            messageType: doc.messageType || 'text',
-            text: doc.message || null,
-            status: doc.deliveryStatus || undefined,
-            timestamp: doc.createdAt || doc.$createdAt || null,
-            createdAt: doc.createdAt || doc.$createdAt || null,
-          };
-        }
-      );
+      const messages = ((result.documents || []) as unknown as ThreadDoc[]).map((doc) => {
+        const isOutgoing =
+          doc.role === 'assistant' || doc.sentBy === 'ai' || doc.sentBy === 'staff';
+        return {
+          $id: doc.$id,
+          phone: doc.phone,
+          type: (isOutgoing ? 'outgoing' : 'incoming') as 'incoming' | 'outgoing',
+          messageType: doc.messageType || 'text',
+          text: doc.message || null,
+          status: doc.deliveryStatus || undefined,
+          timestamp: doc.createdAt || doc.$createdAt || null,
+          createdAt: doc.createdAt || doc.$createdAt || null,
+        };
+      });
 
-      return NextResponse.json({ phone: decodeURIComponent(phone), messages });
+      return NextResponse.json({
+        phone: decodedPhone,
+        name: contact.displayName,
+        email: contact.email,
+        crmStatus: contact.status,
+        notes: contact.notes,
+        messages,
+      }, { headers: { 'Cache-Control': 'no-store, max-age=0' } });
     }
 
-    // Fetch latest 500 conversation rows for this team, newest first
     const convoResult = await listDocuments('conversations', [
       Query.equal('teamId', teamId),
       Query.orderDesc('$createdAt'),
@@ -86,8 +173,6 @@ export async function GET(request: NextRequest) {
     ]);
 
     const messages = (convoResult.documents || []) as unknown as ConversationDoc[];
-
-    // Group by phone, keep first (newest) message per phone, count unread
     const byPhone = new Map<
       string,
       {
@@ -96,67 +181,57 @@ export async function GET(request: NextRequest) {
         lastTimestamp: string;
         lastType: 'incoming' | 'outgoing';
         unreadCount: number;
+        crmStatus: CrmLeadStatus;
+        name: string;
+        email: string | null;
       }
     >();
 
-    for (const m of messages) {
-      const phone = m.phone;
-      if (!phone) continue;
+    for (const message of messages) {
+      const convoPhone = message.phone;
+      if (!convoPhone) continue;
+      const phoneKey = normalizePhoneForMatch(convoPhone) || convoPhone;
 
-      const isIncoming = m.role === 'user' || m.sentBy === 'customer';
-      const ts = m.createdAt || m.$createdAt || new Date().toISOString();
-      const normalizedMessage =
-        m.message && m.message.trim().length > 0
-          ? m.message
-          : m.messageType === 'text'
-          ? 'Text message'
-          : `[${m.messageType || 'media'}]`;
+      const isIncoming = message.role === 'user' || message.sentBy === 'customer';
+      const ts = message.createdAt || message.$createdAt || new Date().toISOString();
+      const contact = resolveContact(convoPhone, contactMaps);
 
-      const existing = byPhone.get(phone);
+      const existing = byPhone.get(phoneKey);
       if (!existing) {
-        byPhone.set(phone, {
-          phone,
-          lastMessage: normalizedMessage,
+        byPhone.set(phoneKey, {
+          phone: convoPhone,
+          name: contact.displayName,
+          email: contact.email,
+          crmStatus: contact.status,
+          lastMessage: formatPreview(message.message, message.messageType),
           lastTimestamp: ts,
           lastType: isIncoming ? 'incoming' : 'outgoing',
-          unreadCount: isIncoming && m.deliveryStatus !== 'read' ? 1 : 0,
+          unreadCount: isIncoming && message.deliveryStatus !== 'read' ? 1 : 0,
         });
-      } else {
-        if (isIncoming && m.deliveryStatus !== 'read') {
-          existing.unreadCount += 1;
-        }
+      } else if (isIncoming && message.deliveryStatus !== 'read') {
+        existing.unreadCount += 1;
       }
     }
 
-    // Enrich with customer name
-    const customerResult = await listDocuments('customers', [
-      Query.equal('teamId', teamId),
-      Query.limit(500),
-    ]);
-    const customers = (customerResult.documents || []) as unknown as CustomerDoc[];
-    const nameByPhone = new Map(
-      customers.map((c) => [c.phone || '', c.name || null])
+    const conversations = Array.from(byPhone.values()).sort(
+      (a, b) => new Date(b.lastTimestamp).getTime() - new Date(a.lastTimestamp).getTime()
     );
 
-    const conversations = Array.from(byPhone.values())
-      .map((c) => ({
-        ...c,
-        name: nameByPhone.get(c.phone) || null,
-      }))
-      .sort(
-        (a, b) =>
-          new Date(b.lastTimestamp).getTime() -
-          new Date(a.lastTimestamp).getTime()
-      );
-
-    // 15 s browser cache to reduce duplicate polling from multiple tabs/rapid navigation.
     return NextResponse.json(
-      { conversations },
-      { headers: { 'Cache-Control': 'private, max-age=15, stale-while-revalidate=5' } }
+      {
+        conversations,
+        statusCounts: buildStatusCounts(conversations.map((conversation) => ({ status: conversation.crmStatus }))),
+      },
+      { headers: { 'Cache-Control': 'no-store, max-age=0' } }
     );
   } catch (error) {
-    // Collection may not exist yet (fresh install) or have no data — return empty list.
-    console.warn('[WA conversations] Returning empty list:', error instanceof Error ? error.message : error);
-    return NextResponse.json({ conversations: [] });
+    console.warn(
+      '[WA conversations] Returning empty list:',
+      error instanceof Error ? error.message : error
+    );
+    return NextResponse.json({
+      conversations: [],
+      statusCounts: buildStatusCounts([]),
+    }, { headers: { 'Cache-Control': 'no-store, max-age=0' } });
   }
 }

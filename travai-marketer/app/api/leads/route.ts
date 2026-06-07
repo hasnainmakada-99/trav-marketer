@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
 import { listDocuments, createDocument } from '@/lib/appwrite';
+import { syncLeadStatusesFromConversations } from '@/lib/crm-sync';
+import { CRM_STATUS_ORDER, buildPhoneVariants, coerceLeadStatus, normalizePhoneForMatch } from '@/lib/crm';
 
 const TEAM_ID = process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
 
@@ -27,7 +29,7 @@ export async function POST(request: NextRequest) {
       email: body.email?.trim() || null,
       notes,
       source: body.source || 'walk_in',
-      status: 'new',
+      status: 'new_lead',
       lastContactedAt: now,
       createdAt: now,
       updatedAt: now,
@@ -43,17 +45,20 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const status = searchParams.get('status') || 'all';
+    const teamId = searchParams.get('teamId') || TEAM_ID;
     const limit = Math.min(Number(searchParams.get('limit') || '100'), 200);
     const offset = Number(searchParams.get('offset') || '0');
 
-    // No teamId filter — this is an admin endpoint, show all leads
+    await syncLeadStatusesFromConversations(teamId).catch(() => null);
+
     const queries = [
+      Query.equal('teamId', teamId),
       Query.orderDesc('$createdAt'),
       Query.limit(limit),
       Query.offset(offset),
     ];
     if (status !== 'all') {
-      queries.push(Query.equal('status', status));
+      queries.push(Query.equal('status', coerceLeadStatus(status)));
     }
 
     const result = await listDocuments('leads', queries);
@@ -67,21 +72,54 @@ export async function GET(request: NextRequest) {
     const nameByPhone = new Map<string, string>();
     if (phonesMissingName.length > 0) {
       const custResult = await listDocuments('customers', [
-        Query.equal('phone', phonesMissingName),
+        Query.equal(
+          'phone',
+          Array.from(new Set(phonesMissingName.flatMap((phone) => buildPhoneVariants(phone))))
+        ),
         Query.limit(200),
       ]).catch(() => ({ documents: [] }));
       for (const c of custResult.documents as Array<{ phone?: string; name?: string }>) {
-        if (c.phone && c.name) nameByPhone.set(c.phone, c.name);
+        if (c.phone && c.name) {
+          for (const variant of buildPhoneVariants(c.phone)) {
+            nameByPhone.set(variant, c.name);
+          }
+        }
       }
     }
 
-    const leads = (result.documents as Array<Record<string, unknown>>).map(l => ({
+    const dedupedLeads = new Map<string, Record<string, unknown>>();
+    for (const lead of result.documents as Array<Record<string, unknown>>) {
+      const key =
+        normalizePhoneForMatch(lead.phone as string | null | undefined) ||
+        String(lead.$id || Math.random());
+      const existing = dedupedLeads.get(key);
+      if (!existing) {
+        dedupedLeads.set(key, lead);
+        continue;
+      }
+
+      const existingRank = CRM_STATUS_ORDER.indexOf(coerceLeadStatus(existing.status as string | null));
+      const nextRank = CRM_STATUS_ORDER.indexOf(coerceLeadStatus(lead.status as string | null));
+      const existingTime = new Date(String(existing.updatedAt || existing.createdAt || existing.$createdAt || 0)).getTime();
+      const nextTime = new Date(String(lead.updatedAt || lead.createdAt || lead.$createdAt || 0)).getTime();
+
+      if (nextRank > existingRank || (nextRank === existingRank && nextTime > existingTime)) {
+        dedupedLeads.set(key, lead);
+      }
+    }
+
+    const leads = Array.from(dedupedLeads.values()).map(l => ({
       ...l,
-      name: (l.name as string | null) || nameByPhone.get(l.phone as string) || null,
+      status: coerceLeadStatus(l.status as string | null),
+      name:
+        (l.name as string | null) ||
+        nameByPhone.get((l.phone as string) || '') ||
+        nameByPhone.get(buildPhoneVariants(l.phone as string)[0] || '') ||
+        null,
     }));
 
     return NextResponse.json(
-      { leads, total: result.total },
+      { leads, total: leads.length },
       { headers: { 'Cache-Control': 'private, max-age=15, stale-while-revalidate=15' } }
     );
   } catch (err) {

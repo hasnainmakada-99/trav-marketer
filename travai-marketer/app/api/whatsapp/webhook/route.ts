@@ -17,6 +17,14 @@ import { normalizeToWhatsAppMarkdown } from '@/lib/whatsapp-format';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { loadTravelKnowledge } from '@/lib/travel-knowledge';
 import {
+  buildPhoneVariants,
+  coerceLeadStatus,
+  deriveLeadStatus,
+  isConversionIntent,
+  mergeLeadStatus,
+} from '@/lib/crm';
+import { sendCallbackEmails } from '@/lib/email';
+import {
   enforceSafeUrlsInReply,
   getBotRoutePolicyPromptBlock,
   sanitizeWebsiteSnippetsForBot,
@@ -393,30 +401,31 @@ async function saveLead(params: {
   customer: { $id: string; name?: string; email?: string };
   intent?: string;
   notes?: string;
+  status?: string;
 }) {
-  const { teamId, phone, customer, intent, notes } = params;
+  const { teamId, phone, customer, intent, notes, status } = params;
   const name = customer.name || null;
   const email = customer.email || null;
 
-  const existing = await listDocuments('leads', [
-    Query.equal('teamId', teamId),
-    Query.equal('phone', phone),
-    Query.orderDesc('$createdAt'),
-    Query.limit(1),
-  ]).catch(() => ({ documents: [] }));
+  const existing = await findLatestLead(teamId, phone);
 
   const now = new Date().toISOString();
-  const existingLead = existing.documents[0] as { $id?: string } | undefined;
+  const existingLead = existing.documents[0] as
+    | { $id?: string; status?: string; notes?: string | null }
+    | undefined;
+  const resolvedStatus = mergeLeadStatus(existingLead?.status, status || 'new_lead');
+  const nextNotes = notes || existingLead?.notes || (intent ? `Service interest: ${intent}` : null);
 
   if (existingLead?.$id) {
     await updateDocument('leads', existingLead.$id, {
       name: name || undefined,
       email: email || undefined,
-      notes: notes || undefined,
-      status: 'new',
+      notes: nextNotes || undefined,
+      status: resolvedStatus,
       lastContactedAt: now,
       updatedAt: now,
     }).catch(() => {});
+    return { leadId: existingLead.$id, status: resolvedStatus, existed: true as const };
   } else {
     await createDocument('leads', {
       teamId,
@@ -424,13 +433,53 @@ async function saveLead(params: {
       name,
       email,
       source: 'whatsapp',
-      status: 'new',
-      notes: notes || (intent ? `Service interest: ${intent}` : null),
+      status: resolvedStatus,
+      notes: nextNotes,
       lastContactedAt: now,
       createdAt: now,
       updatedAt: now,
     }).catch(() => {});
+    return { leadId: null, status: resolvedStatus, existed: false as const };
   }
+}
+
+async function findLatestLead(teamId: string, phone: string) {
+  const variants = buildPhoneVariants(phone);
+  return listDocuments('leads', [
+    Query.equal('teamId', teamId),
+    Query.equal('phone', variants.length ? variants : [phone]),
+    Query.orderDesc('$createdAt'),
+    Query.limit(1),
+  ]).catch(() => ({ documents: [] as Array<Record<string, unknown>> }));
+}
+
+async function upsertCustomerProfile(params: {
+  customerId: string;
+  currentName?: string | null;
+  currentEmail?: string | null;
+  nextName?: string | null;
+  nextEmail?: string | null;
+}) {
+  const payload: Record<string, string> = {};
+  if (params.nextName && params.nextName !== params.currentName) {
+    payload.name = params.nextName;
+  }
+  if (params.nextEmail && params.nextEmail !== params.currentEmail) {
+    payload.email = params.nextEmail;
+  }
+  if (Object.keys(payload).length === 0) {
+    return null;
+  }
+  payload.updatedAt = new Date().toISOString();
+  return updateDocument('customers', params.customerId, payload).catch(() => null);
+}
+
+function buildServiceSummary(intent: string, notes?: string | null) {
+  const readableIntent = intent.replace(/_/g, ' ');
+  if (notes?.trim()) {
+    return `${readableIntent}: ${notes.trim().slice(0, 220)}`;
+  }
+  return readableIntent;
 }
 
 /**
@@ -682,12 +731,21 @@ async function processIncomingMessage(
         : Promise.resolve({} as { name?: string; email?: string; phone?: string }),
     ]);
 
-    if (extractedInfo?.name && !customer.name) {
-      customer = await updateDocument('customers', customer.$id, {
-        name: extractedInfo.name,
-        email: extractedInfo.email || null,
-        updatedAt: new Date().toISOString(),
-      }).catch(() => customer);
+    if ((extractedInfo?.name && !customer.name) || (extractedInfo?.email && !customer.email)) {
+      const updatedCustomer = await upsertCustomerProfile({
+        customerId: customer.$id,
+        currentName: customer.name,
+        currentEmail: customer.email,
+        nextName: customer.name || extractedInfo.name,
+        nextEmail: customer.email || extractedInfo.email,
+      });
+      if (updatedCustomer) {
+        customer = {
+          ...customer,
+          name: customer.name || extractedInfo.name,
+          email: customer.email || extractedInfo.email,
+        };
+      }
     }
 
     if (handover) {
@@ -729,12 +787,15 @@ async function processIncomingMessage(
       );
     } else {
       // Route complaints to staff
+      const complaintLead = await findLatestLead(teamId, phone).catch(() => ({ documents: [] }));
+      const complaintExisting = complaintLead.documents[0] as { status?: string; $id?: string } | undefined;
       saveLead({
         teamId,
         phone,
         customer,
         intent: 'complaint',
         notes: `Customer complaint: ${text}`,
+        status: complaintExisting?.$id ? coerceLeadStatus(complaintExisting.status) : 'new_lead',
       }).catch(() => {});
     }
   } catch (error) {
@@ -783,9 +844,10 @@ async function processMessageStatus(
  */
 async function findOrCreateCustomer(phone: string, teamId: string) {
   try {
+    const variants = buildPhoneVariants(phone);
     const result = await listDocuments('customers', [
       Query.equal('teamId', teamId),
-      Query.equal('phone', phone),
+      Query.equal('phone', variants.length ? variants : [phone]),
       Query.limit(1),
     ]);
 
@@ -823,16 +885,10 @@ async function generateAndSendResponse(
   try {
     const resolvedTeamId =
       teamId || customer.teamId || process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'system';
-
-    // Save lead only when the bot actively responds — prevents junk/spam numbers
-    // from appearing in the CRM just because they sent an unhandled message.
-    saveLead({
-      teamId: resolvedTeamId,
-      phone,
-      customer,
-      intent,
-      notes: correctedText.slice(0, 300),
-    }).catch(() => {});
+    const existingLeadResult = await findLatestLead(resolvedTeamId, phone);
+    const existingLead = existingLeadResult.documents[0] as
+      | { $id?: string; status?: string; notes?: string | null }
+      | undefined;
 
     const typingKeepAlive = await startYCloudTypingKeepAlive(inboundMessageId);
     try {
@@ -917,6 +973,14 @@ async function generateAndSendResponse(
       if (greetingSendResult.success) {
         console.log(`[OK] Greeting sent to ${phone} via ycloud`);
       }
+      await saveLead({
+        teamId: resolvedTeamId,
+        phone,
+        customer,
+        intent: 'greeting',
+        status: existingLead?.$id ? coerceLeadStatus(existingLead.status) : 'new_lead',
+        notes: existingLead?.notes || 'WhatsApp greeting received',
+      }).catch(() => {});
       return;
     }
 
@@ -943,6 +1007,57 @@ async function generateAndSendResponse(
       aiSlots: aiSlotHints,
       historyMessages: historyUserMessages,
     });
+    const previousUserMessages = [...historyUserMessages];
+    const previousCurrentMessage = previousUserMessages.pop();
+    const previousWorkflowState = previousCurrentMessage
+      ? resolveWorkflowState({
+          userMessage: previousCurrentMessage,
+          classifiedIntent: intent,
+          historyMessages: previousUserMessages,
+        })
+      : null;
+
+    const enrichedCustomerName = workflowState.slots.name || customer.name || undefined;
+    const enrichedCustomerEmail = workflowState.slots.email || customer.email || undefined;
+    const updatedCustomer = await upsertCustomerProfile({
+      customerId: customer.$id,
+      currentName: customer.name,
+      currentEmail: customer.email,
+      nextName: enrichedCustomerName,
+      nextEmail: enrichedCustomerEmail,
+    });
+    if (updatedCustomer) {
+      customer = {
+        ...customer,
+        name: enrichedCustomerName,
+        email: enrichedCustomerEmail,
+      };
+    }
+
+    const leadStatus = deriveLeadStatus({
+      existingStatus: existingLead?.status,
+      isFirstLead: !existingLead?.$id,
+      workflowIntent: workflowState.intent,
+      workflowStage: workflowState.stage,
+      workflowSlots: workflowState.slots,
+      userMessage: correctedText,
+    });
+    const leadNotes =
+      workflowState.stage === 'confirmed' && workflowState.slots
+        ? buildLeadNotes(workflowState.intent, workflowState.slots)
+        : correctedText.slice(0, 300);
+    await saveLead({
+      teamId: resolvedTeamId,
+      phone,
+      customer: {
+        ...customer,
+        name: enrichedCustomerName,
+        email: enrichedCustomerEmail,
+      },
+      intent: workflowState.intent,
+      notes: leadNotes,
+      status: leadStatus,
+    }).catch(() => {});
 
     if (isHardOffTopicInput(correctedText, workflowState.intent)) {
       const offTopicReply = normalizeToWhatsAppMarkdown(buildOffTopicReply(customer.name || null));
@@ -1100,20 +1215,23 @@ GLOBAL RULES:
       response = stageDraftReply || 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
     }
 
-    // Update lead notes with workflow data when stage is confirmed
-    if (workflowState.stage === 'confirmed' && workflowState.slots) {
-      const leadNotes = buildLeadNotes(workflowState.intent, workflowState.slots);
-      saveLead({
-        teamId: resolvedTeamId,
+    const shouldSendCallbackEmail =
+      workflowState.stage === 'confirmed' &&
+      Boolean(workflowState.slots.callback_time && enrichedCustomerEmail) &&
+      previousWorkflowState?.stage !== 'confirmed' &&
+      !isConversionIntent(correctedText);
+
+    if (shouldSendCallbackEmail) {
+      await sendCallbackEmails({
+        customerEmail: enrichedCustomerEmail,
+        customerName: enrichedCustomerName,
         phone,
-        customer: {
-          ...customer,
-          name: workflowState.slots.name || customer.name,
-          email: workflowState.slots.email || customer.email,
-        },
-        intent: workflowState.intent,
-        notes: leadNotes,
-      }).catch(() => {});
+        callbackTime: workflowState.slots.callback_time || '',
+        businessName: businessConfig?.businessName,
+        serviceSummary: buildServiceSummary(workflowState.intent, leadNotes),
+      }).catch((error) => {
+        console.warn('[WhatsApp] Callback email skipped:', error instanceof Error ? error.message : error);
+      });
     }
 
     const waFormattedResponse = normalizeToWhatsAppMarkdown(enforceSafeUrlsInReply(response));
@@ -1179,4 +1297,3 @@ async function resolveTeamIdByPhoneNumberId(phoneNumberId: string): Promise<stri
 
   return process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'system';
 }
-

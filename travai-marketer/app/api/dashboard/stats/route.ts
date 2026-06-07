@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
 import { listDocuments } from '@/lib/appwrite';
+import { syncLeadStatusesFromConversations } from '@/lib/crm-sync';
+import {
+  CRM_STATUS_ORDER,
+  buildPhoneVariants,
+  buildStatusCounts,
+  coerceLeadStatus,
+  getDisplayName,
+  normalizePhoneForMatch,
+} from '@/lib/crm';
 
 const TEAM_ID = process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
 
@@ -10,61 +19,128 @@ export async function GET(request: NextRequest) {
     const teamId = searchParams.get('teamId') || TEAM_ID;
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-    const [
-      leadsAll,
-      leadsNew,
-      leadsContacted,
-      leadsConverted,
-      leadsClosed,
-      activeConvos,
-      campaignsSent,
-      reviewsReplied,
-      recentConvos,
-      recentLeads,
-    ] = await Promise.allSettled([
-      listDocuments('leads', [Query.equal('teamId', teamId), Query.limit(1)]),
-      listDocuments('leads', [Query.equal('teamId', teamId), Query.equal('status', 'new'), Query.limit(1)]),
-      listDocuments('leads', [Query.equal('teamId', teamId), Query.equal('status', 'contacted'), Query.limit(1)]),
-      listDocuments('leads', [Query.equal('teamId', teamId), Query.equal('status', 'converted'), Query.limit(1)]),
-      listDocuments('leads', [Query.equal('teamId', teamId), Query.equal('status', 'closed'), Query.limit(1)]),
-      listDocuments('conversations', [
-        Query.equal('teamId', teamId),
-        Query.equal('sentBy', 'customer'),
-        Query.greaterThan('$createdAt', since24h),
-        Query.limit(1),
-      ]),
-      listDocuments('campaigns', [Query.equal('teamId', teamId), Query.equal('status', 'sent'), Query.limit(1)]),
-      listDocuments('gbp_reviews', [Query.equal('teamId', teamId), Query.equal('replyStatus', 'replied'), Query.limit(1)]),
-      listDocuments('conversations', [
-        Query.equal('teamId', teamId),
-        Query.orderDesc('$createdAt'),
-        Query.limit(5),
-      ]),
-      listDocuments('leads', [
-        Query.equal('teamId', teamId),
-        Query.orderDesc('$createdAt'),
-        Query.limit(5),
-      ]),
-    ]);
+    await syncLeadStatusesFromConversations(teamId).catch(() => null);
 
-    const get = (r: PromiseSettledResult<{ total?: number; documents?: unknown[] }>) =>
-      r.status === 'fulfilled' ? r.value : { total: 0, documents: [] };
+    const [leadsAll, activeConvos, campaignsSent, reviewsReplied, recentConvos, recentLeads, customers] =
+      await Promise.allSettled([
+        listDocuments('leads', [Query.equal('teamId', teamId), Query.limit(500)]),
+        listDocuments('conversations', [
+          Query.equal('teamId', teamId),
+          Query.equal('sentBy', 'customer'),
+          Query.greaterThan('$createdAt', since24h),
+          Query.limit(1),
+        ]),
+        listDocuments('campaigns', [
+          Query.equal('teamId', teamId),
+          Query.equal('status', 'sent'),
+          Query.limit(1),
+        ]),
+        listDocuments('gbp_reviews', [
+          Query.equal('teamId', teamId),
+          Query.equal('replyStatus', 'replied'),
+          Query.limit(1),
+        ]),
+        listDocuments('conversations', [
+          Query.equal('teamId', teamId),
+          Query.orderDesc('$createdAt'),
+          Query.limit(5),
+        ]),
+        listDocuments('leads', [
+          Query.equal('teamId', teamId),
+          Query.orderDesc('$createdAt'),
+          Query.limit(5),
+        ]),
+        listDocuments('customers', [Query.equal('teamId', teamId), Query.limit(500)]),
+      ]);
 
-    const totalLeads = (get(leadsAll) as { total?: number }).total ?? 0;
+    const get = (result: PromiseSettledResult<{ total?: number; documents?: unknown[] }>) =>
+      result.status === 'fulfilled' ? result.value : { total: 0, documents: [] };
+
+    const allLeads = (get(leadsAll).documents || []) as Array<{
+      $id?: string;
+      phone?: string;
+      name?: string | null;
+      email?: string | null;
+      status?: string | null;
+      createdAt?: string;
+      updatedAt?: string;
+      $createdAt?: string;
+    }>;
+    const customerDocs = (get(customers).documents || []) as Array<{ phone?: string; name?: string | null }>;
+    const customerByPhone = new Map<string, string>();
+    for (const customer of customerDocs) {
+      for (const variant of buildPhoneVariants(customer.phone)) {
+        if (customer.name) {
+          customerByPhone.set(variant, customer.name);
+        }
+      }
+    }
+
+    const uniqueLeadMap = new Map<string, (typeof allLeads)[number]>();
+    for (const lead of allLeads) {
+      const key = normalizePhoneForMatch(lead.phone) || lead.$id || String(Math.random());
+      const existing = uniqueLeadMap.get(key);
+      if (!existing) {
+        uniqueLeadMap.set(key, lead);
+        continue;
+      }
+
+      const existingStatusRank = CRM_STATUS_ORDER.indexOf(coerceLeadStatus(existing.status));
+      const nextStatusRank = CRM_STATUS_ORDER.indexOf(coerceLeadStatus(lead.status));
+      const existingTime = new Date(existing.updatedAt || existing.createdAt || existing.$createdAt || 0).getTime();
+      const nextTime = new Date(lead.updatedAt || lead.createdAt || lead.$createdAt || 0).getTime();
+
+      if (nextStatusRank > existingStatusRank || (nextStatusRank === existingStatusRank && nextTime > existingTime)) {
+        uniqueLeadMap.set(key, lead);
+      }
+    }
+
+    const normalizedLeads = Array.from(uniqueLeadMap.values()).map((lead) => ({
+      ...lead,
+      status: coerceLeadStatus(lead.status),
+    }));
+    const leadsByStatus = buildStatusCounts(normalizedLeads);
+
+    const recentLeadDocs = normalizedLeads
+      .sort(
+        (a, b) =>
+          new Date(b.updatedAt || b.createdAt || b.$createdAt || 0).getTime() -
+          new Date(a.updatedAt || a.createdAt || a.$createdAt || 0).getTime()
+      )
+      .slice(0, 5)
+      .map((lead) => ({
+        ...lead,
+        status: coerceLeadStatus(lead.status),
+        name:
+          lead.name ||
+          customerByPhone.get(buildPhoneVariants(lead.phone)[0] || '') ||
+          lead.phone ||
+          'Unknown',
+      }));
+
+    const recentConversationDocs = ((get(recentConvos).documents || []) as Array<{
+      $id: string;
+      phone?: string;
+      message?: string;
+      createdAt?: string;
+      $createdAt?: string;
+    }>).map((conversation) => ({
+      ...conversation,
+      name: getDisplayName({
+        customerName: customerByPhone.get(buildPhoneVariants(conversation.phone)[0] || '') || null,
+        phone: conversation.phone || null,
+      }),
+    }));
 
     return NextResponse.json({
-      totalLeads,
-      activeConversations: (get(activeConvos) as { total?: number }).total ?? 0,
-      campaignsSent: (get(campaignsSent) as { total?: number }).total ?? 0,
-      reviewsReplied: (get(reviewsReplied) as { total?: number }).total ?? 0,
-      leadsByStatus: {
-        new: (get(leadsNew) as { total?: number }).total ?? 0,
-        contacted: (get(leadsContacted) as { total?: number }).total ?? 0,
-        converted: (get(leadsConverted) as { total?: number }).total ?? 0,
-        closed: (get(leadsClosed) as { total?: number }).total ?? 0,
-      },
-      recentConversations: (get(recentConvos) as { documents?: unknown[] }).documents ?? [],
-      recentLeads: (get(recentLeads) as { documents?: unknown[] }).documents ?? [],
+      totalLeads: normalizedLeads.length,
+      activeConversations: get(activeConvos).total ?? 0,
+      campaignsSent: get(campaignsSent).total ?? 0,
+      reviewsReplied: get(reviewsReplied).total ?? 0,
+      leadsByStatus,
+      statusOrder: CRM_STATUS_ORDER,
+      recentConversations: recentConversationDocs,
+      recentLeads: recentLeadDocs,
     });
   } catch (err) {
     console.error('[Dashboard Stats] Error:', err);

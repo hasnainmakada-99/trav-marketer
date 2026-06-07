@@ -1,0 +1,1400 @@
+   1: export type WorkflowIntent =
+   2:   | 'plan_holiday'
+   3:   | 'flights'
+   4:   | 'hotels'
+   5:   | 'transfer'
+   6:   | 'forex'
+   7:   | 'visa'
+   8:   | 'insurance'
+   9:   | 'mice'
+  10:   | 'booking_status'
+  11:   | 'callback_request'   // NEW: standalone "arrange callback" / "call me" requests
+  12:   | 'unknown';
+  13: 
+  14: export type WorkflowStage =
+  15:   | 'ask_destination'
+  16:   | 'ask_holiday_type'
+  17:   | 'ask_travel_details'
+  18:   | 'show_packages'          // deterministic (exclusive) or AI (personalized)
+  19:   | 'collect_lead'           // ask name + phone
+  20:   | 'ask_callback'           // ask preferred callback time
+  21:   | 'confirmed'              // all done — save lead to CRM
+  22:   | 'unknown';
+  23: 
+  24: export const PRIMARY_QUICK_MENU_OPTIONS = [
+  25:   'Plan a Holiday',
+  26:   'Flights',
+  27:   'Hotels',
+  28: ] as const;
+  29: 
+  30: export type WorkflowSlotMap = Partial<
+  31:   Record<
+  32:     | 'destination'
+  33:     | 'from_city'
+  34:     | 'to_city'
+  35:     | 'travel_time'
+  36:     | 'travellers'
+  37:     | 'departure_city'
+  38:     | 'nights'
+  39:     | 'checkin'
+  40:     | 'checkout'
+  41:     | 'budget_inr'
+  42:     | 'name'
+  43:     | 'phone'
+  44:     | 'email'
+  45:     | 'callback_time'
+  46:     | 'holiday_type'          // 'exclusive' | 'personalized'
+  47:     | 'hotel_preference'      // '3 star' | '4 star' | '5 star'
+  48:     | 'post_package_action',  // 'get_details' | 'get_itinerary' | 'customize' | 'arrange_callback'
+  49:     string
+  50:   >
+  51: >;
+  52: 
+  53: export type WorkflowState = {
+  54:   intent: WorkflowIntent;
+  55:   stage: WorkflowStage;
+  56:   source: 'locked_history' | 'selected_now' | 'detected_now';
+  57:   slots: WorkflowSlotMap;
+  58:   missingSlots: string[];
+  59:   complete: boolean;
+  60:   leadShouldBeSaved: boolean;
+  61: };
+  62: 
+  63: // ─── helpers ────────────────────────────────────────────────────────────────
+  64: 
+  65: function normalize(input: string) {
+  66:   return String(input || '').toLowerCase().trim().replace(/\s+/g, ' ');
+  67: }
+  68: 
+  69: function normalizeSelectionText(input: string) {
+  70:   return String(input || '')
+  71:     .toLowerCase()
+  72:     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+  73:     .replace(/\s+/g, ' ')
+  74:     .trim();
+  75: }
+  76: 
+  77: function hasAny(text: string, words: string[]) {
+  78:   return words.some((w) => text.includes(w));
+  79: }
+  80: 
+  81: function pick(regex: RegExp, text: string): string | null {
+  82:   const m = text.match(regex);
+  83:   if (!m?.[1]) return null;
+  84:   return m[1].trim();
+  85: }
+  86: 
+  87: // ─── fuzzy / typo matching ───────────────────────────────────────────────────
+  88: 
+  89: // Levenshtein edit distance between two strings (optimised 1-row version)
+  90: function levenshtein(a: string, b: string): number {
+  91:   if (a === b) return 0;
+  92:   if (a.length === 0) return b.length;
+  93:   if (b.length === 0) return a.length;
+  94:   const row: number[] = Array.from({ length: b.length + 1 }, (_, i) => i);
+  95:   for (let i = 1; i <= a.length; i++) {
+  96:     let prev = i;
+  97:     for (let j = 1; j <= b.length; j++) {
+  98:       const curr =
+  99:         a[i - 1] === b[j - 1]
+ 100:           ? row[j - 1]
+ 101:           : 1 + Math.min(row[j], prev, row[j - 1]);
+ 102:       row[j - 1] = prev;
+ 103:       prev = curr;
+ 104:     }
+ 105:     row[b.length] = prev;
+ 106:   }
+ 107:   return row[b.length];
+ 108: }
+ 109: 
+ 110: // Max edit-distance allowed for a keyword based on its length
+ 111: function maxDist(keyword: string): number {
+ 112:   const len = keyword.length;
+ 113:   if (len <= 3) return 0;   // short words: exact
+ 114:   if (len <= 5) return 1;   // medium: 1 typo
+ 115:   return 2;                  // long: up to 2 typos
+ 116: }
+ 117: 
+ 118: // Returns true if any whitespace-separated word in `text` is within
+ 119: // edit-distance of `keyword`, or if `text` contains `keyword` as a substring.
+ 120: function fuzzyWord(text: string, keyword: string): boolean {
+ 121:   if (text.includes(keyword)) return true;
+ 122:   const dist = maxDist(keyword);
+ 123:   if (dist === 0) return false;
+ 124:   return text.split(/[\s,]+/).some(
+ 125:     (w) => Math.abs(w.length - keyword.length) <= dist && levenshtein(w, keyword) <= dist
+ 126:   );
+ 127: }
+ 128: 
+ 129: // Returns true when text fuzzy-matches any of the supplied keywords
+ 130: function fuzzyAny(text: string, keywords: string[]): boolean {
+ 131:   return keywords.some((kw) => fuzzyWord(text, kw));
+ 132: }
+ 133: 
+ 134: // Corrects common single-word typos and returns a cleaned version of the text
+ 135: // so downstream keyword detection benefits automatically
+ 136: function autoCorrect(text: string): string {
+ 137:   const corrections: Record<string, string> = {
+ 138:     // holidays / plans
+ 139:     holday: 'holiday', holiay: 'holiday', holidya: 'holiday', holidy: 'holiday',
+ 140:     hoiday: 'holiday', holiyday: 'holiday',
+ 141:     // flights
+ 142:     fligths: 'flights', fligts: 'flights', flighst: 'flights', flites: 'flights',
+ 143:     flghts: 'flights', fligh: 'flight',
+ 144:     // hotels
+ 145:     hotles: 'hotels', hetols: 'hotels', hotles2: 'hotels',
+ 146:     // exclusive
+ 147:     exlcusive: 'exclusive', exclusvie: 'exclusive', exculsive: 'exclusive',
+ 148:     exclsuive: 'exclusive', exlusice: 'exclusive', exclisive: 'exclusive',
+ 149:     exclsuive2: 'exclusive',
+ 150:     // personalized
+ 151:     persomalized: 'personalized', personalzied: 'personalized',
+ 152:     personilized: 'personalized', peronalized: 'personalized',
+ 153:     persanalised: 'personalized', personalised: 'personalized',
+ 154:     // details / package
+ 155:     detials: 'details', detils: 'details', pakage: 'package', pacakge: 'package',
+ 156:     packge: 'package', deatils: 'details',
+ 157:     // itinerary
+ 158:     itineray: 'itinerary', itinarary: 'itinerary', itinarery: 'itinerary',
+ 159:     // callback
+ 160:     callbck: 'callback', calback: 'callback', calbak: 'callback',
+ 161:     // customize
+ 162:     custmize: 'customize', cusomize: 'customize', custumize: 'customize',
+ 163:     // arrange
+ 164:     arange: 'arrange', arrang: 'arrange',
+ 165:     // visa / transfer / forex
+ 166:     tranfer: 'transfer', transfar: 'transfer', trasnfer: 'transfer',
+ 167:     vsisa: 'visa', visaa: 'visa',
+ 168:     forx: 'forex', froex: 'forex',
+ 169:     // call me variants
+ 170:     'cal me': 'call me', 'call me': 'call me',
+ 171:   };
+ 172: 
+ 173:   return text
+ 174:     .split(' ')
+ 175:     .map((word) => {
+ 176:       const lower = word.toLowerCase();
+ 177:       return corrections[lower] !== undefined
+ 178:         ? word.replace(new RegExp(word, 'i'), corrections[lower])
+ 179:         : word;
+ 180:     })
+ 181:     .join(' ');
+ 182: }
+ 183: 
+ 184: function isGreetingLike(msg: string): boolean {
+ 185:   // Allow punctuation/emoji variants like "Hello!", "Hi 😊", "Good morning!!"
+ 186:   // but do not treat longer intent-bearing sentences as pure greetings.
+ 187:   const stripped = String(msg || '')
+ 188:     .toLowerCase()
+ 189:     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+ 190:     .replace(/\s+/g, ' ')
+ 191:     .trim();
+ 192:   return /^(hi|hello|hey|hlo|helo|namaste|yo|good morning|good afternoon|good evening)$/i.test(
+ 193:     stripped
+ 194:   );
+ 195: }
+ 196: 
+ 197: function detectHolidayType(raw: string): string | null {
+ 198:   const text = normalize(autoCorrect(raw));
+ 199:   // Personalized check first (more specific)
+ 200:   if (
+ 201:     fuzzyAny(text, ['personalized', 'personalised', 'personalise', 'customize', 'customise', 'custom']) ||
+ 202:     hasAny(text, ['personalized holidays', 'personalized holiday', 'customize holiday', 'custom holiday'])
+ 203:   ) {
+ 204:     return 'personalized';
+ 205:   }
+ 206:   if (fuzzyAny(text, ['exclusive'])) {
+ 207:     return 'exclusive';
+ 208:   }
+ 209:   return null;
+ 210: }
+ 211: 
+ 212: function detectPostPackageAction(raw: string): string | null {
+ 213:   const text = normalize(autoCorrect(raw));
+ 214:   if (
+ 215:     fuzzyAny(text, ['package details', 'get details']) ||
+ 216:     hasAny(text, ['package detail', 'get package'])
+ 217:   ) return 'get_details';
+ 218:   if (
+ 219:     fuzzyAny(text, ['itinerary']) ||
+ 220:     hasAny(text, ['day wise', 'day-wise', 'daywise', 'get day'])
+ 221:   ) return 'get_itinerary';
+ 222:   if (hasAny(text, ['select an option', 'select option', '1️⃣', '2️⃣', '3️⃣'])) return 'get_details';
+ 223:   if (
+ 224:     fuzzyAny(text, ['modify', 'customize', 'customise']) ||
+ 225:     hasAny(text, ['edit plan', 'change plan'])
+ 226:   ) return 'customize';
+ 227:   if (
+ 228:     fuzzyAny(text, ['callback', 'arrange']) &&
+ 229:     (text.includes('arrange') || text.includes('callback'))
+ 230:   ) return 'arrange_callback';
+ 231:   return null;
+ 232: }
+ 233: 
+ 234: function parseCallbackTime(raw: string): string | null {
+ 235:   const corrected = autoCorrect(raw);
+ 236: 
+ 237:   const explicit = pick(
+ 238:     /\b(?:callback|call me|call back|preferred time|available at|prefer|anytime|any time)\s*[:\-]?\s*([a-zA-Z0-9 :/-]{3,40})/i,
+ 239:     corrected
+ 240:   );
+ 241:   if (explicit) return explicit;
+ 242: 
+ 243:   // Day + optional time: "Today at 5 PM", "Tomorrow morning", "Saturday afternoon"
+ 244:   const timeExpr = corrected.match(
+ 245:     /\b(today|tomorrow|tonight|this\s+(?:morning|afternoon|evening|week|weekend)|monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+at\s+[\d:]+\s*(?:am|pm)?|\s+(?:morning|afternoon|evening|night|noon))?\b/i
+ 246:   );
+ 247:   if (timeExpr) return timeExpr[0].trim();
+ 248: 
+ 249:   // Just a time: "5 PM", "10:30 AM", "5pm"
+ 250:   const justTime = corrected.match(/\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i);
+ 251:   if (justTime) return justTime[0].trim();
+ 252: 
+ 253:   // "anytime", "asap", "as soon as possible", "earliest"
+ 254:   if (/\b(anytime|any time|asap|earliest|convenient|whenever)\b/i.test(corrected)) {
+ 255:     return corrected.trim();
+ 256:   }
+ 257: 
+ 258:   return null;
+ 259: }
+ 260: 
+ 261: function parseHotelPreference(raw: string): string | null {
+ 262:   const text = normalize(raw);
+ 263:   if (/\b5\s*star\b/.test(text) || text.includes('five star')) return '5 star';
+ 264:   if (/\b4\s*star\b/.test(text) || text.includes('four star')) return '4 star';
+ 265:   if (/\b3\s*star\b/.test(text) || text.includes('three star')) return '3 star';
+ 266:   return null;
+ 267: }
+ 268: 
+ 269: // Words that must NOT be treated as city names (bot menu text, service names, etc.)
+ 270: const NON_CITY_WORDS = new Set([
+ 271:   'forex', 'visa', 'insurance', 'transfer', 'mice', 'flight', 'flights',
+ 272:   'hotel', 'hotels', 'holiday', 'holidays', 'booking', 'status', 'or', 'and',
+ 273:   'the', 'type', 'service', 'plan', 'package', 'packages', 'exclusive',
+ 274:   'personalized', 'personalised', 'itinerary', 'traventions', 'details',
+ 275:   'sini', 'example', 'callback', 'contact', 'arrange', 'book', 'confirm',
+ 276:   'yes', 'no', 'okay', 'ok', 'sure', 'thanks', 'thank', 'please', 'help',
+ 277:   'support', 'speak', 'human', 'agent', 'team', 'name', 'number', 'phone',
+ 278: ]);
+ 279: 
+ 280: const CALLBACK_PHRASES = [
+ 281:   'arrange callback', 'arrange a callback', 'arrange call back',
+ 282:   'call me back', 'call back', 'callback', 'speak to support',
+ 283:   'customer support', 'speak to human', 'speak to agent', 'speak to team',
+ 284:   'contact support', 'talk to human', 'talk to agent', 'need help',
+ 285:   'i want to speak', 'want callback', 'want a callback', 'need callback',
+ 286: ];
+ 287: 
+ 288: // Try to parse comma-separated inputs:
+ 289: // Travel: "2 Adults, July, Bangalore, 5 Nights"
+ 290: // Lead:   "Sini, +91 9876543210, sini@gmail.com"
+ 291: function tryParseCommaFormat(raw: string, intent: WorkflowIntent, existingSlots: WorkflowSlotMap): WorkflowSlotMap {
+ 292:   const parts = raw.split(',').map((p) => p.trim()).filter(Boolean);
+ 293:   if (parts.length < 2) return {};
+ 294: 
+ 295:   const slots: WorkflowSlotMap = {};
+ 296:   const monthRx = /^(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*(\s+\d{4})?$/i;
+ 297:   const nightsRx = /^(\d+)\s*nights?$/i;
+ 298:   const travellersRx = /^(\d+)\s*(adults?|children|kids?|pax|persons?)/i;
+ 299:   const dateRx = /\d{1,2}(?:st|nd|rd|th)?\s+\w+|\w+\s+\d{1,2}(?:st|nd|rd|th)?/i;
+ 300:   const hotelRx = /\d\s*star\s*(hotel)?|luxury|premium/i;
+ 301:   const emailRx = /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i;
+ 302:   const phoneRx = /^\+?\d[\d\s-]{6,14}\d$/;
+ 303: 
+ 304:   // Detect parts that contain a month name (in any position, e.g. "june mid", "mid-June")
+ 305:   const containsMonthRx = /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\b/i;
+ 306: 
+ 307:   const travellersAccum: string[] = [];
+ 308:   const unclassified: string[] = [];
+ 309: 
+ 310:   for (const part of parts) {
+ 311:     const lp = normalize(part);
+ 312:     if (emailRx.test(lp)) {
+ 313:       if (!slots.email) slots.email = part.trim().toLowerCase();
+ 314:     } else if (phoneRx.test(part.trim())) {
+ 315:       if (!slots.phone) slots.phone = part.trim().replace(/\s+/g, '');
+ 316:     } else if (monthRx.test(lp) || (containsMonthRx.test(part) && /^[a-zA-Z\s-]+$/.test(part))) {
+ 317:       // Captures "june", "june mid", "mid-June", "early July" etc.
+ 318:       if (!slots.travel_time) slots.travel_time = part;
+ 319:     } else if (nightsRx.test(lp)) {
+ 320:       const m = lp.match(/^(\d+)/);
+ 321:       if (m) slots.nights = m[1];
+ 322:     } else if (travellersRx.test(lp)) {
+ 323:       travellersAccum.push(part);
+ 324:     } else if (hotelRx.test(lp)) {
+ 325:       slots.hotel_preference = lp.replace(/\s*hotels?\s*/g, '').trim();
+ 326:     } else if (!slots.travel_time && dateRx.test(part) && /\d/.test(part)) {
+ 327:       slots.travel_time = part;
+ 328:     } else if (/^\d+$/.test(part.trim()) && !travellersAccum.length && !slots.travellers) {
+ 329:       // Standalone digit (e.g. "2") — treat as traveller count
+ 330:       travellersAccum.push(part.trim());
+ 331:     } else {
+ 332:       unclassified.push(part);
+ 333:     }
+ 334:   }
+ 335: 
+ 336:   if (travellersAccum.length > 0) {
+ 337:     slots.travellers = travellersAccum.join(', ');
+ 338:   }
+ 339: 
+ 340:   // If email or phone were extracted, treat a short alpha unclassified part as the name
+ 341:   if ((slots.email || slots.phone) && !existingSlots.name) {
+ 342:     const namePart = unclassified.find(
+ 343:       (p) => /^[a-zA-Z .'-]{2,40}$/.test(p) && !NON_CITY_WORDS.has(normalize(p))
+ 344:     );
+ 345:     if (namePart) slots.name = namePart;
+ 346:   }
+ 347: 
+ 348:   // Remaining unclassified strings may be city names — apply blocklist
+ 349:   const safeCityPart = (candidate: string) => {
+ 350:     const key = normalize(candidate).trim();
+ 351:     // Exclude parts that contain a month name — those are travel dates, not cities
+ 352:     if (containsMonthRx.test(candidate)) return false;
+ 353:     if (/\d/.test(candidate)) return false;
+ 354:     return /^[a-zA-Z\s.'-]{2,30}$/.test(candidate) && !NON_CITY_WORDS.has(key);
+ 355:   };
+ 356: 
+ 357:   const cities = unclassified.filter(safeCityPart);
+ 358:   if (intent === 'plan_holiday') {
+ 359:     if (existingSlots.destination) {
+ 360:       // In travel-details step, a single city usually means departure city.
+ 361:       if (!existingSlots.departure_city && cities[0]) slots.departure_city = cities[0];
+ 362:     } else if (!existingSlots.destination && cities[0]) {
+ 363:       slots.destination = cities[0];
+ 364:       if (!existingSlots.departure_city && cities[1]) slots.departure_city = cities[1];
+ 365:     }
+ 366:   }
+ 367:   if (intent === 'hotels') {
+ 368:     if (!existingSlots.destination && cities[0]) slots.destination = cities[0];
+ 369:   }
+ 370:   if (intent === 'flights') {
+ 371:     if (!existingSlots.from_city && cities[0]) slots.from_city = cities[0];
+ 372:     if (!existingSlots.to_city && cities[1]) slots.to_city = cities[1];
+ 373:   }
+ 374: 
+ 375:   return slots;
+ 376: }
+ 377: 
+ 378: function parseGeneralSlots(
+ 379:   message: string,
+ 380:   intent: WorkflowIntent = 'unknown',
+ 381:   knownSlots: WorkflowSlotMap = {}
+ 382: ): WorkflowSlotMap {
+ 383:   const raw = autoCorrect(String(message || '').trim()); // fix typos first
+ 384:   const text = normalize(raw);
+ 385:   const slots: WorkflowSlotMap = {};
+ 386: 
+ 387:   // New slot types
+ 388:   const ht = detectHolidayType(raw);
+ 389:   if (ht) slots.holiday_type = ht;
+ 390: 
+ 391:   const hp = parseHotelPreference(raw);
+ 392:   if (hp) slots.hotel_preference = hp;
+ 393: 
+ 394:   const ppa = detectPostPackageAction(raw);
+ 395:   if (ppa) slots.post_package_action = ppa;
+ 396: 
+ 397:   // from → to for flights
+ 398:   const fromTo = raw.match(/\bfrom\s+([a-zA-Z .'-]+?)\s+to\s+([a-zA-Z .'-]+?)(?:\s|,|$)/i);
+ 399:   if (fromTo?.[1] && fromTo?.[2]) {
+ 400:     slots.from_city = fromTo[1].trim();
+ 401:     slots.to_city = fromTo[2].trim();
+ 402:   } else {
+ 403:     // Common compact route input: "Delhi to Mumbai, 25th June, 2 Adults"
+ 404:     const compactFromTo = raw.match(
+ 405:       /(?:^|,|\broute\b\s*[:\-]?\s*)([a-zA-Z][a-zA-Z .'-]{1,28})\s+to\s+([a-zA-Z][a-zA-Z .'-]{1,28})(?=,|$|\s+\d)/i
+ 406:     );
+ 407:     if (compactFromTo?.[1] && compactFromTo?.[2]) {
+ 408:       slots.from_city = compactFromTo[1].trim();
+ 409:       slots.to_city = compactFromTo[2].trim();
+ 410:     }
+ 411:   }
+ 412: 
+ 413:   if (!slots.destination) {
+ 414:     // Require colon/dash after "destination" to avoid capturing question phrases
+ 415:     const destination = pick(
+ 416:       /\b(?:going to|visit|trip to|holiday to|for hotels in|destination\s*[:\-])\s*([a-zA-Z .'-]{2,40})/i,
+ 417:       raw
+ 418:     );
+ 419:     if (destination) slots.destination = destination;
+ 420:   }
+ 421:   if (!slots.destination && slots.to_city) {
+ 422:     slots.destination = slots.to_city;
+ 423:   }
+ 424: 
+ 425:   // Short standalone response (1-3 alpha words) is likely a destination when in plan_holiday or hotels context
+ 426:   if ((intent === 'plan_holiday' || intent === 'hotels') && !slots.destination) {
+ 427:     const words = raw.trim().split(/\s+/);
+ 428:     const isShortAlpha = words.length <= 3 && words.every((w) => /^[a-zA-Z.'-]+$/.test(w));
+ 429:     const NOT_DESTINATIONS = new Set([
+ 430:       'plan a holiday', 'plan holiday', 'flights', 'hotels', 'exclusive', 'personalized',
+ 431:       'personalised', 'yes', 'no', 'ok', 'okay', 'hi', 'hello', 'hey',
+ 432:     ]);
+ 433:     const hasTravelSlots =
+ 434:       Boolean(slots.travellers) || Boolean(slots.travel_time) ||
+ 435:       Boolean(slots.departure_city) || Boolean(slots.nights);
+ 436:     const normalizedRaw = normalize(raw);
+ 437:     const looksLikeCallback =
+ 438:       Boolean(slots.post_package_action) ||
+ 439:       CALLBACK_PHRASES.some((p) => normalizedRaw.includes(p)) ||
+ 440:       /\b(callback|call me|call back|arrange|support|speak to|contact us|speak to human|help me)\b/i.test(raw);
+ 441:     if (isShortAlpha && !hasTravelSlots && !looksLikeCallback && !NOT_DESTINATIONS.has(normalizedRaw)) {
+ 442:       slots.destination = raw.trim();
+ 443:     }
+ 444:   }
+ 445: 
+ 446:   // Month/date extraction — keyword-prefixed
+ 447:   const travelTime = pick(
+ 448:     /\b(?:travel month|travel date|travel dates|date|on|in)\s*[:\-]?\s*([a-zA-Z0-9 ,/-]{3,40})/i,
+ 449:     raw
+ 450:   );
+ 451:   if (travelTime) slots.travel_time = travelTime;
+ 452: 
+ 453:   // Month/date extraction — standalone (e.g. "july", "10th July")
+ 454:   if (!slots.travel_time) {
+ 455:     const monthMatch = raw.match(
+ 456:       /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)(?:\s+\d{4})?\b/i
+ 457:     );
+ 458:     if (monthMatch) slots.travel_time = monthMatch[0].trim();
+ 459:   }
+ 460:   if (!slots.travel_time) {
+ 461:     const dateMatch = raw.match(
+ 462:       /\b(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2}(?:st|nd|rd|th)?)\b/i
+ 463:     );
+ 464:     if (dateMatch) slots.travel_time = dateMatch[0].trim();
+ 465:   }
+ 466: 
+ 467:   // Travellers
+ 468:   const travFull = raw.match(
+ 469:     /\b(\d+\s*adults?\s*(?:,?\s*(?:and\s+)?\d+\s*(?:children|kids?|child))?)\b/i
+ 470:   );
+ 471:   if (travFull) {
+ 472:     slots.travellers = travFull[1].trim();
+ 473:   } else {
+ 474:     const travellers = pick(
+ 475:       /\b(?:travellers|travelers|traveller count|pax|passengers)\s*[:\-]?\s*([a-zA-Z0-9 ,/+]{1,30})/i,
+ 476:       raw
+ 477:     );
+ 478:     if (travellers) slots.travellers = travellers;
+ 479:     else {
+ 480:       const pax = pick(/\b(\d+)\s*(?:pax|passengers?|adults?)\b/i, raw);
+ 481:       if (pax) slots.travellers = pax;
+ 482:     }
+ 483:   }
+ 484: 
+ 485:   const departure = pick(
+ 486:     /\b(?:departure city|departing from|from city)\s*[:\-]?\s*([a-zA-Z .'-]{2,40})/i,
+ 487:     raw
+ 488:   );
+ 489:   if (departure) slots.departure_city = departure;
+ 490:   if (!slots.departure_city && slots.from_city) {
+ 491:     slots.departure_city = slots.from_city;
+ 492:   }
+ 493:   // "from [city]" pattern — catches "from Ahmedabad", "from Delhi" in holiday/hotel context
+ 494:   if (!slots.departure_city && (intent === 'plan_holiday' || intent === 'hotels')) {
+ 495:     const fromM = raw.match(/\bfrom\s+([a-zA-Z][a-zA-Z .'-]{1,28})(?=[\s,]|$)/i);
+ 496:     if (fromM) {
+ 497:       const candidate = fromM[1].trim();
+ 498:       const key = normalize(candidate);
+ 499:       const hasMonth = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\b/i.test(candidate);
+ 500:       if (!hasMonth && !NON_CITY_WORDS.has(key) && !/\d/.test(candidate)) {
+ 501:         slots.departure_city = candidate;
+ 502:       }
+ 503:     }
+ 504:   }
+ 505: 
+ 506:   const nights = pick(/\b(\d+)\s*(?:nights?|night stay)\b/i, raw);
+ 507:   if (nights) slots.nights = nights;
+ 508: 
+ 509:   const checkIn = pick(/\b(?:check[\s-]?in)\s*[:\-]?\s*([a-zA-Z0-9 ,/-]{3,30})/i, raw);
+ 510:   const checkOut = pick(/\b(?:check[\s-]?out)\s*[:\-]?\s*([a-zA-Z0-9 ,/-]{3,30})/i, raw);
+ 511:   if (checkIn) slots.checkin = checkIn;
+ 512:   if (checkOut) slots.checkout = checkOut;
+ 513: 
+ 514:   const budget = pick(
+ 515:     /\b(?:budget|approx budget)\s*[:\-]?\s*(?:₹|inr)?\s*([0-9., ]+\s*[kKmM]?)\b/i,
+ 516:     raw
+ 517:   );
+ 518:   if (budget) slots.budget_inr = budget.toUpperCase().replace(/\s+/g, ' ');
+ 519: 
+ 520:   const email = pick(/\b([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})\b/i, text);
+ 521:   if (email) slots.email = email;
+ 522: 
+ 523:   const phone = pick(/\b(\+?\d[\d\s-]{7,14}\d)\b/, raw);
+ 524:   if (phone) slots.phone = phone.replace(/\s+/g, '');
+ 525: 
+ 526:   if (!slots.name) {
+ 527:     const name = pick(/\b(?:name|full name|i am|i'm|my name is)\s*[:\-]?\s*([a-zA-Z .'-]{2,40})/i, raw);
+ 528:     if (name) slots.name = name;
+ 529:   }
+ 530:   // Name from comma format is handled in tryParseCommaFormat
+ 531: 
+ 532:   const callbackTime = parseCallbackTime(raw);
+ 533:   if (callbackTime) slots.callback_time = callbackTime;
+ 534: 
+ 535:   // Try comma-separated format if we still have missing common fields
+ 536:   const commaSlots = tryParseCommaFormat(raw, intent, { ...knownSlots, ...slots });
+ 537:   return mergeSlots(slots, commaSlots);
+ 538: }
+ 539: 
+ 540: function mergeSlots(base: WorkflowSlotMap, next: WorkflowSlotMap): WorkflowSlotMap {
+ 541:   const merged = { ...base };
+ 542:   for (const [key, val] of Object.entries(next)) {
+ 543:     if (val && !merged[key as keyof WorkflowSlotMap]) {
+ 544:       (merged as Record<string, string>)[key] = val;
+ 545:     }
+ 546:   }
+ 547:   return merged;
+ 548: }
+ 549: 
+ 550: // ─── stage resolution ────────────────────────────────────────────────────────
+ 551: 
+ 552: function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowStage {
+ 553:   if (intent === 'unknown') return 'unknown';
+ 554: 
+ 555:   // Standalone callback request (no prior travel service)
+ 556:   if (intent === 'callback_request') {
+ 557:     if (!slots.name || !slots.phone) return 'collect_lead';
+ 558:     return slots.callback_time ? 'confirmed' : 'ask_callback';
+ 559:   }
+ 560: 
+ 561:   // If user explicitly requests a callback at ANY stage, skip travel collection
+ 562:   // and go straight to collecting contact info → callback time.
+ 563:   if (slots.post_package_action === 'arrange_callback') {
+ 564:     const hasRequiredLead = Boolean(slots.name && slots.phone);
+ 565:     if (!hasRequiredLead) return 'collect_lead';
+ 566:     return slots.callback_time ? 'confirmed' : 'ask_callback';
+ 567:   }
+ 568: 
+ 569:   if (intent === 'plan_holiday') {
+ 570:     if (!slots.destination) return 'ask_destination';
+ 571:     if (!slots.holiday_type) return 'ask_holiday_type';
+ 572: 
+ 573:     const travelMissing =
+ 574:       !slots.travellers || !slots.travel_time || !slots.departure_city || !slots.nights;
+ 575:     const needsHotelPref = slots.holiday_type === 'personalized' && !slots.hotel_preference;
+ 576: 
+ 577:     if (travelMissing || needsHotelPref) return 'ask_travel_details';
+ 578: 
+ 579:     const hasPostAction = Boolean(slots.post_package_action);
+ 580:     const hasContactStart = Boolean(slots.name || slots.phone);
+ 581:     const hasRequiredLead = Boolean(slots.name && slots.phone);
+ 582: 
+ 583:     if (hasPostAction || hasContactStart) {
+ 584:       if (!hasRequiredLead) return 'collect_lead';
+ 585:       return slots.callback_time ? 'confirmed' : 'ask_callback';
+ 586:     }
+ 587: 
+ 588:     return 'show_packages';
+ 589:   }
+ 590: 
+ 591:   if (intent === 'flights') {
+ 592:     if (!slots.from_city || !slots.to_city || !slots.travel_time || !slots.travellers) {
+ 593:       return 'ask_travel_details';
+ 594:     }
+ 595:     const hasPostAction = Boolean(slots.post_package_action);
+ 596:     const hasContactStart = Boolean(slots.name || slots.phone);
+ 597:     const hasRequiredLead = Boolean(slots.name && slots.phone);
+ 598:     if (hasPostAction || hasContactStart) {
+ 599:       if (!hasRequiredLead) return 'collect_lead';
+ 600:       return slots.callback_time ? 'confirmed' : 'ask_callback';
+ 601:     }
+ 602:     return 'show_packages';
+ 603:   }
+ 604: 
+ 605:   if (intent === 'hotels') {
+ 606:     if (!slots.destination || !slots.travellers || !slots.travel_time || !slots.nights) {
+ 607:       return 'ask_travel_details';
+ 608:     }
+ 609:     const hasPostAction = Boolean(slots.post_package_action);
+ 610:     const hasContactStart = Boolean(slots.name || slots.phone);
+ 611:     const hasRequiredLead = Boolean(slots.name && slots.phone);
+ 612:     if (hasPostAction || hasContactStart) {
+ 613:       if (!hasRequiredLead) return 'collect_lead';
+ 614:       return slots.callback_time ? 'confirmed' : 'ask_callback';
+ 615:     }
+ 616:     return 'show_packages';
+ 617:   }
+ 618: 
+ 619:   // Other intents: transfer, forex, visa, insurance, mice, booking_status
+ 620:   if (!slots.name || !slots.phone) return 'collect_lead';
+ 621:   return slots.callback_time ? 'confirmed' : 'ask_callback';
+ 622: }
+ 623: 
+ 624: // ─── public API ─────────────────────────────────────────────────────────────
+ 625: 
+ 626: function shouldResetState(message: string): boolean {
+ 627:   const text = normalize(message);
+ 628:   return hasAny(text, [
+ 629:     'start over', 'reset', 'new request', 'new enquiry', 'new inquiry',
+ 630:     'main menu', 'go back', 'back to menu', 'restart', 'cancel',
+ 631:     'start again', 'start fresh', 'begin again',
+ 632:   ]);
+ 633: }
+ 634: 
+ 635: // Returns true when the user's message looks like a question or off-topic text
+ 636: // that the AI should handle with a brief answer before re-asking the required info.
+ 637: export function isQuestionLike(message: string): boolean {
+ 638:   const t = normalize(message);
+ 639:   if (t.endsWith('?')) return true;
+ 640:   if (/^(what|how|why|when|where|who|which|can|is|are|do|does|will|should|could|would|tell me)\b/.test(t)) return true;
+ 641:   if (/\b(tell me|explain|information about|info about|what about)\b/.test(t)) return true;
+ 642:   return false;
+ 643: }
+ 644: 
+ 645: function findLockedIntentFromHistory(historyMessages: string[]): WorkflowIntent | null {
+ 646:   for (let i = historyMessages.length - 1; i >= 0; i--) {
+ 647:     const msg = historyMessages[i] || '';
+ 648:     // A greeting marks the start of a new session — stop scanning here so old
+ 649:     // session messages cannot bleed their intent into the current session.
+ 650:     if (isGreetingLike(msg)) break;
+ 651:     const intent = detectWorkflowIntent(msg);
+ 652:     if (intent !== 'unknown') return intent;
+ 653:   }
+ 654:   return null;
+ 655: }
+ 656: 
+ 657: // Returns the index in historyMessages from which to START parsing slots.
+ 658: // Scopes slot accumulation to the current session + current service selection
+ 659: // so old-session data and switched-service data never pollute the current flow.
+ 660: function findSlotStartIndex(historyMessages: string[], intent: WorkflowIntent): number {
+ 661:   // Step 1: last greeting = session boundary
+ 662:   let sessionStart = 0;
+ 663:   for (let i = historyMessages.length - 1; i >= 0; i--) {
+ 664:     if (isGreetingLike(historyMessages[i])) {
+ 665:       sessionStart = i + 1;
+ 666:       break;
+ 667:     }
+ 668:   }
+ 669: 
+ 670:   // Step 2: within session, find last explicit service selection for this intent.
+ 671:   // E.g. if user did Hotels → then switched to "Plan a Holiday", we start
+ 672:   // accumulating slots from the "Plan a Holiday" message, ignoring the Hotels part.
+ 673:   for (let i = historyMessages.length - 1; i >= sessionStart; i--) {
+ 674:     const msg = historyMessages[i];
+ 675:     if (isDirectServiceSelection(msg) && detectWorkflowIntent(msg) === intent) {
+ 676:       return i; // include this message (defines intent) onward
+ 677:     }
+ 678:   }
+ 679: 
+ 680:   return sessionStart;
+ 681: }
+ 682: 
+ 683: // Returns true only when the message is an explicit, unambiguous service selection
+ 684: // (button tap, single keyword, or "Plan a Holiday" / "Flights" / "Hotels").
+ 685: // Used to decide whether the current message can override a locked intent from history.
+ 686: function isDirectServiceSelection(message: string): boolean {
+ 687:   const text = normalizeSelectionText(message);
+ 688:   if (/^(svc_1|svc_2|svc_3|1|2|3)$/.test(text)) return true;
+ 689:   if (/^(plan a holiday|plan holiday|flights?|hotels?|visa|transfer|forex|insurance|mice|booking status)$/.test(text)) {
+ 690:     return true;
+ 691:   }
+ 692:   // Accept common interactive payload variants like:
+ 693:   // "1 plan a holiday", "2 flights", "3 hotels"
+ 694:   if (/^(1|2|3)\s+(plan a holiday|plan holiday|flights?|hotels?)$/.test(text)) return true;
+ 695:   return false;
+ 696: }
+ 697: 
+ 698: // Primary menu/service taps should start a fresh requirement-collection flow.
+ 699: // (Digits intentionally excluded so "1/2/3" can still act as package selection in show_packages.)
+ 700: function isPrimaryServiceSelection(message: string): boolean {
+ 701:   const text = normalizeSelectionText(message);
+ 702:   if (/^(svc_1|svc_2|svc_3|plan a holiday|plan holiday|flights?|hotels?)$/.test(text)) return true;
+ 703:   // Handle interactive labels that include numeric prefixes.
+ 704:   if (/^(1|2|3)\s+(plan a holiday|plan holiday|flights?|hotels?)$/.test(text)) return true;
+ 705:   return false;
+ 706: }
+ 707: 
+ 708: export function resolveWorkflowState(args: {
+ 709:   userMessage: string;
+ 710:   classifiedIntent?: string;
+ 711:   selectedIntent?: WorkflowIntent | null;
+ 712:   aiSlots?: WorkflowSlotMap;
+ 713:   historyMessages?: string[];
+ 714: }): WorkflowState {
+ 715:   const historyMessages = args.historyMessages || [];
+ 716:   const msgIntent = detectWorkflowIntent(args.userMessage, args.classifiedIntent);
+ 717:   const selected = args.selectedIntent && args.selectedIntent !== 'unknown' ? args.selectedIntent : null;
+ 718:   const locked = (shouldResetState(args.userMessage) || isGreetingLike(args.userMessage))
+ 719:     ? null
+ 720:     : findLockedIntentFromHistory(historyMessages);
+ 721: 
+ 722:   // Locked intent from history wins unless the current message is an explicit,
+ 723:   // unambiguous service selection (button tap / single keyword).
+ 724:   // This prevents travel-detail messages like "2 Adults, July, Bangalore, 5 Nights"
+ 725:   // from accidentally overriding the locked plan_holiday intent.
+ 726:   const canOverrideLocked = !locked || isDirectServiceSelection(args.userMessage);
+ 727:   // resolvedOverride: prefer explicitly-passed selectedIntent, fall back to detected msgIntent.
+ 728:   // This ensures that when the user taps "Hotels" and locked='plan_holiday', the Hotels
+ 729:   // intent wins (selected is null but msgIntent='hotels', so resolvedOverride='hotels').
+ 730:   const resolvedOverride: WorkflowIntent | null =
+ 731:     selected ?? (msgIntent !== 'unknown' ? msgIntent : null);
+ 732:   const intent: WorkflowIntent =
+ 733:     (canOverrideLocked && resolvedOverride)
+ 734:       ? resolvedOverride
+ 735:       : locked
+ 736:         ? locked
+ 737:         : selected || (msgIntent !== 'unknown' ? msgIntent : 'unknown');
+ 738:   const source: WorkflowState['source'] = (canOverrideLocked && resolvedOverride)
+ 739:     ? (selected ? 'selected_now' : 'detected_now')
+ 740:     : locked
+ 741:       ? 'locked_history'
+ 742:       : 'detected_now';
+ 743: 
+ 744:   if (intent === 'unknown') {
+ 745:     return { intent, stage: 'unknown', source, slots: {}, missingSlots: [], complete: false, leadShouldBeSaved: false };
+ 746:   }
+ 747: 
+ 748:   // Only accumulate slots from the current session + current service selection.
+ 749:   // Prevents old-session data (e.g. previous travellers/dates/post_package_action)
+ 750:   // from polluting a fresh conversation and making the bot skip stages.
+ 751:   const slotStart = isPrimaryServiceSelection(args.userMessage)
+ 752:     ? historyMessages.length
+ 753:     : findSlotStartIndex(historyMessages, intent);
+ 754:   const sessionMessages = historyMessages.slice(slotStart);
+ 755: 
+ 756:   // Lead slots (name, phone, email, callback_time) require special scoping.
+ 757:   // They must NOT be pulled from session history when the user has just triggered
+ 758:   // lead collection (by tapping Arrange Callback / Get Details) — old-session contact
+ 759:   // info would otherwise skip the collect_lead stage entirely.
+ 760:   // Strategy:
+ 761:   // This is a sample change at line 741 to make sure oracle is keeping up with the new changes
+ 762:   //   1. Parse only travel/service slots from full session history.
+ 763:   //   2. Find the last message in session history that set post_package_action.
+ 764:   //   3. Only if that anchor exists (we're CONTINUING lead collection, not starting it),
+ 765:   //      pull lead slots from messages strictly AFTER the anchor — and only if no
+ 766:   //      service-selection reset happened after it.
+ 767:   //   4. Always parse all slots from the current message.
+ 768:   const LEAD_SLOT_KEYS = ['name', 'phone', 'email', 'callback_time'] as const;
+ 769: 
+ 770:   let slots: WorkflowSlotMap = {};
+ 771:   for (const item of sessionMessages) {
+ 772:     const parsed = parseGeneralSlots(item, intent, slots);
+ 773:     const travelOnly = { ...parsed };
+ 774:     for (const k of LEAD_SLOT_KEYS) delete travelOnly[k];
+ 775:     slots = mergeSlots(slots, travelOnly);
+ 776:   }
+ 777: 
+ 778:   // Find last post_package_action anchor in session history
+ 779:   let lastPpaIdx = -1;
+ 780:   for (let i = sessionMessages.length - 1; i >= 0; i--) {
+ 781:     const p = parseGeneralSlots(sessionMessages[i], intent, {});
+ 782:     if (p.post_package_action) { lastPpaIdx = i; break; }
+ 783:   }
+ 784:   if (lastPpaIdx !== -1) {
+ 785:     // Verify no service-selection reset happened after the anchor
+ 786:     const afterAnchor = sessionMessages.slice(lastPpaIdx + 1);
+ 787:     const resetAfter = afterAnchor.some(m => isDirectServiceSelection(m) || isGreetingLike(m));
+ 788:     if (!resetAfter) {
+ 789:       for (const item of afterAnchor) {
+ 790:         const parsed = parseGeneralSlots(item, intent, slots);
+ 791:         for (const k of LEAD_SLOT_KEYS) {
+ 792:           if (parsed[k] && !slots[k]) (slots as Record<string, string>)[k] = parsed[k] as string;
+ 793:         }
+ 794:       }
+ 795:     }
+ 796:   }
+ 797: 
+ 798:   slots = mergeSlots(slots, parseGeneralSlots(args.userMessage, intent, slots));
+ 799:   // AI-extracted slot hints are a fallback layer: they only fill still-missing fields
+ 800:   // and never override slots already captured by deterministic parsing.
+ 801:   if (args.aiSlots) {
+ 802:     slots = mergeSlots(slots, args.aiSlots);
+ 803:   }
+ 804: 
+ 805:   // SAFETY: Prevent lead bleed from skipping collect_lead.
+ 806:   // If the current message sets post_package_action AND no lead has been
+ 807:   // explicitly provided AFTER the last post_package_action in session history,
+ 808:   // clear any accidentally accumulated lead slots so the bot always asks fresh.
+ 809:   const currentMsgPpa = parseGeneralSlots(args.userMessage, intent, {}).post_package_action;
+ 810:   if (currentMsgPpa) {
+ 811:     const msgsAfterLastPpa = lastPpaIdx !== -1
+ 812:       ? sessionMessages.slice(lastPpaIdx + 1)
+ 813:       : [];
+ 814:     const leadProvidedAfterPpa = msgsAfterLastPpa.some(m => {
+ 815:       const p = parseGeneralSlots(m, intent, {});
+ 816:       return Boolean(p.name || p.phone || p.email);
+ 817:     });
+ 818:     if (!leadProvidedAfterPpa) {
+ 819:       delete slots.name;
+ 820:       delete slots.phone;
+ 821:       delete slots.email;
+ 822:       delete slots.callback_time;
+ 823:     }
+ 824:   }
+ 825: 
+ 826:   // If "customize" is selected as post_package_action, switch to personalized
+ 827:   if (slots.post_package_action === 'customize') {
+ 828:     slots.holiday_type = 'personalized';
+ 829:   }
+ 830: 
+ 831:   // Stage-aware overrides — applied BEFORE final stage resolution.
+ 832:   const preStage = resolveStage(intent, slots);
+ 833: 
+ 834:   // show_packages: detect bare number/keyword selections as post_package_action
+ 835:   // so the flow advances to collect_lead instead of repeating the packages.
+ 836:   if (preStage === 'show_packages' && !slots.post_package_action) {
+ 837:     const msg = args.userMessage.trim();
+ 838:     const msgL = normalize(msg);
+ 839:     if (/^[123]$/.test(msg) ||
+ 840:         /\b(budget|premium|luxury|package [123]|option [123]|deal [123])\b/i.test(msg) ||
+ 841:         /\b(get package|get detail|package detail)\b/i.test(msg) ||
+ 842:         /\b(itinerary|day wise|day-wise|day by day)\b/i.test(msg)) {
+ 843:       slots.post_package_action = 'get_details';
+ 844:     } else if (/\b(customis|customiz|modify|edit plan|change plan)\b/i.test(msgL)) {
+ 845:       slots.post_package_action = 'customize';
+ 846:     } else if (/\b(callback|call me|call back|arrange call)\b/i.test(msgL)) {
+ 847:       slots.post_package_action = 'arrange_callback';
+ 848:     }
+ 849:   }
+ 850: 
+ 851:   // Callback fallback: treat the entire short message as callback time when
+ 852:   // all lead info is collected but callback_time is still missing.
+ 853:   // Handles freeform responses like "evening tomorrow" or "5 pm on saturday".
+ 854:   if (preStage === 'ask_callback' && !slots.callback_time) {
+ 855:     const msg = args.userMessage.trim();
+ 856:     const msgL = normalize(msg);
+ 857:     if (msg && msg.length <= 60) {
+ 858:       const isCallbackActionOnly =
+ 859:         slots.post_package_action === 'arrange_callback' &&
+ 860:         /\b(arrange\s*callback|callback|call\s*back|call me)\b/i.test(msgL);
+ 861:       // Only use whole message if it doesn't look like a new service request
+ 862:       const looksLikeNewIntent =
+ 863:         detectWorkflowIntent(msg) !== 'unknown' || isGreetingLike(msg);
+ 864:       if (!looksLikeNewIntent && !isCallbackActionOnly) {
+ 865:         slots.callback_time = msg;
+ 866:       }
+ 867:     }
+ 868:   }
+ 869: 
+ 870:   const stage = resolveStage(intent, slots);
+ 871:   const complete = stage === 'confirmed';
+ 872:   const leadShouldBeSaved = complete;
+ 873: 
+ 874:   // missingSlots kept for backward compat — list what's still needed
+ 875:   const missingSlots: string[] = [];
+ 876:   if (intent === 'plan_holiday') {
+ 877:     if (!slots.destination) missingSlots.push('destination');
+ 878:     if (!slots.holiday_type) missingSlots.push('holiday_type');
+ 879:     if (!slots.travellers) missingSlots.push('travellers');
+ 880:     if (!slots.travel_time) missingSlots.push('travel_time');
+ 881:     if (!slots.departure_city) missingSlots.push('departure_city');
+ 882:     if (!slots.nights) missingSlots.push('nights');
+ 883:   } else if (intent === 'flights') {
+ 884:     if (!slots.from_city) missingSlots.push('from_city');
+ 885:     if (!slots.to_city) missingSlots.push('to_city');
+ 886:     if (!slots.travel_time) missingSlots.push('travel_time');
+ 887:     if (!slots.travellers) missingSlots.push('travellers');
+ 888:   } else if (intent === 'hotels') {
+ 889:     if (!slots.destination) missingSlots.push('destination');
+ 890:     if (!slots.travellers) missingSlots.push('travellers');
+ 891:     if (!slots.travel_time) missingSlots.push('travel_time');
+ 892:     if (!slots.nights) missingSlots.push('nights');
+ 893:   } else if (intent === 'callback_request') {
+ 894:     // only lead slots matter
+ 895:   }
+ 896:   if (!slots.name) missingSlots.push('name');
+ 897:   if (!slots.phone) missingSlots.push('phone');
+ 898:   if (!slots.callback_time) missingSlots.push('callback_time');
+ 899: 
+ 900:   return { intent, stage, source, slots, missingSlots, complete, leadShouldBeSaved };
+ 901: }
+ 902: 
+ 903: // ─── reply builders ──────────────────────────────────────────────────────────
+ 904: 
+ 905: const DESTINATION_TAGLINES: Record<string, string> = {
+ 906:   thailand: 'perfect for beaches, nightlife & relaxation 😊',
+ 907:   bali: 'a magical island paradise 🌴',
+ 908:   kashmir: 'truly paradise on earth ❄️🏔️',
+ 909:   dubai: 'a world of luxury and adventure 🏙️',
+ 910:   maldives: 'perfect for beaches and crystal waters 🏖️',
+ 911:   singapore: 'a vibrant city of culture and food 🌆',
+ 912:   europe: 'a dream destination for history lovers 🏰',
+ 913:   kerala: 'God\'s own country 🌿',
+ 914:   goa: 'India\'s beach paradise 🏖️',
+ 915: };
+ 916: 
+ 917: function getDestinationTagline(destination: string): string {
+ 918:   const key = normalize(destination).split(' ')[0];
+ 919:   return DESTINATION_TAGLINES[key] || 'a wonderful destination 😊';
+ 920: }
+ 921: 
+ 922: export function buildWorkflowReply(state: WorkflowState): string | null {
+ 923:   if (state.intent === 'unknown' || state.stage === 'unknown') return null;
+ 924: 
+ 925:   const { stage, slots, intent } = state;
+ 926: 
+ 927:   // ── ask_destination ──
+ 928:   if (stage === 'ask_destination') {
+ 929:     return (
+ 930:       '🌍 Amazing!\n\n' +
+ 931:       'Which destination are you planning to visit? 😊\n\n' +
+ 932:       'Example: Dubai, Bali, Kashmir, Thailand'
+ 933:     );
+ 934:   }
+ 935: 
+ 936:   // ── ask_holiday_type ──
+ 937:   if (stage === 'ask_holiday_type') {
+ 938:     const dest = slots.destination || 'your chosen destination';
+ 939:     const tagline = getDestinationTagline(dest);
+ 940:     return (
+ 941:       `✨ Great choice! ${dest} is ${tagline}\n\n` +
+ 942:       'How would you like to plan your holiday? 😊\n\n' +
+ 943:       '🌟 Exclusive Holiday Deals\n' +
+ 944:       '✨ Personalized Holidays'
+ 945:     );
+ 946:   }
+ 947: 
+ 948:   // ── ask_travel_details ──
+ 949:   if (stage === 'ask_travel_details') {
+ 950:     if (intent === 'plan_holiday') {
+ 951:       if (slots.holiday_type === 'personalized') {
+ 952:         const dest = slots.destination || 'your destination';
+ 953:         return (
+ 954:           `✨ Wonderful! Let's create your personalized ${dest} holiday 😊\n\n` +
+ 955:           'Please share your travel preferences:\n\n' +
+ 956:           (!slots.travellers ? '👥 Number of Travellers\n' : '') +
+ 957:           (!slots.travel_time ? '📅 Travel Month or Dates\n' : '') +
+ 958:           (!slots.departure_city ? '🏙 Departure City\n' : '') +
+ 959:           (!slots.nights ? '🌃 Number of Nights\n' : '') +
+ 960:           (!slots.hotel_preference ? '🏨 Hotel Preference (3 / 4 / 5 Star)\n' : '') +
+ 961:           '\nExample:\n2 Adults, 10th July, Delhi, 5 Nights, 4 Star Hotels'
+ 962:         );
+ 963:       }
+ 964:       // exclusive
+ 965:       return (
+ 966:         '✨ Perfect! Please share:\n\n' +
+ 967:         (!slots.travellers ? '👥 Number of Travellers\n' : '') +
+ 968:         (!slots.travel_time ? '📅 Travel Month or Dates\n' : '') +
+ 969:         (!slots.departure_city ? '🏙 Departure City\n' : '') +
+ 970:         (!slots.nights ? '🌃 Number of Nights\n' : '') +
+ 971:         '\nExample:\n2 Adults, July, Bangalore, 5 Nights'
+ 972:       );
+ 973:     }
+ 974: 
+ 975:     if (intent === 'flights') {
+ 976:       return (
+ 977:         '✈️ Sure! Please share:\n\n' +
+ 978:         (!slots.from_city ? '🛫 From City\n' : '') +
+ 979:         (!slots.to_city ? '🛬 To City\n' : '') +
+ 980:         (!slots.travel_time ? '📅 Travel Date\n' : '') +
+ 981:         (!slots.travellers ? '👥 Number of Travellers\n' : '') +
+ 982:         '\nExample:\nDelhi to Mumbai, 25th June, 2 Adults'
+ 983:       );
+ 984:     }
+ 985: 
+ 986:     if (intent === 'hotels') {
+ 987:       return (
+ 988:         '🏨 Amazing! Please share:\n\n' +
+ 989:         (!slots.destination ? '📍 Destination\n' : '') +
+ 990:         (!slots.travellers ? '👥 Number of Travellers\n' : '') +
+ 991:         (!slots.travel_time ? '📅 Travel Month or Dates\n' : '') +
+ 992:         (!slots.nights ? '🌃 Number of Nights\n' : '') +
+ 993:         '\nExample:\nDubai, 2 Adults, July, 4 Nights'
+ 994:       );
+ 995:     }
+ 996: 
+ 997:     // Other intents (should not reach here under current logic, but safe fallback)
+ 998:     return (
+ 999:       '✨ Sure! Please share the following details:\n\n' +
+1000:       '👤 Full Name\n📞 Contact Number\n🕒 Preferred Callback Time\n\n' +
+1001:       'Example: Sini, +91 9876543210, Tomorrow at 5 PM'
+1002:     );
+1003:   }
+1004: 
+1005:   // ── show_packages — AI generates all package/flight/hotel options ──
+1006:   if (stage === 'show_packages') {
+1007:     return null;
+1008:   }
+1009: 
+1010:   // ── collect_lead ──
+1011:   if (stage === 'collect_lead') {
+1012:     return (
+1013:       '😊 To arrange your callback, please share:\n\n' +
+1014:       '👤 Full Name\n' +
+1015:       '📞 Contact Number\n' +
+1016:       '🕒 Preferred Callback Time\n\n' +
+1017:       'Example: Rahul, +91 9876543210, Today at 5 PM\n\n' +
+1018:       'Our travel expert will call you at your preferred time! ✨'
+1019:     );
+1020:   }
+1021: 
+1022:   // ── ask_callback ──
+1023:   if (stage === 'ask_callback') {
+1024:     const name = slots.name ? `, ${slots.name}` : '';
+1025:     return (
+1026:       `✨ Thank you${name}! Your details have been received 😊\n\n` +
+1027:       '📞 When would you like us to call you?\n\n' +
+1028:       'Example: Today at 5 PM  /  Tomorrow Morning'
+1029:     );
+1030:   }
+1031: 
+1032:   // ── confirmed — AI handles both initial confirmation and YES/NO follow-up ──
+1033:   if (stage === 'confirmed') {
+1034:     return null;
+1035:   }
+1036: 
+1037:   return null;
+1038: }
+1039: 
+1040: // ─── intent detection ─────────────────────────────────────────────────────────
+1041: 
+1042: export function detectWorkflowIntent(message: string, classifiedIntent?: string): WorkflowIntent {
+1043:   const raw = autoCorrect(message);           // fix typos before detection
+1044:   const text = normalize(raw);
+1045:   const intentText = normalize(classifiedIntent || '');
+1046:   const joined = `${text} ${intentText}`;
+1047: 
+1048:   // Digit menu selections (1/2/3) only fire when the ENTIRE message is that digit.
+1049:   // This prevents "2 adults" or "2, june, ..." from being classified as "Flights".
+1050:   const isDigitSelect = (n: string) => new RegExp(`^${n}\\.?\\s*$`).test(text);
+1051: 
+1052:   const hasFlightKeyword =
+1053:     /(^|\s)(svc_2|flight|flights|fligth|fligths|air ticket|airticket|airfare)(\s|$)/.test(joined);
+1054: 
+1055:   // plan_holiday — fuzzy-match "holiday", "package", "tour", "leisure"
+1056:   if (
+1057:     isDigitSelect('1') ||
+1058:     /(^|\s)(svc_1|plan holiday|plan a holiday|holiday package|holiday|leisure|tour package)(\s|$)/.test(joined) ||
+1059:     fuzzyAny(text, ['holiday', 'package', 'tour', 'leisure'])
+1060:   ) {
+1061:     // Explicit digit-1, svc_1, or the phrase "plan a holiday" always wins — even if the
+1062:     // message also contains "flights"/"hotels" (e.g. the user echoing the quick-reply menu).
+1063:     const explicitPlanHoliday =
+1064:       isDigitSelect('1') ||
+1065:       /(^|\s)(svc_1|plan a holiday|plan holiday)(\s|$)/.test(text);
+1066:     const flightLike = hasFlightKeyword;
+1067:     const hotelLike = isDigitSelect('3') || /(^|\s)(svc_3|hotel|hotels|stay|resort)(\s|$)/.test(joined);
+1068:     if (explicitPlanHoliday || (!flightLike && !hotelLike)) return 'plan_holiday';
+1069:   }
+1070: 
+1071:   // flights — strict keyword matching only (avoid false positives like "nights")
+1072:   if (
+1073:     isDigitSelect('2') ||
+1074:     hasFlightKeyword
+1075:   ) {
+1076:     return 'flights';
+1077:   }
+1078: 
+1079:   // hotels
+1080:   if (isDigitSelect('3') || /(^|\s)(svc_3|hotel|hotels|stay|resort)(\s|$)/.test(joined)) {
+1081:     return 'hotels';
+1082:   }
+1083: 
+1084:   // Multi-slot travel data → plan_holiday
+1085:   if (
+1086:     /(destination|travel month|travel date|travel dates|budget|package)/.test(joined) &&
+1087:     /(travellers|travelers|adults?|pax|nights?)/.test(joined)
+1088:   ) {
+1089:     return 'plan_holiday';
+1090:   }
+1091:   if (/\bfrom\b.+\bto\b.+(\bpassengers?\b|\bpax\b|\badults?\b)/.test(joined)) {
+1092:     return 'flights';
+1093:   }
+1094: 
+1095:   if (/(airport transfer|transfer|pickup|drop)/.test(joined)) return 'transfer';
+1096:   if (fuzzyAny(text, ['forex']) || /(currency exchange|money exchange)/.test(joined)) return 'forex';
+1097:   if (fuzzyAny(text, ['visa'])) return 'visa';
+1098:   if (fuzzyAny(text, ['insurance'])) return 'insurance';
+1099:   if (/(mice|corporate event|meetings incentives conferences exhibitions)/.test(joined)) return 'mice';
+1100:   if (/(booking status|status|pnr|reference|booking id)/.test(joined)) return 'booking_status';
+1101: 
+1102:   // ── NEW: standalone callback request ──
+1103:   // Match explicit phrases like "arrange callback", "call me", "callback please" etc.
+1104:   // Only if no other service intent has been triggered.
+1105:   if (
+1106:     /\b(arrange\s*(a\s)?callback|call\s*me|call\s*back|callback\s*request|request\s*callback|get\s*callback)\b/i.test(joined) ||
+1107:     (/\bcallback\b/i.test(joined) && joined.length < 30)  // short message containing only "callback"
+1108:   ) {
+1109:     return 'callback_request';
+1110:   }
+1111: 
+1112:   return 'unknown';
+1113: }
+1114: 
+1115: // ─── system prompt helpers ───────────────────────────────────────────────────
+1116: 
+1117: export function buildConversationMemoryBlock(args: {
+1118:   state: WorkflowState;
+1119:   recentUserMessages?: string[];
+1120: }): string {
+1121:   const recent = (args.recentUserMessages || []).filter(Boolean).slice(-12);
+1122:   const slotPairs = Object.entries(args.state.slots || {}).filter(([, v]) => Boolean(v));
+1123:   const slotText =
+1124:     slotPairs.length > 0
+1125:       ? slotPairs.map(([k, v]) => `${k}: ${v}`).join(' | ')
+1126:       : 'none yet';
+1127:   const recentText =
+1128:     recent.length > 0
+1129:       ? recent.map((v, i) => `${i + 1}. "${v}"`).join('\n')
+1130:       : 'none';
+1131: 
+1132:   return [
+1133:     '─── CONVERSATION MEMORY (AUTHORITATIVE — follow exactly) ───',
+1134:     `Intent  : ${args.state.intent}`,
+1135:     `Stage   : ${args.state.stage}`,
+1136:     `Collected slots: ${slotText}`,
+1137:     `Missing : ${args.state.missingSlots.length ? args.state.missingSlots.join(', ') : 'none — all collected'}`,
+1138:     'Recent user messages (oldest → newest):',
+1139:     recentText,
+1140:     'RULE: Never re-ask for already captured slots. Never contradict captured data.',
+1141:   ].join('\n');
+1142: }
+1143: 
+1144: export function getWorkflowSystemPromptBlock(
+1145:   intent: WorkflowIntent,
+1146:   stage?: WorkflowStage,
+1147:   slots?: WorkflowSlotMap,
+1148:   stageDraftReply?: string | null
+1149: ): string {
+1150:   const intentLabel = intent === 'unknown' ? 'not yet identified' : intent.replace(/_/g, ' ');
+1151:   const stageLabel = stage || 'unknown';
+1152:   const collected = Object.entries(slots || {})
+1153:     .filter(([, v]) => Boolean(v))
+1154:     .map(([k, v]) => `${k}: ${v}`)
+1155:     .join(', ') || 'nothing yet';
+1156: 
+1157:   // ── per-stage task instructions ─────────────────────────────────────────────
+1158:   let task = '';
+1159: 
+1160:   if (intent === 'unknown' || stage === 'unknown') {
+1161:     task = `The customer's intent is not yet identified. Respond warmly and naturally.
+1162: Guidelines:
+1163: - Greeting (Hi, Hello, etc.) → warmly greet and show: "How may I assist you today? 😊\n\n1️⃣ Plan a Holiday\n2️⃣ Flights\n3️⃣ Hotels"
+1164: - Travel-related question → briefly answer, then show the main menu
+1165: - Off-topic question (weather, jokes, math, etc.) → say "That's a bit outside my expertise! I'm here to help plan your trip 😊" and show the menu
+1166: - Confused or unclear message → empathize and show the menu
+1167: - User says they want to speak to a human → say "Sure! You can reach our team at info@traventions.com or WhatsApp us at +91 XXXXX. Meanwhile, I can help you explore options 😊"
+1168: - Profanity or frustration → stay calm, empathize: "I understand your concern. Let me connect you with our team who can help you better."
+1169: - Random characters/test messages → respond friendly: "Hello! 😊 I'm Sini, your travel assistant. How can I help you today?"
+1170: Always end with the main menu if intent is unclear.`;
+1171: 
+1172:   } else if (intent === 'callback_request') {
+1173:     if (stage === 'collect_lead') {
+1174:       task = `The customer has requested a callback. Ask for their Full Name and Phone Number (both are required). Email is optional. Do NOT ask about travel details.`;
+1175:     } else if (stage === 'ask_callback') {
+1176:       task = `Ask for the preferred callback time only. Already have name and phone.`;
+1177:     } else if (stage === 'confirmed') {
+1178:       task = `Confirm that the callback has been scheduled, as described for the 'confirmed' stage below.`;
+1179:     }
+1180: 
+1181:   } else if (stage === 'ask_destination') {
+1182:     task = `Ask the customer which destination they want to visit.
+1183: Ask for the destination ONLY — nothing else yet.`;
+1184: 
+1185:   } else if (stage === 'ask_holiday_type') {
+1186:     task = `Ask the customer to choose between:
+1187: 🌟 Exclusive Holiday Deals
+1188: ✨ Personalized Holidays
+1189: Do NOT ask about travel details yet. Only ask for the holiday type.`;
+1190: 
+1191:   } else if (stage === 'ask_travel_details') {
+1192:     const missing: string[] = [];
+1193:     if (intent === 'plan_holiday') {
+1194:       if (!slots?.travellers)    missing.push('Number of Travellers');
+1195:       if (!slots?.travel_time)   missing.push('Travel Month or Dates');
+1196:       if (!slots?.departure_city) missing.push('Departure City');
+1197:       if (!slots?.nights)        missing.push('Number of Nights');
+1198:       if (slots?.holiday_type === 'personalized' && !slots?.hotel_preference)
+1199:         missing.push('Hotel Preference (3 / 4 / 5 Star)');
+1200:     } else if (intent === 'flights') {
+1201:       if (!slots?.from_city)  missing.push('Departure City');
+1202:       if (!slots?.to_city)    missing.push('Destination City');
+1203:       if (!slots?.travel_time) missing.push('Travel Date');
+1204:       if (!slots?.travellers) missing.push('Number of Travellers');
+1205:     } else if (intent === 'hotels') {
+1206:       if (!slots?.destination) missing.push('Destination');
+1207:       if (!slots?.travellers)  missing.push('Number of Travellers');
+1208:       if (!slots?.travel_time) missing.push('Travel Month or Dates');
+1209:       if (!slots?.nights)      missing.push('Number of Nights');
+1210:     }
+1211:     task = `Ask for ONLY these missing travel details: ${missing.length ? missing.join(', ') : 'none — all collected'}.
+1212: ALREADY COLLECTED — DO NOT ASK AGAIN: ${collected}.
+1213: If the customer asks a travel question (visa, weather, currency, etc.) → briefly answer it, THEN re-ask the missing details in the same reply.
+1214: If the customer seems confused or off-topic → gently redirect and re-ask the missing details.`;
+1215: 
+1216:   } else if (stage === 'show_packages') {
+1217:     if (intent === 'flights') {
+1218:       const fromCity = slots?.from_city || 'the departure city';
+1219:       const toCity = slots?.to_city || 'the destination';
+1220:       const travelTime = slots?.travel_time || 'the travel date';
+1221:       const travellers = slots?.travellers || 'the given travellers';
+1222:       task = `FLIGHT OPTIONS GENERATION — REQUIRED:
+1223: Show 2 flight options from ${fromCity} to ${toCity} on ${travelTime} for ${travellers}.
+1224: Format EXACTLY as:
+1225: ✈️ Option 1: Direct Flight
+1226: 🛫 [Airline name] | ⏱ [realistic duration] | 💰 ₹[realistic INR price] PP (approx)
+1227: ✨ Highlights: [departure time range, arrival time, airline]
+1228: 
+1229: 🔄 Option 2: 1-Stop Flight
+1230: 🛫 [Airline name] via [hub city] | ⏱ [total duration] | 💰 ₹[lower INR price] PP (approx)
+1231: ✨ Highlights: cheaper option, [layover duration] layover at [hub]
+1232: 
+1233: End with:
+1234: Would you like to:
+1235: ✈️ Get Flight Details  ✏️ Customise Flights  📞 Arrange Callback
+1236: Use realistic INR pricing only. Never mention USD or $.`;
+1237: 
+1238:     } else if (intent === 'hotels') {
+1239:       const dest = slots?.destination || 'the destination';
+1240:       const travellers = slots?.travellers || '';
+1241:       const travelTime = slots?.travel_time || '';
+1242:       const nights = slots?.nights || '';
+1243:       const hotelPref = slots?.hotel_preference || '';
+1244:       task = `HOTEL OPTIONS GENERATION — REQUIRED:
+1245: Show 3 hotel options in ${dest}${travellers ? ` for ${travellers}` : ''}${travelTime ? `, ${travelTime}` : ''}${nights ? `, ${nights} nights` : ''}${hotelPref ? ` (${hotelPref} preferred)` : ''}.
+1246: Format EXACTLY as:
+1247: 🏨 [Hotel Name] | ⭐ [Star Rating] | 💰 ₹[realistic price per night] per night
+1248: 📍 Location: [area / neighbourhood]
+1249: ✨ Highlights: [3-4 key amenities or nearby attractions]
+1250: 
+1251: (repeat for all 3 hotels)
+1252: 
+1253: End with:
+1254: Would you like to:
+1255: 🏨 Get Hotel Details  ✏️ Customise Hotels  📞 Arrange Callback
+1256: Use realistic INR pricing only. Never mention USD or $.`;
+1257: 
+1258:     } else if (slots?.holiday_type === 'personalized') {
+1259:       const dest = slots?.destination || 'the destination';
+1260:       const nights = slots?.nights || '5';
+1261:       const hotelPref = slots?.hotel_preference || '4 star';
+1262:       const travellers = slots?.travellers || '';
+1263:       const travelTime = slots?.travel_time || '';
+1264:       const departureCity = slots?.departure_city || '';
+1265:       task = `PERSONALIZED PACKAGE GENERATION — REQUIRED:
+1266: The customer wants a personalized holiday to ${dest} for ${travellers || 'the given travellers'}, ${travelTime || 'on the given dates'}, departing ${departureCity || 'from their city'}, ${nights} nights, ${hotelPref} hotels.
+1267: Generate exactly 5 package options named: Classic Explorer, Scenic & Relaxation, Premium Experience, Budget Friendly, Luxury Touch.
+1268: Format each as:
+1269: 🌟 Option [N]: [Name]
+1270: 🏨 ${hotelPref} Hotels | 🌃 ${nights} Nights / ${String(parseInt(nights, 10) + 1)} Days | 💰 ₹[realistic INR price] PP
+1271: ✨ Highlights: [5 specific sightseeing/activity highlights for ${dest}]
+1272: 
+1273: End with:
+1274: ✨ Would you like to:
+1275: 1️⃣ Select an option  📄 Get Day-wise Itinerary  ✏️ Modify This Plan  📞 Arrange Callback
+1276: Use realistic INR pricing. Never mention USD or $.`;
+1277: 
+1278:     } else {
+1279:       // exclusive holiday
+1280:       const dest = slots?.destination || 'the destination';
+1281:       const nights = slots?.nights || '5';
+1282:       const days = String(parseInt(nights, 10) + 1);
+1283:       const travellers = slots?.travellers || '';
+1284:       const travelTime = slots?.travel_time || '';
+1285:       const departureCity = slots?.departure_city || '';
+1286:       task = `EXCLUSIVE PACKAGE GENERATION — REQUIRED:
+1287: Show 3 exclusive holiday packages for ${dest}${travellers ? ` for ${travellers}` : ''}${travelTime ? `, ${travelTime}` : ''}${departureCity ? `, departing from ${departureCity}` : ''}, ${nights} nights.
+1288: Format EXACTLY as:
+1289: 🌟 Package 1: Budget Deal
+1290: 🏨 3 Star Hotels | 🌃 ${nights} Nights / ${days} Days | 💰 ₹[realistic INR price] PP
+1291: ✨ Highlights: [5 specific sightseeing/activity highlights for ${dest}]
+1292: 
+1293: ✨ Package 2: Premium Deal
+1294: 🏨 4 Star Hotels | 🌃 ${nights} Nights / ${days} Days | 💰 ₹[realistic INR price] PP
+1295: ✨ Highlights: [5 specific highlights for ${dest}]
+1296: 
+1297: 🌟 Package 3: Luxury Experience
+1298: 🏨 5 Star Hotels | 🌃 ${nights} Nights / ${days} Days | 💰 ₹[realistic INR price] PP
+1299: ✨ Highlights: [5 specific highlights for ${dest}]
+1300: 
+1301: End with:
+1302: Would you like to:
+1303: 📄 Get Package Details  ✏️ Customise Holiday  📞 Arrange Callback
+1304: Use realistic INR pricing only. Never mention USD or $.`;
+1305:     }
+1306: 
+1307:   } else if (stage === 'collect_lead') {
+1308:     task = `Ask the customer for their Full Name, Phone Number, and Preferred Callback Time — all three in one friendly message.
+1309: Format example: "Rahul, +91 9876543210, Today at 5 PM"
+1310: Do NOT ask for travel details, they are already collected.
+1311: Already have: ${collected}.
+1312: Tell them our travel expert will call at their preferred time.`;
+1313: 
+1314:   } else if (stage === 'ask_callback') {
+1315:     task = `Ask ONLY for the customer's preferred callback time.
+1316: DO NOT ask for name or phone — those are already collected.
+1317: Already have: ${collected}.
+1318: Tell them a travel expert will call them at their preferred time.`;
+1319: 
+1320:   } else if (stage === 'confirmed') {
+1321:     const name = slots?.name ? `, ${slots.name}` : '';
+1322:     const callbackTime = slots?.callback_time || 'at the earliest';
+1323:     const ctx = intent === 'flights'
+1324:       ? 'assist you with the best flight options'
+1325:       : intent === 'hotels'
+1326:         ? 'assist you with the best hotel options'
+1327:         : 'assist you with complete package details';
+1328:     task = `Look at the conversation history:
+1329: A) If the last assistant message does NOT already contain "callback has been scheduled":
+1330:    → Send EXACTLY this confirmation message (replace placeholders):
+1331:    "✨ Perfect${name}! Your callback has been scheduled successfully 😊
+1332: 
+1333: 📞 Our travel expert will contact you *${callbackTime}* and ${ctx}.
+1334: 
+1335: Is there anything else I may assist you with today? 😊"
+1336: 
+1337: B) If the last assistant message ALREADY contains "callback has been scheduled":
+1338:    → The customer is replying to "Is there anything else?". Handle as follows:
+1339:    - If YES or a new travel question → reply: "How may I assist you today? 😊\n\n1️⃣ Plan a Holiday\n2️⃣ Flights\n3️⃣ Hotels"
+1340:    - If NO / Thank you / ending → reply with EXACTLY:
+1341: "Thank you for your time 😊
+1342: We truly appreciate your support.
+1343: 
+1344: ⭐ Kindly rate your experience with us:
+1345: https://www.google.com/search?q=Traventions+India+Pvt+Ltd+Reviews"
+1346: Do NOT repeat the callback confirmation. Do NOT ask for details already collected.`;
+1347:   }
+1348: 
+1349:   // Draft reply as structural guide (optional)
+1350:   const draftBlock = (stageDraftReply && stage !== 'show_packages')
+1351:     ? `\nSTAGE REPLY STRUCTURE (follow this closely, adapt the wording naturally):\n${stageDraftReply}`
+1352:     : '';
+1353: 
+1354:   return `
+1355: TRAVEL SALES WORKFLOW — FOLLOW STRICTLY:
+1356: - Customer intent: ${intentLabel}
+1357: - Current stage: ${stageLabel}
+1358: - Collected so far: ${collected}
+1359: - YOUR TASK FOR THIS REPLY: ${task}
+1360: ${draftBlock}
+1361: FORMATTING RULES (mandatory):
+1362: - WhatsApp formatting only: *bold*, _italic_, numbered lists, bullet * lists
+1363: - NEVER use markdown links [text](url) — write plain URLs only
+1364: - Friendly emojis are encouraged
+1365: - INR only for all pricing — never USD or $
+1366: - Keep reply concise and on-topic for the current stage
+1367: `.trim();
+1368: }
+1369: 
+1370: export function getGreetingMenuText(customerName?: string | null): string {
+1371:   const namePart = customerName ? `, ${customerName}` : '';
+1372:   return (
+1373:     `Hello${namePart}! 😊\n\n` +
+1374:     'How may I assist you today?\n\n' +
+1375:     '1️⃣ Plan a Holiday\n' +
+1376:     '2️⃣ Flights\n' +
+1377:     '3️⃣ Hotels'
+1378:   );
+1379: }
+1380: 
+1381: // buildLeadNotes — creates a summary string for CRM notes field
+1382: export function buildLeadNotes(intent: WorkflowIntent, slots: WorkflowSlotMap): string {
+1383:   const parts: string[] = [`Source: WhatsApp AI`, `Intent: ${intent.replace('_', ' ')}`];
+1384:   if (slots.destination) parts.push(`Destination: ${slots.destination}`);
+1385:   if (slots.from_city && slots.to_city) parts.push(`Route: ${slots.from_city} → ${slots.to_city}`);
+1386:   if (slots.travellers) parts.push(`Travellers: ${slots.travellers}`);
+1387:   if (slots.travel_time) parts.push(`Travel Date: ${slots.travel_time}`);
+1388:   if (slots.departure_city) parts.push(`Departure City: ${slots.departure_city}`);
+1389:   if (slots.nights) parts.push(`Nights: ${slots.nights}`);
+1390:   if (slots.holiday_type) parts.push(`Holiday Type: ${slots.holiday_type}`);
+1391:   if (slots.hotel_preference) parts.push(`Hotel Preference: ${slots.hotel_preference}`);
+1392:   if (slots.post_package_action) parts.push(`Interested In: ${slots.post_package_action.replace('_', ' ')}`);
+1393:   if (slots.callback_time) parts.push(`Callback Time: ${slots.callback_time}`);
+1394:   return parts.join(' | ');
+1395: }
+1396: 
+1397: // Legacy export kept for backward compatibility
+1398: export function getWorkflowStarterReply(intent: WorkflowIntent): string | null {
+1399:   return buildWorkflowReply({ intent, stage: 'ask_travel_details', source: 'detected_now', slots: {}, missingSlots: [], complete: false, leadShouldBeSaved: false });
+1400: }

@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
-import { listDocuments, updateDocument } from '@/lib/appwrite';
+import { getDocument, listDocuments, updateDocument } from '@/lib/appwrite';
+
+interface SegmentedCustomer {
+  customerId: string;
+  phone: string;
+  name?: string;
+}
 
 /**
  * POST /api/campaigns/[id]/send
@@ -19,16 +25,18 @@ export async function POST(request: NextRequest) {
     }
 
     // Get campaign details
-    const campaign = await fetch(
-      `${process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT}/databases/travai/collections/campaigns/documents/${campaignId}`,
-      {
-        headers: {
-          'X-Appwrite-Key': process.env.APPWRITE_API_KEY || '',
-        },
-      }
-    ).then(r => r.json());
+    const campaign = await getDocument('campaigns', campaignId).catch(() => null) as
+      | {
+          title?: string;
+          teamId?: string;
+          segment?: string;
+          segmentValue?: string;
+          message?: string;
+          templateName?: string | null;
+        }
+      | null;
 
-    if (!campaign.title) {
+    if (!campaign?.title) {
       return NextResponse.json(
         { error: 'Campaign not found' },
         { status: 404 }
@@ -36,7 +44,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Get customers based on segment
-    let recipients = await getSegmentedCustomers(
+    const recipients = await getSegmentedCustomers(
       teamId || campaign.teamId,
       campaign.segment,
       campaign.segmentValue
@@ -44,7 +52,7 @@ export async function POST(request: NextRequest) {
 
     // Send bulk message via WhatsApp API
     const sendResponse = await fetch(
-      `${request.nextUrl.origin}/api/whatsapp/send-bulk`,
+      `${request.nextUrl.origin}/api/whatsapp/send`,
       {
         method: 'PUT',
         headers: {
@@ -103,9 +111,9 @@ async function getSegmentedCustomers(
   teamId: string,
   segment: string,
   segmentValue?: string
-): Promise<any[]> {
+): Promise<SegmentedCustomer[]> {
   try {
-    let queries = [
+    const queries: string[] = [
       Query.equal('teamId', teamId),
     ];
 
@@ -134,10 +142,10 @@ async function getSegmentedCustomers(
 
     queries.push(Query.limit(1000), Query.offset(0));
 
-    const result = await listDocuments('customers', queries as any);
-    return result.documents.map((doc: any) => ({
+    const result = await listDocuments('customers', queries);
+    return (result.documents as Array<{ $id: string; phone?: string; name?: string }>).map((doc) => ({
       customerId: doc.$id,
-      phone: doc.phone,
+      phone: doc.phone || '',
       name: doc.name,
     }));
   } catch (error) {

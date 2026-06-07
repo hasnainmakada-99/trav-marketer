@@ -1,23 +1,33 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  CRM_STATUS_META,
+  CRM_STATUS_ORDER,
+  coerceLeadStatus,
+  type CrmLeadStatus,
+} from '@/lib/crm';
 
 const TEAM_ID = process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
 const POLL_INTERVAL_RAW = Number(process.env.NEXT_PUBLIC_WHATSAPP_POLL_MS || '15000');
-// Default 15s when visible; polling pauses automatically when the tab is hidden.
 const POLL_INTERVAL_MS = Number.isFinite(POLL_INTERVAL_RAW)
   ? Math.max(30_000, POLL_INTERVAL_RAW)
-  : 180_000;
+  : 30_000;
+const GOOGLE_REVIEW_LINK =
+  process.env.NEXT_PUBLIC_GOOGLE_REVIEW_LINK || 'https://g.page/r/traventions/review';
 
 type Tab = 'inbox' | 'send';
+type InboxFilter = 'all' | CrmLeadStatus;
 
 interface Conversation {
   phone: string;
-  name: string | null;
+  name: string;
+  email?: string | null;
   lastMessage: string;
   lastTimestamp: string;
   lastType: 'incoming' | 'outgoing';
   unreadCount: number;
+  crmStatus: CrmLeadStatus;
 }
 
 interface Message {
@@ -31,18 +41,37 @@ interface Message {
   createdAt?: string;
 }
 
-// ── minimal inline markdown renderer ──────────────────────────────────────────
+interface ThreadResponse {
+  phone: string;
+  name: string;
+  email?: string | null;
+  crmStatus: CrmLeadStatus;
+  notes?: string | null;
+  messages: Message[];
+}
+
 function renderInlineMarkdown(text: string): ReactNode[] {
   const parts: ReactNode[] = [];
   const pattern = /(\*\*[^*]+\*\*|\*[^*\n]+\*|_[^_\n]+_|~[^~\n]+~|https?:\/\/[^\s]+)/g;
   let lastIndex = 0;
   let key = 0;
+
   for (const match of text.matchAll(pattern)) {
     const full = match[0];
     const start = match.index ?? 0;
     if (start > lastIndex) parts.push(text.slice(lastIndex, start));
     if (/^https?:\/\//.test(full)) {
-      parts.push(<a key={key++} href={full} target="_blank" rel="noopener noreferrer" className="underline break-all">{full}</a>);
+      parts.push(
+        <a
+          key={key++}
+          href={full}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="break-all underline"
+        >
+          {full}
+        </a>
+      );
     } else if (full.startsWith('**') && full.endsWith('**')) {
       parts.push(<strong key={key++}>{full.slice(2, -2)}</strong>);
     } else if (full.startsWith('*') && full.endsWith('*')) {
@@ -50,84 +79,133 @@ function renderInlineMarkdown(text: string): ReactNode[] {
     } else if (full.startsWith('_') && full.endsWith('_')) {
       parts.push(<em key={key++}>{full.slice(1, -1)}</em>);
     } else if (full.startsWith('~') && full.endsWith('~')) {
-      parts.push(<span key={key++} className="line-through">{full.slice(1, -1)}</span>);
-    } else {
-      parts.push(full);
+      parts.push(
+        <span key={key++} className="line-through">
+          {full.slice(1, -1)}
+        </span>
+      );
     }
     lastIndex = start + full.length;
   }
+
   if (lastIndex < text.length) parts.push(text.slice(lastIndex));
   return parts;
 }
 
 function renderMessage(raw?: string | null): ReactNode {
   const text = (raw || '').trim();
-  if (!text) return <span className="opacity-50 italic">empty</span>;
-  const lines = text.split('\n');
-  const blocks: ReactNode[] = [];
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i].trim();
-    if (!line) { i++; continue; }
-    if (/^[-*]\s+/.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
-        items.push(lines[i].trim().replace(/^[-*]\s+/, ''));
-        i++;
-      }
-      blocks.push(<ul key={i} className="list-disc pl-5 space-y-0.5">{items.map((it, idx) => <li key={idx}>{renderInlineMarkdown(it)}</li>)}</ul>);
-      continue;
-    }
-    if (/^\d+\.\s+/.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
-        items.push(lines[i].trim().replace(/^\d+\.\s+/, ''));
-        i++;
-      }
-      blocks.push(<ol key={i} className="list-decimal pl-5 space-y-0.5">{items.map((it, idx) => <li key={idx}>{renderInlineMarkdown(it)}</li>)}</ol>);
-      continue;
-    }
-    const para: string[] = [lines[i]];
-    i++;
-    while (i < lines.length && lines[i].trim() && !/^[-*\d]/.test(lines[i].trim())) {
-      para.push(lines[i]); i++;
-    }
-    blocks.push(<p key={i} className="whitespace-pre-wrap">{renderInlineMarkdown(para.join('\n'))}</p>);
-  }
-  return <div className="space-y-1.5">{blocks}</div>;
+  if (!text) return <span className="italic opacity-50">empty</span>;
+  return (
+    <div className="space-y-1.5 whitespace-pre-wrap text-sm leading-relaxed">
+      {text.split('\n').map((line, index) => (
+        <p key={`${line}-${index}`}>{renderInlineMarkdown(line)}</p>
+      ))}
+    </div>
+  );
 }
 
 function formatTime(ts?: string) {
   if (!ts) return '';
-  const d = new Date(ts);
+  const date = new Date(ts);
   const now = new Date();
-  const isToday = d.toDateString() === now.toDateString();
+  const isToday = date.toDateString() === now.toDateString();
   return isToday
-    ? d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
-    : d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+    ? date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+    : date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
 }
 
 function initials(name?: string | null, phone?: string) {
-  if (name) return name.split(' ').slice(0, 2).map(w => w[0]?.toUpperCase() || '').join('');
+  if (name) {
+    return name
+      .split(' ')
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() || '')
+      .join('');
+  }
   return (phone || '?').slice(-2);
 }
 
 function preview(msg: string, type?: string) {
-  const v = (msg || '').trim();
-  if (v && v !== '[unsupported]') return v.replace(/\n+/g, ' ');
-  if (type === 'image') return '📷 Photo';
-  if (type === 'audio' || type === 'voice') return '🎙 Voice message';
-  if (type === 'video') return '🎬 Video';
-  if (type === 'document') return '📄 Document';
-  if (type === 'sticker') return '🎭 Sticker';
-  return '📎 Attachment';
+  const trimmed = (msg || '').trim();
+  if (trimmed && trimmed !== '[unsupported]') return trimmed.replace(/\n+/g, ' ');
+  if (type === 'image') return 'Photo attachment';
+  if (type === 'audio' || type === 'voice') return 'Voice note';
+  if (type === 'video') return 'Video attachment';
+  if (type === 'document') return 'Document attachment';
+  return 'Attachment';
 }
 
-function Toast({ msg, type, onClose }: { msg: string; type: 'success' | 'error'; onClose: () => void }) {
-  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, [onClose]);
+function conversationListUrl() {
+  return `/api/whatsapp/conversations?teamId=${encodeURIComponent(TEAM_ID)}&_ts=${Date.now()}`;
+}
+
+function conversationThreadUrl(phone: string) {
+  return `/api/whatsapp/conversations?teamId=${encodeURIComponent(TEAM_ID)}&phone=${encodeURIComponent(phone)}&_ts=${Date.now()}`;
+}
+
+function StatusBadge({ status }: { status: CrmLeadStatus }) {
+  const meta = CRM_STATUS_META[coerceLeadStatus(status)];
   return (
-    <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg text-sm font-medium text-white ${type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'}`}>
+    <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold ${meta.badge}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
+      {meta.label}
+    </span>
+  );
+}
+
+function Toast({
+  msg,
+  type,
+  onClose,
+}: {
+  msg: string;
+  type: 'success' | 'error';
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const timeout = setTimeout(onClose, 3200);
+    return () => clearTimeout(timeout);
+  }, [onClose]);
+
+  return (
+    <div
+      className={`fixed right-4 top-4 z-50 rounded-2xl px-4 py-3 text-sm font-medium text-white shadow-lg ${
+        type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'
+      }`}
+    >
       {msg}
+    </div>
+  );
+}
+
+function Modal({
+  title,
+  subtitle,
+  onClose,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-lg rounded-[28px] border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-start justify-between border-b border-slate-100 px-6 py-5">
+          <div>
+            <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
+            {subtitle && <p className="mt-1 text-sm text-slate-500">{subtitle}</p>}
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-500 transition hover:bg-slate-50 hover:text-slate-700"
+          >
+            Close
+          </button>
+        </div>
+        <div className="px-6 py-5">{children}</div>
+      </div>
     </div>
   );
 }
@@ -135,335 +213,764 @@ function Toast({ msg, type, onClose }: { msg: string; type: 'success' | 'error';
 export default function WhatsAppPage() {
   const [tab, setTab] = useState<Tab>('inbox');
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
-  const showToast = (msg: string, type: 'success' | 'error' = 'success') => setToast({ msg, type });
+  const [focusPhone, setFocusPhone] = useState<string | null>(null);
 
   return (
-    <div className="h-full flex flex-col bg-gray-50">
+    <div className="flex h-full flex-col">
       {toast && <Toast {...toast} onClose={() => setToast(null)} />}
-
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4 flex-shrink-0">
-        <div className="flex items-center justify-between">
+      <div className="border-b border-slate-200/70 bg-white/80 px-5 py-3.5 backdrop-blur">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <h1 className="text-xl font-bold text-gray-900">WhatsApp</h1>
-            <p className="text-xs text-gray-400 mt-0.5">AI-powered customer conversations</p>
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-emerald-600/70">
+              WhatsApp CRM
+            </p>
+            <h1 className="mt-1.5 text-2xl font-semibold text-slate-950">Customer conversations</h1>
+            <p className="mt-1 max-w-2xl text-sm text-slate-500">
+              Real names from CRM contacts, AI-driven lead stages, and only this Traventions bot
+              number&apos;s conversation history inside one inbox.
+            </p>
           </div>
-          <div className="flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full font-medium">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            YCloud API
+          <div className="flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            YCloud channel live
           </div>
         </div>
-        <div className="flex gap-0 mt-4 border-b border-gray-200 -mb-4">
-          {(['inbox', 'send'] as Tab[]).map(t => (
+        <div className="mt-3 flex gap-2 border-b border-slate-200">
+          {(['inbox', 'send'] as Tab[]).map((item) => (
             <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                tab === t ? 'border-emerald-600 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'
+              key={item}
+              onClick={() => setTab(item)}
+              className={`-mb-px rounded-t-2xl border-b-2 px-5 py-3 text-sm font-semibold transition ${
+                tab === item
+                  ? 'border-emerald-500 text-emerald-700'
+                  : 'border-transparent text-slate-500 hover:text-slate-700'
               }`}
             >
-              {t === 'inbox' ? 'Inbox' : 'Send Message'}
+              {item === 'inbox' ? 'Inbox' : 'Send Message'}
             </button>
           ))}
         </div>
       </div>
 
-      <div className="flex-1 overflow-hidden">
-        {tab === 'inbox' && <InboxTab showToast={showToast} />}
-        {tab === 'send' && <SendTab showToast={showToast} />}
-      </div>
-    </div>
-  );
-}
-
-// ── INBOX ──────────────────────────────────────────────────────────────────────
-function InboxTab({ showToast }: { showToast: (m: string, t?: 'success' | 'error') => void }) {
-  const [convos, setConvos] = useState<Conversation[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [thread, setThread] = useState<Message[]>([]);
-  const [threadLoading, setThreadLoading] = useState(false);
-  const [reply, setReply] = useState('');
-  const [sending, setSending] = useState(false);
-  const [search, setSearch] = useState('');
-  const threadRef = useRef<HTMLDivElement>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const prevUnreadRef = useRef<number>(0);
-
-  const loadConvos = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
-    try {
-      const res = await fetch(`/api/whatsapp/conversations?teamId=${encodeURIComponent(TEAM_ID)}`);
-      const data = await res.json();
-      const newConvos: Conversation[] = data.conversations || [];
-      const newUnread = newConvos.reduce((s, c) => s + (c.unreadCount || 0), 0);
-      if (silent && newUnread > prevUnreadRef.current) {
-        showToast(`New message received`);
-      }
-      prevUnreadRef.current = newUnread;
-      setConvos(newConvos);
-    } catch { /* keep stale */ } finally {
-      if (!silent) setLoading(false);
-    }
-  }, []);
-
-  const loadThread = useCallback(async (phone: string) => {
-    setThreadLoading(true);
-    try {
-      const res = await fetch(`/api/whatsapp/conversations?teamId=${encodeURIComponent(TEAM_ID)}&phone=${encodeURIComponent(phone)}`);
-      const data = await res.json();
-      setThread(data.messages || []);
-    } catch {
-      setThread([]);
-    } finally {
-      setThreadLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { loadConvos(); }, [loadConvos]);
-  useEffect(() => {
-    const start = () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-      pollRef.current = setInterval(() => {
-        if (document.visibilityState === 'hidden') return; // skip when tab not focused
-        loadConvos(true);
-        if (selected) loadThread(selected);
-      }, POLL_INTERVAL_MS);
-    };
-    start();
-    document.addEventListener('visibilitychange', start);
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-      document.removeEventListener('visibilitychange', start);
-    };
-  }, [loadConvos, loadThread, selected]);
-
-  useEffect(() => {
-    if (selected) loadThread(selected);
-  }, [selected, loadThread]);
-
-  useEffect(() => {
-    if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
-  }, [thread]);
-
-  const handleSend = async () => {
-    if (!selected || !reply.trim()) return;
-    setSending(true);
-    try {
-      const res = await fetch('/api/whatsapp/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: selected, message: reply.trim(), teamId: TEAM_ID }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'Failed');
-      setReply('');
-      showToast('Message sent');
-      await loadThread(selected);
-      await loadConvos(true);
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Failed', 'error');
-    } finally {
-      setSending(false);
-    }
-  };
-
-  const filtered = convos.filter(c =>
-    !search || (c.name || c.phone).toLowerCase().includes(search.toLowerCase())
-  );
-  const selectedConvo = convos.find(c => c.phone === selected);
-
-  return (
-    <div className="h-full flex">
-      {/* Sidebar */}
-      <div className="w-72 xl:w-80 border-r border-gray-200 bg-white flex flex-col flex-shrink-0">
-        <div className="p-3 border-b border-gray-100 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-sm font-semibold text-gray-800">Conversations</span>
-            <button onClick={() => loadConvos()} className="text-xs text-emerald-600 hover:text-emerald-700 font-medium">Refresh</button>
-          </div>
-          <input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Search by name or number..."
-            className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+      <div className="min-h-0 flex-1">
+        {tab === 'inbox' ? (
+          <InboxTab
+            showToast={(msg, type = 'success') => setToast({ msg, type })}
+            focusPhone={focusPhone}
+            onFocusConsumed={() => setFocusPhone(null)}
           />
-        </div>
-
-        <div className="flex-1 overflow-y-auto">
-          {loading && (
-            <div className="p-8 text-center">
-              <div className="inline-block animate-spin rounded-full h-5 w-5 border-b-2 border-emerald-600" />
-            </div>
-          )}
-          {!loading && filtered.length === 0 && (
-            <div className="p-8 text-center text-sm text-gray-400">
-              {search ? 'No matches' : 'No conversations yet'}
-            </div>
-          )}
-          {filtered.map(c => (
-            <button
-              key={c.phone}
-              onClick={() => setSelected(c.phone)}
-              className={`w-full text-left px-4 py-3 border-b border-gray-50 hover:bg-gray-50 transition-colors ${selected === c.phone ? 'bg-emerald-50 border-l-2 border-l-emerald-500' : ''}`}
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
-                  {initials(c.name, c.phone)}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-1">
-                    <span className="text-sm font-semibold text-gray-900 truncate">{c.name || c.phone}</span>
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      {c.unreadCount > 0 && (
-                        <span className="bg-emerald-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
-                          {c.unreadCount}
-                        </span>
-                      )}
-                      <span className="text-[10px] text-gray-400">{formatTime(c.lastTimestamp)}</span>
-                    </div>
-                  </div>
-                  <p className="text-xs text-gray-500 truncate mt-0.5">
-                    {c.lastType === 'outgoing' && <span className="text-emerald-600 mr-1">✓</span>}
-                    {preview(c.lastMessage)}
-                  </p>
-                </div>
-              </div>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Thread */}
-      <div className="flex-1 flex flex-col min-w-0" style={{ backgroundImage: 'radial-gradient(circle, #e5e7eb 1px, transparent 1px)', backgroundSize: '20px 20px', backgroundColor: '#f9fafb' }}>
-        {!selected ? (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-center">
-              <div className="w-20 h-20 rounded-full bg-white shadow-md flex items-center justify-center mx-auto mb-4 text-4xl">💬</div>
-              <p className="font-semibold text-gray-600">Select a conversation</p>
-              <p className="text-sm text-gray-400 mt-1">to view messages</p>
-            </div>
-          </div>
         ) : (
-          <>
-            {/* Thread header */}
-            <div className="bg-white border-b border-gray-200 px-4 py-3 flex items-center gap-3 flex-shrink-0 shadow-sm">
-              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
-                {initials(selectedConvo?.name, selected)}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="font-semibold text-gray-900 text-sm">{selectedConvo?.name || selected}</p>
-                <p className="text-xs text-gray-400 font-mono">{selected}</p>
-              </div>
-              <a
-                href={`https://wa.me/${selected}`}
-                target="_blank"
-                rel="noreferrer"
-                className="text-xs px-3 py-1.5 rounded-lg border border-emerald-200 text-emerald-700 hover:bg-emerald-50 font-medium"
-              >
-                Open in WA
-              </a>
-            </div>
-
-            {/* Messages */}
-            <div ref={threadRef} className="flex-1 overflow-y-auto p-4 space-y-3">
-              {threadLoading && (
-                <div className="flex justify-center py-8">
-                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-emerald-600" />
-                </div>
-              )}
-              {!threadLoading && thread.length === 0 && (
-                <div className="text-center text-sm text-gray-400 py-8">No messages</div>
-              )}
-              {thread.map(m => {
-                const isOut = m.type === 'outgoing';
-                const msgText = (m.text || '').trim();
-                const isMedia = !msgText || msgText === '[unsupported]';
-                return (
-                  <div key={m.$id} className={`flex ${isOut ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[75%] rounded-2xl px-3.5 py-2.5 shadow-sm ${
-                      isOut
-                        ? 'bg-emerald-500 text-white rounded-tr-sm'
-                        : 'bg-white text-gray-800 rounded-tl-sm'
-                    }`}>
-                      {isMedia ? (
-                        <p className={`text-sm italic ${isOut ? 'text-emerald-100' : 'text-gray-400'}`}>
-                          {preview(m.text || '', m.messageType)}
-                        </p>
-                      ) : (
-                        <div className="text-sm leading-relaxed">
-                          {renderMessage(m.text)}
-                        </div>
-                      )}
-                      <p className={`text-[10px] mt-1.5 text-right ${isOut ? 'text-emerald-100' : 'text-gray-400'}`}>
-                        {formatTime(m.timestamp || m.createdAt)}
-                        {isOut && m.status && ` · ${m.status}`}
-                      </p>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Reply box */}
-            <div className="bg-white border-t border-gray-200 p-3 flex gap-2 items-end flex-shrink-0">
-              <textarea
-                value={reply}
-                onChange={e => setReply(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-                placeholder="Type a message… (Enter to send)"
-                rows={1}
-                className="flex-1 px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none leading-relaxed"
-                style={{ minHeight: '42px', maxHeight: '120px' }}
-              />
-              <button
-                onClick={handleSend}
-                disabled={sending || !reply.trim()}
-                className="px-4 py-2.5 bg-emerald-600 text-white rounded-xl text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 flex-shrink-0 transition-colors"
-              >
-                {sending ? '…' : 'Send'}
-              </button>
-            </div>
-          </>
+          <SendTab
+            showToast={(msg, type = 'success') => setToast({ msg, type })}
+            onMessageSent={(phone, toastMessage) => {
+              setFocusPhone(phone);
+              setTab('inbox');
+              setToast({ msg: toastMessage, type: 'success' });
+            }}
+          />
         )}
       </div>
     </div>
   );
 }
 
-const GOOGLE_REVIEW_LINK = process.env.NEXT_PUBLIC_GOOGLE_REVIEW_LINK || 'https://g.page/r/traventions/review';
+function InboxTab({
+  showToast,
+  focusPhone,
+  onFocusConsumed,
+}: {
+  showToast: (msg: string, type?: 'success' | 'error') => void;
+  focusPhone: string | null;
+  onFocusConsumed: () => void;
+}) {
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [statusCounts, setStatusCounts] = useState<Record<CrmLeadStatus, number>>({
+    new_lead: 0,
+    normal_conversation: 0,
+    connected: 0,
+    converted: 0,
+    closed: 0,
+  });
+  const [loading, setLoading] = useState(true);
+  const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
+  const [thread, setThread] = useState<Message[]>([]);
+  const [threadInfo, setThreadInfo] = useState<ThreadResponse | null>(null);
+  const [threadLoading, setThreadLoading] = useState(false);
+  const [reply, setReply] = useState('');
+  const [sending, setSending] = useState(false);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<InboxFilter>('all');
+  const [showContactsDrawer, setShowContactsDrawer] = useState(false);
+  const [showEditContact, setShowEditContact] = useState(false);
+  const [showImportContacts, setShowImportContacts] = useState(false);
+  const [contactForm, setContactForm] = useState({ name: '', email: '' });
+  const [contactSaving, setContactSaving] = useState(false);
+  const [contactsText, setContactsText] = useState('');
+  const [importingContacts, setImportingContacts] = useState(false);
+  const threadRef = useRef<HTMLDivElement>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const previousUnreadRef = useRef(0);
+  const selectedPhoneRef = useRef<string | null>(null);
 
-// ── SEND TAB ───────────────────────────────────────────────────────────────────
-function SendTab({ showToast }: { showToast: (m: string, t?: 'success' | 'error') => void }) {
+  useEffect(() => {
+    selectedPhoneRef.current = selectedPhone;
+  }, [selectedPhone]);
+
+  const loadConversations = useCallback(
+    async (options?: { silent?: boolean }) => {
+      const silent = options?.silent ?? false;
+      if (!silent) {
+        setLoading(true);
+      }
+
+      try {
+        const response = await fetch(conversationListUrl(), { cache: 'no-store' });
+        const data = await response.json();
+        const nextConversations = (data.conversations || []) as Conversation[];
+        const unreadCount = nextConversations.reduce(
+          (sum, conversation) => sum + (conversation.unreadCount || 0),
+          0
+        );
+
+        if (silent && unreadCount > previousUnreadRef.current) {
+          showToast('A new WhatsApp message just arrived.');
+        }
+
+        previousUnreadRef.current = unreadCount;
+        setConversations(nextConversations);
+        setStatusCounts(
+          data.statusCounts || {
+            new_lead: 0,
+            normal_conversation: 0,
+            connected: 0,
+            converted: 0,
+            closed: 0,
+          }
+        );
+
+        const currentSelectedPhone = selectedPhoneRef.current;
+        if (!currentSelectedPhone && nextConversations.length > 0) {
+          setSelectedPhone(nextConversations[0].phone);
+        } else if (
+          currentSelectedPhone &&
+          !nextConversations.some((conversation) => conversation.phone === currentSelectedPhone)
+        ) {
+          setSelectedPhone(nextConversations[0]?.phone || null);
+        }
+      } catch {
+        if (!silent) {
+          showToast('Unable to load WhatsApp conversations.', 'error');
+        }
+      } finally {
+        if (!silent) {
+          setLoading(false);
+        }
+      }
+    },
+    [showToast]
+  );
+
+  const loadThread = useCallback(async (phone: string, options?: { silent?: boolean }) => {
+    const silent = options?.silent ?? false;
+    if (!silent) {
+      setThreadLoading(true);
+    }
+    try {
+      const response = await fetch(conversationThreadUrl(phone), { cache: 'no-store' });
+      const data = (await response.json()) as ThreadResponse;
+      setThread(data.messages || []);
+      setThreadInfo(data);
+      setContactForm({ name: data.name || '', email: data.email || '' });
+    } catch {
+      if (!silent) {
+        setThread([]);
+        setThreadInfo(null);
+      }
+    } finally {
+      if (!silent) {
+        setThreadLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadConversations();
+  }, [loadConversations]);
+
+  useEffect(() => {
+    if (!selectedPhone) return;
+    void loadThread(selectedPhone);
+  }, [selectedPhone, loadThread]);
+
+  useEffect(() => {
+    if (!focusPhone) return;
+    setSelectedPhone(focusPhone);
+    onFocusConsumed();
+  }, [focusPhone, onFocusConsumed]);
+
+  useEffect(() => {
+    const startPolling = () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = setInterval(() => {
+        if (document.visibilityState === 'hidden') return;
+        void loadConversations({ silent: true });
+        if (selectedPhoneRef.current) {
+          void loadThread(selectedPhoneRef.current, { silent: true });
+        }
+      }, POLL_INTERVAL_MS);
+    };
+
+    startPolling();
+    document.addEventListener('visibilitychange', startPolling);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      document.removeEventListener('visibilitychange', startPolling);
+    };
+  }, [loadConversations, loadThread]);
+
+  useEffect(() => {
+    if (threadRef.current) {
+      threadRef.current.scrollTop = threadRef.current.scrollHeight;
+    }
+  }, [thread]);
+
+  const filteredConversations = useMemo(() => {
+    return conversations.filter((conversation) => {
+      const matchesFilter = filter === 'all' || conversation.crmStatus === filter;
+      if (!matchesFilter) return false;
+
+      if (!search) return true;
+      const query = search.toLowerCase();
+      return (
+        conversation.name.toLowerCase().includes(query) ||
+        conversation.phone.toLowerCase().includes(query) ||
+        String(conversation.email || '').toLowerCase().includes(query)
+      );
+    });
+  }, [conversations, filter, search]);
+
+  const selectedConversation = conversations.find((conversation) => conversation.phone === selectedPhone);
+
+  const handleSend = async () => {
+    if (!selectedPhone || !reply.trim()) return;
+    setSending(true);
+    try {
+      const response = await fetch('/api/whatsapp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: selectedPhone, message: reply.trim(), teamId: TEAM_ID }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Failed to send');
+      setReply('');
+      showToast('Message sent successfully.');
+      await loadThread(selectedPhone);
+      await loadConversations({ silent: true });
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Failed to send', 'error');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleSaveContact = async () => {
+    if (!selectedPhone) return;
+    setContactSaving(true);
+    try {
+      const response = await fetch('/api/customers', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teamId: TEAM_ID,
+          phone: selectedPhone,
+          name: contactForm.name,
+          email: contactForm.email,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Failed to save contact');
+      showToast('Contact details updated.');
+      setShowEditContact(false);
+      await loadConversations({ silent: true });
+      await loadThread(selectedPhone);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Failed to save contact', 'error');
+    } finally {
+      setContactSaving(false);
+    }
+  };
+
+  const handleImportContacts = async () => {
+    if (!contactsText.trim()) return;
+    setImportingContacts(true);
+    try {
+      const response = await fetch('/api/customers/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ teamId: TEAM_ID, contactsText }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Failed to import contacts');
+      showToast(`Imported ${data.total} contacts into the CRM.`);
+      setContactsText('');
+      setShowImportContacts(false);
+      await loadConversations();
+      if (selectedPhoneRef.current) {
+        await loadThread(selectedPhoneRef.current, { silent: true });
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Failed to import contacts', 'error');
+    } finally {
+      setImportingContacts(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="flex h-full min-h-0">
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.08),transparent_24%),linear-gradient(180deg,#f8fbff_0%,#eef6ff_100%)]">
+          {!selectedPhone ? (
+            <div className="flex flex-1 items-center justify-center px-6">
+              <div className="max-w-md rounded-[32px] border border-slate-200 bg-white/80 p-10 text-center shadow-xl shadow-slate-200/60 backdrop-blur">
+                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-emerald-600">
+                  Inbox ready
+                </p>
+                <h3 className="mt-3 text-2xl font-semibold text-slate-900">
+                  Select a conversation to open the full chat history
+                </h3>
+                <p className="mt-2 text-sm text-slate-500">
+                  The client sees the full thread, lead stage, and contact identity in one place.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="border-b border-slate-200/70 bg-white/80 px-5 py-4 backdrop-blur">
+                <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className={`flex h-14 w-14 items-center justify-center rounded-[20px] bg-gradient-to-br ${CRM_STATUS_META[threadInfo?.crmStatus || selectedConversation?.crmStatus || 'normal_conversation'].panel} text-base font-bold text-white shadow-lg`}>
+                      {initials(threadInfo?.name || selectedConversation?.name, selectedPhone)}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="truncate text-xl font-semibold text-slate-950">
+                          {threadInfo?.name || selectedConversation?.name || selectedPhone}
+                        </h2>
+                        <StatusBadge status={threadInfo?.crmStatus || selectedConversation?.crmStatus || 'normal_conversation'} />
+                      </div>
+                      <p className="mt-1 truncate text-sm text-slate-500">{selectedPhone}</p>
+                      {threadInfo?.email && (
+                        <p className="truncate text-xs text-slate-400">{threadInfo.email}</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={() => setShowContactsDrawer(true)}
+                      className="rounded-2xl border border-slate-200 bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+                    >
+                      Contacts
+                    </button>
+                    <button
+                      onClick={() => setShowEditContact(true)}
+                      className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                    >
+                      Edit contact
+                    </button>
+                    <a
+                      href={`https://wa.me/${selectedPhone}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                    >
+                      Open in WhatsApp
+                    </a>
+                  </div>
+                </div>
+                {threadInfo?.notes && (
+                  <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                    <span className="font-semibold">Lead note:</span> {threadInfo.notes}
+                  </div>
+                )}
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setShowContactsDrawer(true)}
+                    className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-200"
+                  >
+                    Browse contacts
+                    <span className="ml-1 text-[11px] opacity-80">{filteredConversations.length}</span>
+                  </button>
+                  <button
+                    onClick={() => loadConversations()}
+                    className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                  >
+                    Refresh inbox
+                  </button>
+                  <button
+                    onClick={() => setShowImportContacts(true)}
+                    className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200 transition hover:bg-emerald-100"
+                  >
+                    Import contacts
+                  </button>
+                </div>
+              </div>
+
+              <div ref={threadRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-5 lg:px-6">
+                {threadLoading ? (
+                  <div className="flex items-center justify-center py-16">
+                    <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-emerald-600" />
+                  </div>
+                ) : thread.length === 0 ? (
+                  <div className="py-16 text-center text-sm text-slate-400">No messages yet.</div>
+                ) : (
+                  thread.map((message) => {
+                    const outgoing = message.type === 'outgoing';
+                    const messageText = (message.text || '').trim();
+                    const isMedia = !messageText || messageText === '[unsupported]';
+                    return (
+                      <div key={message.$id} className={`flex ${outgoing ? 'justify-end' : 'justify-start'}`}>
+                        <div
+                          className={`max-w-[78%] rounded-[24px] px-4 py-3 shadow-sm ${
+                            outgoing
+                              ? 'rounded-tr-sm bg-emerald-500 text-white'
+                              : 'rounded-tl-sm border border-white/80 bg-white text-slate-800'
+                          }`}
+                        >
+                          {isMedia ? (
+                            <p className={`text-sm italic ${outgoing ? 'text-emerald-50' : 'text-slate-400'}`}>
+                              {preview(message.text || '', message.messageType)}
+                            </p>
+                          ) : (
+                            renderMessage(message.text)
+                          )}
+                          <p className={`mt-2 text-right text-[11px] ${outgoing ? 'text-emerald-50/90' : 'text-slate-400'}`}>
+                            {formatTime(message.timestamp || message.createdAt)}
+                            {outgoing && message.status ? ` · ${message.status}` : ''}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              <div className="border-t border-slate-200/70 bg-white/90 px-4 py-4 backdrop-blur lg:px-6">
+                <div className="flex gap-3">
+                  <textarea
+                    value={reply}
+                    onChange={(event) => setReply(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && !event.shiftKey) {
+                        event.preventDefault();
+                        handleSend();
+                      }
+                    }}
+                    rows={1}
+                    placeholder="Type a reply and press Enter to send"
+                    className="min-h-[52px] flex-1 rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-emerald-300 focus:bg-white focus:ring-4 focus:ring-emerald-100"
+                  />
+                  <button
+                    onClick={handleSend}
+                    disabled={sending || !reply.trim()}
+                    className="rounded-[22px] bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {sending ? 'Sending...' : 'Send'}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </section>
+      </div>
+
+      {showContactsDrawer && (
+        <div className="fixed inset-0 z-40 flex justify-end bg-slate-950/35 backdrop-blur-sm">
+          <button
+            aria-label="Close contacts drawer"
+            className="flex-1"
+            onClick={() => setShowContactsDrawer(false)}
+          />
+          <aside className="flex h-full w-full max-w-[420px] min-w-[320px] flex-col border-l border-slate-200 bg-white shadow-2xl">
+            <div className="border-b border-slate-100 px-4 py-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-emerald-600">Contacts</p>
+                  <h3 className="mt-1 text-xl font-semibold text-slate-950">WhatsApp contact list</h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Browse, search, and jump between all conversations without squeezing the chat window.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowContactsDrawer(false)}
+                  className="rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="mt-4 flex gap-2">
+                <button
+                  onClick={() => loadConversations()}
+                  className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Refresh
+                </button>
+                <button
+                  onClick={() => setShowImportContacts(true)}
+                  className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                >
+                  Import
+                </button>
+              </div>
+
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search by name, phone, or email"
+                className="mt-4 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-emerald-300 focus:bg-white focus:ring-4 focus:ring-emerald-100"
+              />
+
+              <div className="mt-3 overflow-x-auto pb-1">
+                <div className="flex min-w-max gap-2">
+                  <button
+                    onClick={() => setFilter('all')}
+                    className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                      filter === 'all'
+                        ? 'bg-slate-900 text-white'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    All Chats
+                    <span className="ml-1 text-[11px] opacity-80">{conversations.length}</span>
+                  </button>
+                  {CRM_STATUS_ORDER.map((status) => (
+                    <button
+                      key={status}
+                      onClick={() => setFilter(status)}
+                      className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                        filter === status
+                          ? CRM_STATUS_META[status].soft
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {CRM_STATUS_META[status].label}
+                      <span className="ml-1 text-[11px] opacity-80">{statusCounts[status] || 0}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between px-4 py-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Conversations</p>
+                <p className="text-sm text-slate-500">{filteredConversations.length} visible chats</p>
+              </div>
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                {conversations.length} total
+              </span>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+              {loading ? (
+                <div className="flex items-center justify-center py-20">
+                  <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-emerald-600" />
+                </div>
+              ) : filteredConversations.length === 0 ? (
+                <div className="px-6 py-16 text-center">
+                  <p className="text-lg font-semibold text-slate-700">No conversations found</p>
+                  <p className="mt-1 text-sm text-slate-400">
+                    Try a different search or import your saved contact names.
+                  </p>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100 overflow-hidden rounded-[24px] border border-slate-100 bg-white shadow-sm">
+                  {filteredConversations.map((conversation) => {
+                    const isSelected = selectedPhone === conversation.phone;
+                    return (
+                      <button
+                        key={conversation.phone}
+                        onClick={() => {
+                          setSelectedPhone(conversation.phone);
+                          setShowContactsDrawer(false);
+                        }}
+                        className={`w-full px-4 py-3 text-left transition ${
+                          isSelected ? 'bg-emerald-50/80' : 'bg-transparent hover:bg-slate-50/80'
+                        }`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div
+                            className={`mt-0.5 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br ${CRM_STATUS_META[conversation.crmStatus].panel} text-sm font-bold text-white shadow-lg`}
+                          >
+                            {initials(conversation.name, conversation.phone)}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="truncate font-semibold text-slate-900">{conversation.name}</p>
+                                <p className="truncate text-xs text-slate-400">{conversation.phone}</p>
+                              </div>
+                              <div className="flex flex-col items-end gap-1">
+                                <span className="text-[11px] text-slate-400">
+                                  {formatTime(conversation.lastTimestamp)}
+                                </span>
+                                {conversation.unreadCount > 0 && (
+                                  <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[11px] font-semibold text-white">
+                                    {conversation.unreadCount}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="mt-2 flex items-center gap-2">
+                              <StatusBadge status={conversation.crmStatus} />
+                              {conversation.email && (
+                                <span className="truncate text-[11px] text-slate-400">
+                                  {conversation.email}
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-2 truncate text-sm text-slate-500">
+                              {conversation.lastType === 'outgoing' ? 'You: ' : ''}
+                              {preview(conversation.lastMessage)}
+                            </p>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {showEditContact && selectedPhone && (
+        <Modal
+          title="Edit contact identity"
+          subtitle="Update the saved name or email for this WhatsApp number."
+          onClose={() => setShowEditContact(false)}
+        >
+          <div className="space-y-4">
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Phone</label>
+              <input
+                value={selectedPhone}
+                disabled
+                className="w-full rounded-2xl border border-slate-200 bg-slate-100 px-4 py-3 text-sm text-slate-500"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Saved name</label>
+              <input
+                value={contactForm.name}
+                onChange={(event) => setContactForm((form) => ({ ...form, name: event.target.value }))}
+                placeholder="Rahul Sharma"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:bg-white focus:ring-4 focus:ring-emerald-100"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Email</label>
+              <input
+                value={contactForm.email}
+                onChange={(event) => setContactForm((form) => ({ ...form, email: event.target.value }))}
+                placeholder="rahul@email.com"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:bg-white focus:ring-4 focus:ring-emerald-100"
+              />
+            </div>
+            <button
+              onClick={handleSaveContact}
+              disabled={contactSaving}
+              className="w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50"
+            >
+              {contactSaving ? 'Saving...' : 'Save contact'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {showImportContacts && (
+        <Modal
+          title="Import saved contacts"
+          subtitle="Paste rows in CSV style like Name, Phone, Email. This is how we map real names into the WhatsApp inbox."
+          onClose={() => setShowImportContacts(false)}
+        >
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+              Example:
+              <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-emerald-900">
+                Name, Phone, Email{'\n'}Rahul Sharma, 919876543210, rahul@email.com{'\n'}Aisha Khan, 917000112233, aisha@email.com
+              </pre>
+            </div>
+            <textarea
+              value={contactsText}
+              onChange={(event) => setContactsText(event.target.value)}
+              rows={10}
+              placeholder="Paste contacts here..."
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:bg-white focus:ring-4 focus:ring-emerald-100"
+            />
+            <button
+              onClick={handleImportContacts}
+              disabled={importingContacts || !contactsText.trim()}
+              className="w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50"
+            >
+              {importingContacts ? 'Importing...' : 'Import contacts into CRM'}
+            </button>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+function SendTab({
+  showToast,
+  onMessageSent,
+}: {
+  showToast: (msg: string, type?: 'success' | 'error') => void;
+  onMessageSent: (phone: string, toastMessage: string) => void;
+}) {
   const [phone, setPhone] = useState('');
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
   const [reviewPhone, setReviewPhone] = useState('');
   const [sendingReview, setSendingReview] = useState(false);
+  const [sendStatus, setSendStatus] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [reviewStatus, setReviewStatus] = useState<string | null>(null);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [lastSentPhone, setLastSentPhone] = useState<string | null>(null);
 
   const handleSend = async () => {
     const normalizedPhone = phone.replace(/[^\d]/g, '');
     if (!normalizedPhone || normalizedPhone.length < 8) {
-      showToast('Enter a valid phone with country code (e.g. 919876543210)', 'error');
+      showToast('Enter a valid phone with country code.', 'error');
       return;
     }
     if (!message.trim()) {
-      showToast('Message cannot be empty', 'error');
+      showToast('Message cannot be empty.', 'error');
       return;
     }
+    setSendStatus(null);
+    setSendError(null);
     setSending(true);
     try {
-      const res = await fetch('/api/whatsapp/send', {
+      const response = await fetch('/api/whatsapp/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
         body: JSON.stringify({ phone: normalizedPhone, message: message.trim(), teamId: TEAM_ID }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'Failed');
-      showToast('Message sent successfully');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Failed to send');
       setMessage('');
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Failed to send', 'error');
+      setLastSentPhone(normalizedPhone);
+      setSendStatus(`Message queued successfully for ${normalizedPhone}. Opening the live inbox thread now.`);
+      onMessageSent(normalizedPhone, `Message sent to ${normalizedPhone}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to send';
+      setSendError(message);
+      showToast(message, 'error');
     } finally {
       setSending(false);
     }
@@ -472,102 +979,148 @@ function SendTab({ showToast }: { showToast: (m: string, t?: 'success' | 'error'
   const handleSendReview = async () => {
     const normalizedPhone = reviewPhone.replace(/[^\d]/g, '');
     if (!normalizedPhone || normalizedPhone.length < 8) {
-      showToast('Enter a valid phone with country code', 'error');
+      showToast('Enter a valid phone with country code.', 'error');
       return;
     }
+    setReviewStatus(null);
+    setReviewError(null);
     setSendingReview(true);
     try {
-      const reviewMsg = `Hi! 😊 Thank you for choosing *Traventions* for your travel needs.\n\nWe'd love to hear your feedback! Please take a moment to rate your experience:\n\n⭐ ${GOOGLE_REVIEW_LINK}\n\nYour review means a lot to us and helps other travelers too! 🙏`;
-      const res = await fetch('/api/whatsapp/send', {
+      const reviewMessage = `Hi! Thank you for choosing *Traventions* for your travel plans.\n\nWe would love your feedback.\nPlease share your review here:\n${GOOGLE_REVIEW_LINK}\n\nYour review helps us a lot.`;
+      const response = await fetch('/api/whatsapp/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: normalizedPhone, message: reviewMsg, teamId: TEAM_ID }),
+        cache: 'no-store',
+        body: JSON.stringify({ phone: normalizedPhone, message: reviewMessage, teamId: TEAM_ID }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'Failed');
-      showToast('Review request sent');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Failed to send review request');
       setReviewPhone('');
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Failed to send', 'error');
+      setLastSentPhone(normalizedPhone);
+      setReviewStatus(`Review request queued successfully for ${normalizedPhone}. Opening the live inbox thread now.`);
+      onMessageSent(normalizedPhone, `Review request sent to ${normalizedPhone}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to send';
+      setReviewError(message);
+      showToast(message, 'error');
     } finally {
       setSendingReview(false);
     }
   };
 
   return (
-    <div className="h-full overflow-y-auto p-6">
-      <div className="max-w-xl mx-auto space-y-5">
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
-          <h2 className="text-lg font-bold text-gray-900 mb-1">Send Message</h2>
-          <p className="text-sm text-gray-400 mb-6">Send a manual message to any WhatsApp number. Works within the 24-hour window.</p>
+    <div className="h-full overflow-y-auto px-6 py-6">
+        <div className="mx-auto grid max-w-6xl gap-5 xl:grid-cols-[1.18fr_0.82fr]">
+          <section className="rounded-[32px] border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
+          <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400/80">
+            Manual outreach
+          </p>
+          <h2 className="mt-2 text-2xl font-semibold text-slate-950">Send a direct WhatsApp message</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            Useful for a follow-up, human intervention, or a fast quote during the 24-hour window.
+          </p>
 
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Phone number</label>
-              <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">+</span>
-                <input
-                  type="tel"
-                  value={phone}
-                  onChange={e => setPhone(e.target.value)}
-                  placeholder="919876543210"
-                  className="w-full pl-7 pr-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
+          <div className="mt-6 space-y-4">
+            {sendStatus && (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                <p>{sendStatus}</p>
+                {lastSentPhone && (
+                  <p className="mt-1 text-xs text-emerald-600/90">
+                    If WhatsApp delivery is still catching up, the thread for {lastSentPhone} will
+                    still appear as the latest CRM activity in the inbox.
+                  </p>
+                )}
               </div>
-              <p className="text-xs text-gray-400 mt-1">Include country code — e.g. 91 for India</p>
-            </div>
-
+            )}
+            {sendError && (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {sendError}
+              </div>
+            )}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Message</label>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Phone number</label>
+              <input
+                type="tel"
+                value={phone}
+                onChange={(event) => setPhone(event.target.value)}
+                placeholder="919876543210"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:bg-white focus:ring-4 focus:ring-emerald-100"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Message</label>
               <textarea
                 value={message}
-                onChange={e => setMessage(e.target.value)}
-                rows={6}
-                placeholder="Hi! Just wanted to follow up on your travel enquiry..."
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none"
+                onChange={(event) => setMessage(event.target.value)}
+                rows={8}
+                placeholder="Hi! I wanted to follow up on your holiday enquiry..."
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:bg-white focus:ring-4 focus:ring-emerald-100"
               />
-              <p className="text-xs text-gray-400 mt-1">{message.length} / 1000 characters</p>
+              <p className="mt-1 text-xs text-slate-400">{message.length} / 1000 characters</p>
             </div>
-
             <button
               onClick={handleSend}
               disabled={sending || !phone.trim() || !message.trim()}
-              className="w-full py-3 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+              className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50"
             >
-              {sending ? 'Sending…' : 'Send Message'}
+              {sending ? 'Sending...' : 'Send message'}
             </button>
           </div>
-        </div>
+        </section>
 
-        {/* Google Review Request */}
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-xl">⭐</span>
-            <h2 className="text-lg font-bold text-gray-900">Request Google Review</h2>
-          </div>
-          <p className="text-sm text-gray-400 mb-5">Send a WhatsApp message asking a customer to leave a Google review.</p>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Customer Phone</label>
-              <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">+</span>
-                <input type="tel" value={reviewPhone} onChange={e => setReviewPhone(e.target.value)}
-                  placeholder="919876543210"
-                  className="w-full pl-7 pr-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400" />
+        <section className="rounded-[32px] border border-amber-200 bg-[linear-gradient(180deg,#fff9ed_0%,#ffffff_100%)] p-6 shadow-xl shadow-amber-100/70">
+          <p className="text-xs font-medium uppercase tracking-[0.18em] text-amber-500/75">
+            Review growth
+          </p>
+          <h2 className="mt-2 text-2xl font-semibold text-slate-950">Request a Google review</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            Send a polished review request to any customer directly from the CRM.
+          </p>
+
+          <div className="mt-6 space-y-4">
+            {reviewStatus && (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                <p>{reviewStatus}</p>
+                {lastSentPhone && (
+                  <p className="mt-1 text-xs text-emerald-600/90">
+                    The review request is queued through YCloud and will show up in the inbox thread
+                    for {lastSentPhone}.
+                  </p>
+                )}
               </div>
+            )}
+            {reviewError && (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {reviewError}
+              </div>
+            )}
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Customer phone</label>
+              <input
+                type="tel"
+                value={reviewPhone}
+                onChange={(event) => setReviewPhone(event.target.value)}
+                placeholder="919876543210"
+                className="w-full rounded-2xl border border-amber-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-amber-300 focus:ring-4 focus:ring-amber-100"
+              />
             </div>
-            <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3 text-xs text-gray-600 whitespace-pre-line font-mono">
-              {`Hi! 😊 Thank you for choosing *Traventions* for your travel needs.\n\nWe'd love to hear your feedback!\n⭐ ${GOOGLE_REVIEW_LINK}\n\nYour review means a lot to us! 🙏`}
+            <div className="rounded-2xl border border-amber-200 bg-white px-4 py-3 text-sm text-slate-600">
+              <p className="font-semibold text-slate-900">Preview</p>
+              <p className="mt-2 whitespace-pre-wrap">
+                Hi! Thank you for choosing *Traventions* for your travel plans.
+                {'\n\n'}We would love your feedback.
+                {'\n'}{GOOGLE_REVIEW_LINK}
+              </p>
             </div>
             <button
               onClick={handleSendReview}
               disabled={sendingReview || !reviewPhone.trim()}
-              className="w-full py-3 bg-yellow-500 text-white rounded-xl text-sm font-semibold hover:bg-yellow-600 disabled:opacity-50 transition-colors"
+              className="rounded-2xl bg-amber-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-amber-600 disabled:opacity-50"
             >
-              {sendingReview ? 'Sending…' : 'Send Review Request'}
+              {sendingReview ? 'Sending...' : 'Send review request'}
             </button>
           </div>
-        </div>
+        </section>
       </div>
     </div>
   );

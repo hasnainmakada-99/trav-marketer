@@ -55,6 +55,7 @@ function Toast({ msg, type, onClose }: { msg: string; type: 'success' | 'error';
 
 export default function CampaignsPage() {
   const router = useRouter();
+  const [currentUserId, setCurrentUserId] = useState('');
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -80,8 +81,16 @@ export default function CampaignsPage() {
   }, []);
 
   useEffect(() => {
-    getCurrentUser().then((u) => { if (!u) router.push('/login'); });
-    loadCampaigns();
+    getCurrentUser().then((u) => {
+      if (!u) {
+        router.push('/login');
+        return;
+      }
+      setCurrentUserId((u as { $id?: string }).$id || '');
+    });
+    queueMicrotask(() => {
+      void loadCampaigns();
+    });
   }, [router, loadCampaigns]);
 
   const handleCreate = async () => {
@@ -93,7 +102,7 @@ export default function CampaignsPage() {
     try {
       const body: Record<string, unknown> = {
         teamId: TEAM_ID, title: form.title.trim(), message: form.message.trim(),
-        segment: form.segment, type: 'promotional',
+        segment: form.segment, type: 'promotional', createdBy: currentUserId || 'dashboard-user',
       };
       if (form.scheduledAt) body.scheduledAt = new Date(form.scheduledAt).toISOString();
       const res = await fetch('/api/campaigns', {

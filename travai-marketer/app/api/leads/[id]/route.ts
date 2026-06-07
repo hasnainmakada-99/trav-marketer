@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { deleteDocument, updateDocument } from '@/lib/appwrite';
+import { coerceLeadStatus } from '@/lib/crm';
 
 export async function PATCH(
   request: NextRequest,
@@ -11,9 +12,10 @@ export async function PATCH(
 
     const body = await request.json();
     const allowedFields: Record<string, unknown> = {};
-    if (body.status) allowedFields.status = body.status;
+    if (body.status) allowedFields.status = coerceLeadStatus(body.status);
     if (body.notes !== undefined) allowedFields.notes = body.notes;
     if (body.name !== undefined) allowedFields.name = body.name;
+    if (body.email !== undefined) allowedFields.email = body.email;
     allowedFields.updatedAt = new Date().toISOString();
 
     const updated = await updateDocument('leads', id, allowedFields);

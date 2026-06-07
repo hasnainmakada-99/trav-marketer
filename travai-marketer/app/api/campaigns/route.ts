@@ -83,7 +83,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const queries = [
+    const queries: string[] = [
       Query.equal('teamId', teamId),
     ];
 
@@ -93,7 +93,7 @@ export async function GET(request: NextRequest) {
 
     queries.push(Query.limit(limit), Query.offset(offset));
 
-    const campaigns = await listDocuments('campaigns', queries as any);
+    const campaigns = await listDocuments('campaigns', queries);
 
     return NextResponse.json(campaigns, { status: 200 });
   } catch (error) {

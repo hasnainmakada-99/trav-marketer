@@ -1,34 +1,32 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getCurrentUser } from '@/lib/appwrite-client';
+import {
+  CRM_STATUS_META,
+  CRM_STATUS_ORDER,
+  buildStatusCounts,
+  coerceLeadStatus,
+  type CrmLeadStatus,
+} from '@/lib/crm';
 
 const POLL_MS_RAW = Number(process.env.NEXT_PUBLIC_LEADS_POLL_MS || '15000');
 const POLL_MS = Number.isFinite(POLL_MS_RAW) ? Math.max(10_000, POLL_MS_RAW) : 15_000;
 const TEAM_ID = process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
-const STATUS_OPTIONS = ['new', 'contacted', 'converted', 'closed'] as const;
-type LeadStatus = (typeof STATUS_OPTIONS)[number];
 
 interface Lead {
   $id: string;
   phone: string;
-  name?: string;
-  email?: string;
+  name?: string | null;
+  email?: string | null;
   source?: string;
-  status: LeadStatus;
-  notes?: string;
+  status: CrmLeadStatus;
+  notes?: string | null;
   lastContactedAt?: string;
   createdAt?: string;
   $createdAt?: string;
 }
-
-const STATUS_CONFIG: Record<LeadStatus, { label: string; dot: string; badge: string; row: string }> = {
-  new:       { label: 'New',       dot: 'bg-blue-500',    badge: 'bg-blue-100 text-blue-700',     row: '' },
-  contacted: { label: 'Contacted', dot: 'bg-amber-500',   badge: 'bg-amber-100 text-amber-700',   row: '' },
-  converted: { label: 'Converted', dot: 'bg-emerald-500', badge: 'bg-emerald-100 text-emerald-700', row: 'bg-emerald-50' },
-  closed:    { label: 'Closed',    dot: 'bg-gray-400',    badge: 'bg-gray-100 text-gray-500',     row: 'opacity-60' },
-};
 
 function ago(iso?: string) {
   if (!iso) return '—';
@@ -40,9 +38,57 @@ function ago(iso?: string) {
   return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
 }
 
-function initials(name?: string, phone?: string) {
-  if (name) return name.split(' ').slice(0, 2).map(w => w[0]?.toUpperCase() || '').join('');
+function initials(name?: string | null, phone?: string) {
+  if (name) {
+    return name
+      .split(' ')
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() || '')
+      .join('');
+  }
   return (phone || '?').slice(-2);
+}
+
+function StatusBadge({ status }: { status: CrmLeadStatus }) {
+  const meta = CRM_STATUS_META[coerceLeadStatus(status)];
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold ${meta.badge}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
+      {meta.label}
+    </span>
+  );
+}
+
+function Modal({
+  title,
+  subtitle,
+  onClose,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-lg rounded-[28px] border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-start justify-between border-b border-slate-100 px-6 py-5">
+          <div>
+            <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
+            {subtitle && <p className="mt-1 text-sm text-slate-500">{subtitle}</p>}
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-500 transition hover:bg-slate-50"
+          >
+            Close
+          </button>
+        </div>
+        <div className="px-6 py-5">{children}</div>
+      </div>
+    </div>
+  );
 }
 
 export default function LeadsPage() {
@@ -50,7 +96,7 @@ export default function LeadsPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<LeadStatus | 'all'>('all');
+  const [filter, setFilter] = useState<CrmLeadStatus | 'all'>('all');
   const [search, setSearch] = useState('');
   const [updating, setUpdating] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
@@ -59,47 +105,50 @@ export default function LeadsPage() {
   const [syncResult, setSyncResult] = useState<{ created: number; updated: number; firstError?: string | null } | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Walk-in lead capture
   const [showAddLead, setShowAddLead] = useState(false);
   const [addForm, setAddForm] = useState({ name: '', phone: '', email: '', serviceInterest: '', notes: '' });
   const [addingLead, setAddingLead] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
-
-  // Invoice modal
   const [invoiceLead, setInvoiceLead] = useState<Lead | null>(null);
   const [invoiceForm, setInvoiceForm] = useState({ service: '', amount: '', date: new Date().toISOString().slice(0, 10), notes: '' });
   const [sendingInvoice, setSendingInvoice] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    getCurrentUser().then(u => { if (!u) router.push('/login'); });
+    getCurrentUser().then((user) => {
+      if (!user) router.push('/login');
+    });
   }, [router]);
 
-  const fetchLeads = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
-    try {
-      const params = new URLSearchParams({ limit: '200' });
-      if (filter !== 'all') params.set('status', filter);
-      const res = await fetch(`/api/leads?${params}`);
-      const data = await res.json();
-      if (!res.ok) {
-        setFetchError(data?.error || `HTTP ${res.status}`);
-      } else {
-        setFetchError(null);
-        setLeads(data.leads || []);
-        setTotal(data.total || 0);
+  const fetchLeads = useCallback(
+    async (silent = false) => {
+      if (!silent) setLoading(true);
+      try {
+        const params = new URLSearchParams({ limit: '200', teamId: TEAM_ID });
+        if (filter !== 'all') params.set('status', filter);
+        const response = await fetch(`/api/leads?${params.toString()}`);
+        const data = await response.json();
+        if (!response.ok) {
+          setFetchError(data?.error || `HTTP ${response.status}`);
+        } else {
+          setFetchError(null);
+          setLeads((data.leads || []).map((lead: Lead) => ({ ...lead, status: coerceLeadStatus(lead.status) })));
+          setTotal(data.total || 0);
+        }
+        setLastRefresh(new Date());
+      } catch (error) {
+        setFetchError(error instanceof Error ? error.message : 'Network error');
+      } finally {
+        if (!silent) setLoading(false);
       }
-      setLastRefresh(new Date());
-    } catch (err) {
-      setFetchError(err instanceof Error ? err.message : 'Network error');
-    } finally {
-      setLoading(false);
-    }
-  }, [filter]);
+    },
+    [filter]
+  );
 
   useEffect(() => {
-    fetchLeads();
+    queueMicrotask(() => {
+      void fetchLeads();
+    });
     const start = () => {
       if (pollRef.current) clearInterval(pollRef.current);
       pollRef.current = setInterval(() => {
@@ -115,16 +164,34 @@ export default function LeadsPage() {
     };
   }, [fetchLeads]);
 
+  const filteredLeads = useMemo(() => {
+    return leads.filter((lead) => {
+      if (search) {
+        const query = search.toLowerCase();
+        const matches =
+          String(lead.name || '').toLowerCase().includes(query) ||
+          String(lead.email || '').toLowerCase().includes(query) ||
+          String(lead.phone || '').includes(query) ||
+          String(lead.notes || '').toLowerCase().includes(query);
+        if (!matches) return false;
+      }
+      if (filter === 'all') return true;
+      return lead.status === filter;
+    });
+  }, [filter, leads, search]);
+
+  const counts = useMemo(() => buildStatusCounts(leads), [leads]);
+
   async function syncFromWhatsApp() {
     setSyncing(true);
     setSyncResult(null);
     try {
-      const res = await fetch('/api/leads/backfill', { method: 'POST' });
-      const data = await res.json();
+      const response = await fetch('/api/leads/backfill', { method: 'POST' });
+      const data = await response.json();
       setSyncResult({ created: data.created || 0, updated: data.updated || 0, firstError: data.firstError });
       await fetchLeads();
-    } catch (err) {
-      setSyncResult({ created: 0, updated: 0, firstError: err instanceof Error ? err.message : 'Network error' });
+    } catch (error) {
+      setSyncResult({ created: 0, updated: 0, firstError: error instanceof Error ? error.message : 'Network error' });
     } finally {
       setSyncing(false);
     }
@@ -135,14 +202,14 @@ export default function LeadsPage() {
     setDeleting(id);
     try {
       await fetch(`/api/leads/${id}`, { method: 'DELETE' });
-      setLeads(prev => prev.filter(l => l.$id !== id));
-      setTotal(prev => prev - 1);
+      setLeads((previous) => previous.filter((lead) => lead.$id !== id));
+      setTotal((previous) => previous - 1);
     } finally {
       setDeleting(null);
     }
   }
 
-  async function updateStatus(id: string, status: LeadStatus) {
+  async function updateStatus(id: string, status: CrmLeadStatus) {
     setUpdating(id);
     try {
       await fetch(`/api/leads/${id}`, {
@@ -150,7 +217,7 @@ export default function LeadsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status }),
       });
-      setLeads(prev => prev.map(l => l.$id === id ? { ...l, status } : l));
+      setLeads((previous) => previous.map((lead) => (lead.$id === id ? { ...lead, status } : lead)));
     } finally {
       setUpdating(null);
     }
@@ -159,21 +226,25 @@ export default function LeadsPage() {
   async function handleAddLead() {
     setAddError(null);
     const phone = addForm.phone.replace(/[^\d+]/g, '');
-    if (!phone || phone.length < 8) { setAddError('Valid phone number required'); return; }
+    if (!phone || phone.length < 8) {
+      setAddError('A valid phone number is required.');
+      return;
+    }
+
     setAddingLead(true);
     try {
-      const res = await fetch('/api/leads', {
+      const response = await fetch('/api/leads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...addForm, phone, teamId: TEAM_ID, source: 'walk_in' }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to create');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to create lead');
       setShowAddLead(false);
       setAddForm({ name: '', phone: '', email: '', serviceInterest: '', notes: '' });
       await fetchLeads();
-    } catch (e) {
-      setAddError(e instanceof Error ? e.message : 'Failed to create lead');
+    } catch (error) {
+      setAddError(error instanceof Error ? error.message : 'Failed to create lead');
     } finally {
       setAddingLead(false);
     }
@@ -181,453 +252,409 @@ export default function LeadsPage() {
 
   async function handleSendInvoice() {
     if (!invoiceLead) return;
-    if (!invoiceForm.service.trim() || !invoiceForm.amount) { alert('Service and amount are required'); return; }
+    if (!invoiceForm.service.trim() || !invoiceForm.amount) {
+      alert('Service and amount are required.');
+      return;
+    }
     setSendingInvoice(true);
     try {
-      const msg = [
-        '*TRAVENTIONS — INVOICE*',
-        '━━━━━━━━━━━━━━━━━━━━',
+      const message = [
+        '*TRAVENTIONS INVOICE*',
+        '--------------------',
         `Customer: ${invoiceLead.name || invoiceLead.phone}`,
         `Date: ${invoiceForm.date}`,
         `Service: ${invoiceForm.service}`,
-        `Amount: ₹${Number(invoiceForm.amount).toLocaleString('en-IN')}`,
+        `Amount: INR ${Number(invoiceForm.amount).toLocaleString('en-IN')}`,
         invoiceForm.notes ? `Notes: ${invoiceForm.notes}` : '',
-        '━━━━━━━━━━━━━━━━━━━━',
-        'Thank you for choosing Traventions! 🙏',
-        'For queries, reply to this message.',
-      ].filter(Boolean).join('\n');
-      const res = await fetch('/api/whatsapp/send', {
+        '--------------------',
+        'Thank you for choosing Traventions.',
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      const response = await fetch('/api/whatsapp/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: invoiceLead.phone, message: msg, teamId: TEAM_ID }),
+        body: JSON.stringify({ phone: invoiceLead.phone, message, teamId: TEAM_ID }),
       });
-      if (!res.ok) throw new Error('Failed to send');
-      alert(`Invoice sent to ${invoiceLead.name || invoiceLead.phone}`);
+      if (!response.ok) throw new Error('Failed to send invoice');
       setInvoiceLead(null);
       setInvoiceForm({ service: '', amount: '', date: new Date().toISOString().slice(0, 10), notes: '' });
-    } catch (e) {
-      alert(e instanceof Error ? e.message : 'Failed to send invoice');
+      alert(`Invoice sent to ${invoiceLead.name || invoiceLead.phone}`);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Failed to send invoice');
     } finally {
       setSendingInvoice(false);
     }
   }
 
-  const counts = STATUS_OPTIONS.reduce(
-    (acc, s) => ({ ...acc, [s]: leads.filter(l => l.status === s).length }),
-    {} as Record<LeadStatus, number>
-  );
-
-  const filtered = leads.filter(l => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return (l.name || '').toLowerCase().includes(q) ||
-      (l.phone || '').includes(q) ||
-      (l.email || '').toLowerCase().includes(q) ||
-      (l.notes || '').toLowerCase().includes(q);
-  });
-
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Page header */}
-      <div className="bg-white border-b border-gray-200 px-6 py-5">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">Leads CRM</h1>
-            <p className="text-xs text-gray-400 mt-0.5">
-              {total} lead{total !== 1 ? 's' : ''}
-              {lastRefresh && ` · updated ${lastRefresh.toLocaleTimeString('en-IN', { timeStyle: 'short' })}`}
-            </p>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            {syncResult && (
-              <span className={`text-xs font-medium px-3 py-1.5 rounded-full border ${
-                syncResult.firstError
-                  ? 'bg-red-50 text-red-700 border-red-200'
-                  : 'bg-emerald-50 text-emerald-600 border-emerald-200'
-              }`}>
-                {syncResult.firstError
-                  ? `Error: ${syncResult.firstError.slice(0, 80)}`
-                  : `✓ ${syncResult.created} new · ${syncResult.updated} updated`
-                }
-              </span>
-            )}
-            <button
-              onClick={syncFromWhatsApp}
-              disabled={syncing}
-              className="px-4 py-2 bg-green-600 text-white rounded-xl text-sm font-semibold hover:bg-green-700 transition-colors disabled:opacity-60 flex items-center gap-2"
-            >
-              {syncing ? (
-                <>
-                  <span className="animate-spin inline-block w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full" />
-                  Syncing…
-                </>
-              ) : (
-                'Sync from WhatsApp'
+    <>
+      <div className="min-h-screen px-6 py-6">
+        <div className="rounded-[32px] border border-slate-200 bg-white/85 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
+          <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-emerald-600">Lead CRM</p>
+              <h1 className="mt-2 text-3xl font-semibold text-slate-950">Sales pipeline with AI-aware lead stages</h1>
+              <p className="mt-2 max-w-3xl text-sm text-slate-500">
+                WhatsApp leads now move through New Lead, Normal Conversation, Connected, Converted,
+                and Closed. Callback requests, contact identity, and manual sales actions all stay in sync.
+              </p>
+              <p className="mt-2 text-xs text-slate-400">
+                {total} leads · last refresh{' '}
+                {lastRefresh ? lastRefresh.toLocaleTimeString('en-IN', { timeStyle: 'short' }) : '—'}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {syncResult && (
+                <span
+                  className={`rounded-full px-3 py-2 text-xs font-semibold ${
+                    syncResult.firstError
+                      ? 'bg-rose-50 text-rose-700'
+                      : 'bg-emerald-50 text-emerald-700'
+                  }`}
+                >
+                  {syncResult.firstError
+                    ? `Sync issue: ${syncResult.firstError.slice(0, 80)}`
+                    : `Synced ${syncResult.created} new / ${syncResult.updated} updated`}
+                </span>
               )}
-            </button>
-            <button
-              onClick={() => setShowAddLead(true)}
-              className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 transition-colors"
-            >
-              + Add Lead
-            </button>
-            <button
-              onClick={() => fetchLeads()}
-              className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 transition-colors"
-            >
-              Refresh
-            </button>
+              <button
+                onClick={syncFromWhatsApp}
+                disabled={syncing}
+                className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:opacity-50"
+              >
+                {syncing ? 'Syncing...' : 'Sync from WhatsApp'}
+              </button>
+              <button
+                onClick={() => setShowAddLead(true)}
+                className="rounded-2xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
+              >
+                Add walk-in lead
+              </button>
+              <button
+                onClick={() => fetchLeads()}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Refresh
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-6 grid gap-3 md:grid-cols-3 xl:grid-cols-5">
+            {CRM_STATUS_ORDER.map((status) => {
+              const meta = CRM_STATUS_META[status];
+              const isActive = filter === status;
+              return (
+                <button
+                  key={status}
+                  onClick={() => setFilter(filter === status ? 'all' : status)}
+                  className={`rounded-[26px] border p-4 text-left transition ${
+                    isActive ? 'border-slate-900 bg-slate-900 text-white shadow-lg' : 'border-slate-200 bg-slate-50 hover:bg-white'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className={`h-2.5 w-2.5 rounded-full ${meta.dot}`} />
+                    <span className={`text-xs font-semibold uppercase tracking-[0.18em] ${isActive ? 'text-slate-200' : 'text-slate-500'}`}>
+                      {meta.shortLabel}
+                    </span>
+                  </div>
+                  <p className={`mt-3 text-3xl font-semibold ${isActive ? 'text-white' : 'text-slate-900'}`}>
+                    {counts[status] || 0}
+                  </p>
+                  <p className={`mt-1 text-sm ${isActive ? 'text-slate-300' : 'text-slate-500'}`}>{meta.label}</p>
+                </button>
+              );
+            })}
           </div>
         </div>
 
-        {/* Stat chips */}
-        <div className="grid grid-cols-4 gap-3 mt-5">
-          {STATUS_OPTIONS.map(s => {
-            const cfg = STATUS_CONFIG[s];
-            return (
-              <button
-                key={s}
-                onClick={() => setFilter(filter === s ? 'all' : s)}
-                className={`rounded-xl p-3 text-left transition-all border-2 ${
-                  filter === s ? 'border-indigo-400 shadow-sm' : 'border-transparent bg-white hover:border-gray-200'
-                }`}
-                style={{ background: filter === s ? '#eef2ff' : 'white' }}
-              >
-                <div className="flex items-center gap-1.5 mb-1">
-                  <span className={`w-2 h-2 rounded-full ${cfg.dot}`} />
-                  <span className="text-xs text-gray-500 font-medium">{cfg.label}</span>
-                </div>
-                <p className="text-2xl font-bold text-gray-900">{counts[s]}</p>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="p-6">
-        {/* Fetch error banner */}
         {fetchError && (
-          <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 flex items-start gap-2">
-            <span className="font-semibold flex-shrink-0">Appwrite error:</span>
-            <span className="font-mono break-all">{fetchError}</span>
-            <a href="/api/leads/debug" target="_blank" rel="noreferrer" className="ml-auto flex-shrink-0 underline text-red-600 hover:text-red-800 text-xs">
-              Run diagnostic →
-            </a>
+          <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            {fetchError}
           </div>
         )}
-        {/* Search + filter */}
-        <div className="flex flex-col sm:flex-row gap-3 mb-4">
+
+        <div className="mt-5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <input
             value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Search name, phone, notes..."
-            className="flex-1 px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search by name, phone, email, or note"
+            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100 lg:max-w-xl"
           />
-          <div className="flex gap-1.5 flex-wrap">
-            {(['all', ...STATUS_OPTIONS] as const).map(s => (
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => setFilter('all')}
+              className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                filter === 'all' ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              All
+            </button>
+            {CRM_STATUS_ORDER.map((status) => (
               <button
-                key={s}
-                onClick={() => setFilter(s)}
-                className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
-                  filter === s
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-white border border-gray-200 text-gray-600 hover:border-indigo-300'
+                key={status}
+                onClick={() => setFilter(status)}
+                className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                  filter === status ? CRM_STATUS_META[status].soft : 'bg-white text-slate-600 hover:bg-slate-100'
                 }`}
               >
-                {s === 'all' ? 'All' : STATUS_CONFIG[s].label}
+                {CRM_STATUS_META[status].label}
               </button>
             ))}
           </div>
         </div>
 
-        {/* Loading */}
         {loading ? (
           <div className="flex items-center justify-center py-24">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
+            <div className="h-10 w-10 animate-spin rounded-full border-b-2 border-emerald-600" />
           </div>
-        ) : filtered.length === 0 ? (
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-16 text-center">
-            <p className="text-4xl mb-3">🎯</p>
-            <p className="font-semibold text-gray-700 text-lg">No leads yet</p>
-            <p className="text-sm text-gray-400 mt-1">
-              When customers message on WhatsApp, they appear here automatically.
+        ) : filteredLeads.length === 0 ? (
+          <div className="mt-6 rounded-[32px] border border-slate-200 bg-white p-16 text-center shadow-xl shadow-slate-200/60">
+            <h2 className="text-2xl font-semibold text-slate-900">No leads found</h2>
+            <p className="mt-2 text-sm text-slate-500">
+              New WhatsApp enquiries and manual walk-ins will appear here automatically.
             </p>
-            <button
-              onClick={syncFromWhatsApp}
-              disabled={syncing}
-              className="mt-4 px-5 py-2.5 bg-green-600 text-white rounded-xl text-sm font-semibold hover:bg-green-700 transition-colors disabled:opacity-60"
-            >
-              {syncing ? 'Syncing…' : 'Sync existing WhatsApp contacts'}
-            </button>
           </div>
         ) : (
-          /* Desktop table */
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            <table className="w-full text-sm hidden md:table">
-              <thead>
-                <tr className="border-b border-gray-100 bg-gray-50/80">
-                  <th className="text-left px-5 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide w-8">#</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide">Customer</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide">Phone</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide">Notes</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide">When</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide">Status</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((lead, idx) => {
-                  const cfg = STATUS_CONFIG[lead.status] || STATUS_CONFIG.new;
-                  const notesOpen = expandedNotes === lead.$id;
-                  return (
-                    <tr
-                      key={lead.$id}
-                      className={`border-b border-gray-50 hover:bg-gray-50/60 transition-colors ${cfg.row}`}
-                    >
-                        <td className="px-5 py-3.5 text-gray-400 text-xs font-mono">{idx + 1}</td>
-                        <td className="px-4 py-3.5">
-                          <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-                              {initials(lead.name, lead.phone)}
-                            </div>
-                            <div>
-                              <p className="font-semibold text-gray-900">{lead.name || <span className="text-gray-400 font-normal">Unknown</span>}</p>
-                              {lead.email && <p className="text-xs text-gray-400 truncate max-w-[180px]">{lead.email}</p>}
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <a
-                            href={`https://wa.me/${lead.phone}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="font-mono text-xs text-indigo-600 hover:text-indigo-800 hover:underline"
-                          >
-                            {lead.phone}
-                          </a>
-                        </td>
-                        <td className="px-4 py-3.5 max-w-xs">
-                          {lead.notes ? (
-                            <button
-                              onClick={() => setExpandedNotes(notesOpen ? null : lead.$id)}
-                              className="text-xs text-gray-600 text-left hover:text-gray-900 transition-colors"
-                            >
-                              <span className={notesOpen ? '' : 'line-clamp-2'}>{lead.notes}</span>
-                              {lead.notes.length > 80 && (
-                                <span className="text-indigo-500 ml-1">{notesOpen ? 'less' : 'more'}</span>
-                              )}
-                            </button>
-                          ) : (
-                            <span className="text-gray-300 text-xs">—</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3.5 text-xs text-gray-500 whitespace-nowrap">
-                          {ago(lead.lastContactedAt || lead.createdAt || lead.$createdAt)}
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full ${cfg.badge}`}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} />
-                            {cfg.label}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <div className="flex items-center gap-1.5">
-                            {/* Quick-action buttons */}
-                            {lead.status === 'new' && (
-                              <button
-                                onClick={() => updateStatus(lead.$id, 'contacted')}
-                                disabled={updating === lead.$id}
-                                className="text-xs px-2.5 py-1 rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200 font-medium transition-colors disabled:opacity-50"
-                              >
-                                Contacted
-                              </button>
-                            )}
-                            {lead.status === 'contacted' && (
-                              <button
-                                onClick={() => updateStatus(lead.$id, 'converted')}
-                                disabled={updating === lead.$id}
-                                className="text-xs px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-700 hover:bg-emerald-200 font-medium transition-colors disabled:opacity-50"
-                              >
-                                Converted
-                              </button>
-                            )}
-                            <select
-                              value={lead.status}
-                              onChange={e => updateStatus(lead.$id, e.target.value as LeadStatus)}
-                              disabled={updating === lead.$id}
-                              className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-400 cursor-pointer"
-                            >
-                              {STATUS_OPTIONS.map(s => (
-                                <option key={s} value={s}>{STATUS_CONFIG[s].label}</option>
-                              ))}
-                            </select>
-                            <button
-                              onClick={() => { setInvoiceLead(lead); setInvoiceForm({ service: '', amount: '', date: new Date().toISOString().slice(0, 10), notes: '' }); }}
-                              title="Send Invoice"
-                              className="text-xs px-2 py-1 rounded-lg text-indigo-500 hover:bg-indigo-50 hover:text-indigo-700 transition-colors"
-                            >
-                              📄
-                            </button>
-                            <button
-                              onClick={() => deleteLead(lead.$id)}
-                              disabled={deleting === lead.$id}
-                              title="Delete lead"
-                              className="text-xs px-2 py-1 rounded-lg text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors disabled:opacity-50"
-                            >
-                              {deleting === lead.$id ? '…' : '✕'}
-                            </button>
-                          </div>
-                        </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-
-            {/* Mobile cards */}
-            <div className="md:hidden divide-y divide-gray-100">
-              {filtered.map(lead => {
-                const cfg = STATUS_CONFIG[lead.status] || STATUS_CONFIG.new;
-                return (
-                  <div key={lead.$id} className="p-4">
-                    <div className="flex items-start gap-3">
-                      <div className="w-11 h-11 rounded-full bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
-                        {initials(lead.name, lead.phone)}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="font-semibold text-gray-900 truncate">{lead.name || 'Unknown'}</p>
-                          <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${cfg.badge}`}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} />
-                            {cfg.label}
-                          </span>
+          <div className="mt-6 grid gap-4 xl:grid-cols-2">
+            {filteredLeads.map((lead) => (
+              <div
+                key={lead.$id}
+                className="rounded-[30px] border border-slate-200 bg-white/90 p-5 shadow-lg shadow-slate-200/50"
+              >
+                <div className="flex items-start gap-4">
+                  <div className={`flex h-14 w-14 items-center justify-center rounded-[20px] bg-gradient-to-br ${CRM_STATUS_META[lead.status].panel} text-sm font-bold text-white shadow-lg`}>
+                    {initials(lead.name, lead.phone)}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="truncate text-xl font-semibold text-slate-950">
+                            {lead.name || 'Unknown traveller'}
+                          </h3>
+                          <StatusBadge status={lead.status} />
                         </div>
-                        <a href={`https://wa.me/${lead.phone}`} target="_blank" rel="noreferrer" className="text-xs text-indigo-600 font-mono hover:underline">
+                        <a
+                          href={`https://wa.me/${lead.phone}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-1 inline-block text-sm font-medium text-emerald-700 hover:underline"
+                        >
                           {lead.phone}
                         </a>
-                        {lead.notes && <p className="text-xs text-gray-500 mt-1.5 line-clamp-2">{lead.notes}</p>}
-                        <div className="flex items-center gap-2 mt-2.5">
-                          <select
-                            value={lead.status}
-                            onChange={e => updateStatus(lead.$id, e.target.value as LeadStatus)}
+                        {lead.email && <p className="mt-1 text-sm text-slate-500">{lead.email}</p>}
+                      </div>
+                      <div className="text-right text-xs text-slate-400">
+                        <p>Last touch {ago(lead.lastContactedAt || lead.createdAt || lead.$createdAt)}</p>
+                        <p className="mt-1">Source: {lead.source || 'whatsapp'}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                      {lead.notes ? (
+                        <button
+                          onClick={() => setExpandedNotes(expandedNotes === lead.$id ? null : lead.$id)}
+                          className="text-left"
+                        >
+                          <span className={expandedNotes === lead.$id ? '' : 'line-clamp-3'}>{lead.notes}</span>
+                          {lead.notes.length > 120 && (
+                            <span className="ml-1 font-semibold text-emerald-700">
+                              {expandedNotes === lead.$id ? 'show less' : 'show more'}
+                            </span>
+                          )}
+                        </button>
+                      ) : (
+                        <span className="text-slate-400">No notes yet</span>
+                      )}
+                    </div>
+
+                    <div className="mt-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {lead.status === 'new_lead' && (
+                          <button
+                            onClick={() => updateStatus(lead.$id, 'normal_conversation')}
                             disabled={updating === lead.$id}
-                            className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white focus:outline-none flex-1"
+                            className="rounded-full bg-violet-100 px-3 py-1.5 text-xs font-semibold text-violet-700 transition hover:bg-violet-200 disabled:opacity-50"
                           >
-                            {STATUS_OPTIONS.map(s => <option key={s} value={s}>{STATUS_CONFIG[s].label}</option>)}
-                          </select>
-                          <span className="text-xs text-gray-400">{ago(lead.lastContactedAt || lead.createdAt || lead.$createdAt)}</span>
-                        </div>
+                            Move to Normal
+                          </button>
+                        )}
+                        {lead.status !== 'converted' && (
+                          <button
+                            onClick={() => updateStatus(lead.$id, 'converted')}
+                            disabled={updating === lead.$id}
+                            className="rounded-full bg-emerald-100 px-3 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-200 disabled:opacity-50"
+                          >
+                            Mark Converted
+                          </button>
+                        )}
+                        <button
+                          onClick={() => {
+                            setInvoiceLead(lead);
+                            setInvoiceForm({ service: '', amount: '', date: new Date().toISOString().slice(0, 10), notes: '' });
+                          }}
+                          className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                        >
+                          Send invoice
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={lead.status}
+                          onChange={(event) => updateStatus(lead.$id, event.target.value as CrmLeadStatus)}
+                          disabled={updating === lead.$id}
+                          className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-emerald-300"
+                        >
+                          {CRM_STATUS_ORDER.map((status) => (
+                            <option key={status} value={status}>
+                              {CRM_STATUS_META[status].label}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => deleteLead(lead.$id)}
+                          disabled={deleting === lead.$id}
+                          className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-50"
+                        >
+                          {deleting === lead.$id ? 'Deleting...' : 'Delete'}
+                        </button>
                       </div>
                     </div>
                   </div>
-                );
-              })}
-            </div>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
 
-      {/* Walk-in Lead Capture Modal */}
       {showAddLead && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
-            <div className="flex items-center justify-between p-5 border-b border-gray-200">
-              <h2 className="font-bold text-gray-900">Add Walk-in Lead</h2>
-              <button onClick={() => setShowAddLead(false)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
+        <Modal
+          title="Add walk-in lead"
+          subtitle="Capture an offline or phone enquiry manually and place it into the CRM."
+          onClose={() => setShowAddLead(false)}
+        >
+          <div className="space-y-4">
+            {addError && (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {addError}
+              </div>
+            )}
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Phone number *</label>
+              <input
+                value={addForm.phone}
+                onChange={(event) => setAddForm({ ...addForm, phone: event.target.value })}
+                placeholder="919876543210"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100"
+              />
             </div>
-            <div className="p-5 space-y-4">
-              {addError && <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{addError}</p>}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number *</label>
-                <input value={addForm.phone} onChange={e => setAddForm({ ...addForm, phone: e.target.value })}
-                  placeholder="919876543210" type="tel"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                <p className="text-xs text-gray-400 mt-0.5">Include country code (e.g. 91 for India)</p>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
-                <input value={addForm.name} onChange={e => setAddForm({ ...addForm, name: e.target.value })}
-                  placeholder="Customer name"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-                <input value={addForm.email} onChange={e => setAddForm({ ...addForm, email: e.target.value })}
-                  placeholder="email@example.com" type="email"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Service Interest</label>
-                <input value={addForm.serviceInterest} onChange={e => setAddForm({ ...addForm, serviceInterest: e.target.value })}
-                  placeholder="e.g. Goa Trip, Honeymoon Package"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
-                <textarea value={addForm.notes} onChange={e => setAddForm({ ...addForm, notes: e.target.value })}
-                  rows={3} placeholder="Any additional notes…"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-              </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Name</label>
+              <input
+                value={addForm.name}
+                onChange={(event) => setAddForm({ ...addForm, name: event.target.value })}
+                placeholder="Customer name"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100"
+              />
             </div>
-            <div className="flex gap-3 p-5 border-t border-gray-200">
-              <button onClick={() => setShowAddLead(false)} className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">Cancel</button>
-              <button onClick={handleAddLead} disabled={addingLead} className="flex-1 px-4 py-2.5 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50">
-                {addingLead ? 'Adding…' : 'Add Lead'}
-              </button>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Email</label>
+              <input
+                value={addForm.email}
+                onChange={(event) => setAddForm({ ...addForm, email: event.target.value })}
+                placeholder="email@example.com"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100"
+              />
             </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Service interest</label>
+              <input
+                value={addForm.serviceInterest}
+                onChange={(event) => setAddForm({ ...addForm, serviceInterest: event.target.value })}
+                placeholder="Goa package, honeymoon trip, visa support..."
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Notes</label>
+              <textarea
+                value={addForm.notes}
+                onChange={(event) => setAddForm({ ...addForm, notes: event.target.value })}
+                rows={4}
+                placeholder="Any details shared by the traveller..."
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100"
+              />
+            </div>
+            <button
+              onClick={handleAddLead}
+              disabled={addingLead}
+              className="w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50"
+            >
+              {addingLead ? 'Adding...' : 'Create lead'}
+            </button>
           </div>
-        </div>
+        </Modal>
       )}
 
-      {/* Invoice Modal */}
       {invoiceLead && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
-            <div className="flex items-center justify-between p-5 border-b border-gray-200">
-              <div>
-                <h2 className="font-bold text-gray-900">Send Invoice</h2>
-                <p className="text-xs text-gray-500">To: {invoiceLead.name || invoiceLead.phone}</p>
-              </div>
-              <button onClick={() => setInvoiceLead(null)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
+        <Modal
+          title="Send invoice"
+          subtitle={`Share an invoice message directly with ${invoiceLead.name || invoiceLead.phone} on WhatsApp.`}
+          onClose={() => setInvoiceLead(null)}
+        >
+          <div className="space-y-4">
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Service *</label>
+              <input
+                value={invoiceForm.service}
+                onChange={(event) => setInvoiceForm({ ...invoiceForm, service: event.target.value })}
+                placeholder="Bali package 4N/5D"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100"
+              />
             </div>
-            <div className="p-5 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Service *</label>
-                <input value={invoiceForm.service} onChange={e => setInvoiceForm({ ...invoiceForm, service: e.target.value })}
-                  placeholder="e.g. Goa Honeymoon Package 3N/4D"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Amount (₹) *</label>
-                <input value={invoiceForm.amount} onChange={e => setInvoiceForm({ ...invoiceForm, amount: e.target.value })}
-                  placeholder="35000" type="number"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
-                <input value={invoiceForm.date} onChange={e => setInvoiceForm({ ...invoiceForm, date: e.target.value })}
-                  type="date"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Notes / Terms</label>
-                <textarea value={invoiceForm.notes} onChange={e => setInvoiceForm({ ...invoiceForm, notes: e.target.value })}
-                  rows={2} placeholder="Payment due within 7 days…"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-              </div>
-              <div className="bg-gray-50 rounded-lg p-3 text-xs font-mono text-gray-600 whitespace-pre-line">
-                {`*TRAVENTIONS — INVOICE*\n━━━━━━━━━━━━━━━━━━━━\nCustomer: ${invoiceLead.name || invoiceLead.phone}\nDate: ${invoiceForm.date}\nService: ${invoiceForm.service || '[service]'}\nAmount: ₹${invoiceForm.amount ? Number(invoiceForm.amount).toLocaleString('en-IN') : '0'}\n━━━━━━━━━━━━━━━━━━━━\nThank you for choosing Traventions! 🙏`}
-              </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Amount *</label>
+              <input
+                value={invoiceForm.amount}
+                onChange={(event) => setInvoiceForm({ ...invoiceForm, amount: event.target.value })}
+                type="number"
+                placeholder="35000"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100"
+              />
             </div>
-            <div className="flex gap-3 p-5 border-t border-gray-200">
-              <button onClick={() => setInvoiceLead(null)} className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">Cancel</button>
-              <button onClick={handleSendInvoice} disabled={sendingInvoice} className="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
-                {sendingInvoice ? 'Sending…' : 'Send via WhatsApp'}
-              </button>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Date</label>
+              <input
+                value={invoiceForm.date}
+                onChange={(event) => setInvoiceForm({ ...invoiceForm, date: event.target.value })}
+                type="date"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100"
+              />
             </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Notes / terms</label>
+              <textarea
+                value={invoiceForm.notes}
+                onChange={(event) => setInvoiceForm({ ...invoiceForm, notes: event.target.value })}
+                rows={3}
+                placeholder="Payment due within 7 days..."
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100"
+              />
+            </div>
+            <button
+              onClick={handleSendInvoice}
+              disabled={sendingInvoice}
+              className="w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50"
+            >
+              {sendingInvoice ? 'Sending...' : 'Send invoice via WhatsApp'}
+            </button>
           </div>
-        </div>
+        </Modal>
       )}
-    </div>
+    </>
   );
 }

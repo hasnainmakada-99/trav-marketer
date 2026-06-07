@@ -1,24 +1,57 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useRouter, usePathname } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { account, getCurrentUser } from '@/lib/appwrite-client';
-import { useRole, canAccess, type StaffRole } from '@/lib/use-role';
+import { canAccess, useRole, type StaffRole } from '@/lib/use-role';
+
+const SIDEBAR_STORAGE_KEY = 'travai.dashboard.sidebar.collapsed';
 
 const ALL_NAV_ITEMS = [
-  { href: '/dashboard', label: 'Dashboard', icon: '🏠', exact: true, feature: 'dashboard' as keyof ReturnType<typeof canAccess> | null },
-  { href: '/dashboard/whatsapp', label: 'WhatsApp', icon: '💬', feature: 'whatsapp' as const },
-  { href: '/dashboard/gbp', label: 'Google Business', icon: '🌐', feature: 'gbp' as const },
-  { href: '/dashboard/campaigns', label: 'Campaigns', icon: '📢', feature: 'campaigns' as const },
-  { href: '/dashboard/leads', label: 'Leads CRM', icon: '🎯', feature: 'leads' as const },
-];
+  {
+    href: '/dashboard',
+    label: 'Command Center',
+    shortLabel: 'Home',
+    icon: '◈',
+    exact: true,
+    feature: 'dashboard' as keyof ReturnType<typeof canAccess> | null,
+  },
+  {
+    href: '/dashboard/whatsapp',
+    label: 'WhatsApp CRM',
+    shortLabel: 'WA',
+    icon: '◎',
+    feature: 'whatsapp' as const,
+  },
+  {
+    href: '/dashboard/gbp',
+    label: 'Google Business',
+    shortLabel: 'GBP',
+    icon: '◌',
+    feature: 'gbp' as const,
+  },
+  {
+    href: '/dashboard/campaigns',
+    label: 'Campaigns',
+    shortLabel: 'Camp',
+    icon: '⬢',
+    feature: 'campaigns' as const,
+  },
+  {
+    href: '/dashboard/leads',
+    label: 'Lead Pipeline',
+    shortLabel: 'Leads',
+    icon: '◆',
+    feature: 'leads' as const,
+  },
+] as const;
 
 const ROLE_BADGE: Record<StaffRole, string> = {
-  owner: 'bg-purple-100 text-purple-700',
-  admin: 'bg-indigo-100 text-indigo-700',
-  manager: 'bg-blue-100 text-blue-700',
-  staff: 'bg-gray-100 text-gray-600',
+  owner: 'bg-fuchsia-100 text-fuchsia-700',
+  admin: 'bg-cyan-100 text-cyan-700',
+  manager: 'bg-emerald-100 text-emerald-700',
+  staff: 'bg-slate-100 text-slate-600',
 };
 
 interface AppwriteUser {
@@ -27,165 +60,240 @@ interface AppwriteUser {
   email: string;
 }
 
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const router = useRouter();
-  const pathname = usePathname();
-  const [user, setUser] = useState<AppwriteUser | null>(null);
-  const [mobileOpen, setMobileOpen] = useState(false);
-  const { role, loading: roleLoading } = useRole();
-
-  const NAV_ITEMS = ALL_NAV_ITEMS.filter((item) =>
-    !item.feature || canAccess(role, item.feature as Parameters<typeof canAccess>[1])
+function SidebarInner(props: {
+  pathname: string;
+  user: AppwriteUser | null;
+  role: StaffRole;
+  roleLoading: boolean;
+  collapsed: boolean;
+  onLogout: () => Promise<void>;
+  onToggleCollapse?: () => void;
+  closeMobile?: () => void;
+}) {
+  const navItems = ALL_NAV_ITEMS.filter(
+    (item) => !item.feature || canAccess(props.role, item.feature as Parameters<typeof canAccess>[1])
   );
 
-  useEffect(() => {
-    getCurrentUser().then((u) => {
-      if (!u) {
-        router.push('/login');
-      } else {
-        setUser(u as AppwriteUser);
-      }
-    });
-  }, [router]);
+  return (
+    <div className="flex h-full flex-col bg-[linear-gradient(180deg,#091221_0%,#101828_48%,#162032_100%)] text-white">
+      <div className={`border-b border-white/10 ${props.collapsed ? 'px-3 py-4' : 'px-5 py-5'}`}>
+        <div
+          className={`rounded-[28px] border border-white/10 bg-white/6 backdrop-blur ${
+            props.collapsed ? 'p-3' : 'p-4'
+          }`}
+        >
+          <div className={`flex items-center ${props.collapsed ? 'justify-center' : 'justify-between gap-3'}`}>
+            <div className={`flex items-center ${props.collapsed ? 'justify-center' : 'gap-3'}`}>
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-400 via-sky-500 to-emerald-400 font-bold text-slate-950 shadow-lg">
+                T
+              </div>
+              {!props.collapsed && (
+                <div>
+                  <p className="font-semibold tracking-tight text-white">TravAI Marketer</p>
+                  <p className="text-xs text-slate-300">Travel CRM operating desk</p>
+                </div>
+              )}
+            </div>
 
-  const handleLogout = async () => {
-    try {
-      await account.deleteSession('current');
-      router.push('/login');
-    } catch (e) {
-      console.error('Logout error:', e);
-    }
-  };
+            {props.onToggleCollapse && (
+              <button
+                onClick={props.onToggleCollapse}
+                className="hidden rounded-xl border border-white/10 bg-white/6 px-2.5 py-2 text-xs text-slate-200 transition hover:bg-white/12 lg:inline-flex"
+                aria-label={props.collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                title={props.collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              >
+                {props.collapsed ? '→' : '←'}
+              </button>
+            )}
+          </div>
 
-  const SidebarContent = () => (
-    <div className="flex flex-col h-full">
-      {/* Logo */}
-      <div className="flex items-center h-16 px-6 border-b border-gray-200 flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-sm">
-            T
-          </div>
-          <div>
-            <span className="text-base font-bold text-gray-900">TravAI</span>
-            <span className="text-xs text-gray-400 ml-1">Marketer</span>
-          </div>
+          {!props.collapsed && (
+            <div className="mt-4 rounded-2xl bg-emerald-400/10 px-3 py-2 text-xs text-emerald-200 ring-1 ring-emerald-300/15">
+              WhatsApp leads, callback workflows, CRM, and campaigns in one place.
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Nav */}
-      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        {NAV_ITEMS.map((item) => {
-          const isActive = item.exact
-            ? pathname === item.href
-            : pathname.startsWith(item.href);
-
-          if (item.comingSoon) {
-            return (
-              <div
-                key={item.href}
-                className="flex items-center px-3 py-2 rounded-lg text-gray-400 cursor-not-allowed select-none"
-              >
-                <span className="mr-3 text-base">{item.icon}</span>
-                <span className="text-sm font-medium">{item.label}</span>
-                <span className="ml-auto text-xs bg-gray-100 text-gray-400 px-2 py-0.5 rounded-full">
-                  Soon
-                </span>
-              </div>
-            );
-          }
-
+      <nav className={`flex-1 space-y-2 overflow-y-auto ${props.collapsed ? 'px-3 py-4' : 'px-4 py-5'}`}>
+        {navItems.map((item) => {
+          const isActive = item.exact ? props.pathname === item.href : props.pathname.startsWith(item.href);
           return (
             <Link
               key={item.href}
               href={item.href}
-              onClick={() => setMobileOpen(false)}
-              className={`flex items-center px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+              onClick={props.closeMobile}
+              className={`group flex items-center rounded-2xl text-sm font-medium transition-all ${
+                props.collapsed ? 'justify-center px-0 py-3' : 'gap-3 px-4 py-3'
+              } ${
                 isActive
-                  ? 'bg-indigo-50 text-indigo-700 border border-indigo-100'
-                  : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
+                  ? 'bg-white text-slate-950 shadow-lg shadow-cyan-950/20'
+                  : 'text-slate-200 hover:bg-white/8 hover:text-white'
               }`}
+              title={props.collapsed ? item.label : undefined}
             >
-              <span className="mr-3 text-base">{item.icon}</span>
-              {item.label}
+              <span
+                className={`flex h-10 w-10 items-center justify-center rounded-xl text-sm ${
+                  isActive ? 'bg-slate-100 text-slate-900' : 'bg-white/8 text-slate-100'
+                }`}
+              >
+                {item.icon}
+              </span>
+              {!props.collapsed && <span>{item.label}</span>}
             </Link>
           );
         })}
       </nav>
 
-      {/* User Profile */}
-      <div className="px-3 py-4 border-t border-gray-200 flex-shrink-0">
-        {user && (
-          <div className="flex items-center mb-3 px-1">
-            <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-sm font-bold text-indigo-600 flex-shrink-0">
-              {user.name?.[0]?.toUpperCase() || 'U'}
-            </div>
-            <div className="ml-2 min-w-0 flex-1">
-              <div className="flex items-center gap-1.5">
-                <p className="text-sm font-medium text-gray-900 truncate">{user.name}</p>
-                {!roleLoading && (
-                  <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium capitalize flex-shrink-0 ${ROLE_BADGE[role]}`}>
-                    {role}
-                  </span>
-                )}
+      <div className={`border-t border-white/10 ${props.collapsed ? 'p-3' : 'p-4'}`}>
+        {props.user && (
+          <div
+            className={`mb-3 rounded-[26px] border border-white/10 bg-white/5 ${
+              props.collapsed ? 'p-3' : 'p-4'
+            }`}
+            title={props.collapsed ? `${props.user.name} • ${props.user.email}` : undefined}
+          >
+            <div className={`flex items-center ${props.collapsed ? 'justify-center' : 'gap-3'}`}>
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/10 font-semibold">
+                {props.user.name?.[0]?.toUpperCase() || 'U'}
               </div>
-              <p className="text-xs text-gray-500 truncate">{user.email}</p>
+              {!props.collapsed && (
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="truncate text-sm font-semibold text-white">{props.user.name}</p>
+                    {!props.roleLoading && (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[11px] font-semibold capitalize ${ROLE_BADGE[props.role]}`}
+                      >
+                        {props.role}
+                      </span>
+                    )}
+                  </div>
+                  <p className="truncate text-xs text-slate-300">{props.user.email}</p>
+                </div>
+              )}
             </div>
           </div>
         )}
+
         <button
-          onClick={handleLogout}
-          className="w-full text-left px-3 py-2 text-sm text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+          onClick={props.onLogout}
+          className={`w-full rounded-2xl border border-white/10 bg-white/5 text-sm font-medium text-slate-200 transition hover:bg-rose-500/10 hover:text-rose-200 ${
+            props.collapsed ? 'px-0 py-3 text-center' : 'px-4 py-3 text-left'
+          }`}
+          title={props.collapsed ? 'Sign out' : undefined}
         >
-          Sign out
+          {props.collapsed ? '↗' : 'Sign out'}
         </button>
       </div>
     </div>
   );
+}
+
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const [user, setUser] = useState<AppwriteUser | null>(null);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const { role, loading: roleLoading } = useRole();
+
+  useEffect(() => {
+    getCurrentUser().then((currentUser) => {
+      if (!currentUser) {
+        router.push('/login');
+        return;
+      }
+      setUser(currentUser as AppwriteUser);
+    });
+  }, [router]);
+
+  useEffect(() => {
+    try {
+      const storedValue = window.localStorage.getItem(SIDEBAR_STORAGE_KEY);
+      if (storedValue === 'true') {
+        setSidebarCollapsed(true);
+      }
+    } catch {
+      // ignore storage read errors
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDEBAR_STORAGE_KEY, sidebarCollapsed ? 'true' : 'false');
+    } catch {
+      // ignore storage write errors
+    }
+  }, [sidebarCollapsed]);
+
+  const handleLogout = async () => {
+    try {
+      await account.deleteSession('current');
+      router.push('/login');
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
+  };
+
+  const desktopSidebarWidth = useMemo(() => (sidebarCollapsed ? '5rem' : '16rem'), [sidebarCollapsed]);
 
   return (
-    <div className="flex h-screen bg-gray-50 overflow-hidden">
-      {/* Desktop Sidebar */}
-      <aside className="hidden lg:flex lg:flex-col w-64 bg-white border-r border-gray-200 flex-shrink-0">
-        <SidebarContent />
+    <div className="flex h-screen overflow-hidden bg-transparent">
+      <aside
+        className="hidden border-r border-slate-200/10 lg:flex lg:flex-col"
+        style={{ width: desktopSidebarWidth }}
+      >
+        <SidebarInner
+          pathname={pathname}
+          user={user}
+          role={role}
+          roleLoading={roleLoading}
+          collapsed={sidebarCollapsed}
+          onLogout={handleLogout}
+          onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
+        />
       </aside>
 
-      {/* Mobile Overlay */}
       {mobileOpen && (
         <div
-          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+          className="fixed inset-0 z-40 bg-slate-950/55 backdrop-blur-sm lg:hidden"
           onClick={() => setMobileOpen(false)}
         />
       )}
 
-      {/* Mobile Drawer */}
       <aside
-        className={`fixed top-0 left-0 h-full w-64 bg-white border-r border-gray-200 z-50 transform transition-transform duration-200 lg:hidden ${
+        className={`fixed inset-y-0 left-0 z-50 w-80 transform transition-transform duration-200 lg:hidden ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <SidebarContent />
+        <SidebarInner
+          pathname={pathname}
+          user={user}
+          role={role}
+          roleLoading={roleLoading}
+          collapsed={false}
+          onLogout={handleLogout}
+          closeMobile={() => setMobileOpen(false)}
+        />
       </aside>
 
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Mobile Top Bar */}
-        <div className="lg:hidden flex items-center h-14 px-4 bg-white border-b border-gray-200 flex-shrink-0">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex h-16 items-center justify-between border-b border-slate-200/70 bg-white/82 px-4 backdrop-blur lg:hidden">
           <button
             onClick={() => setMobileOpen(true)}
-            className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100"
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm"
             aria-label="Open menu"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
+            Menu
           </button>
-          <span className="ml-3 font-bold text-indigo-600">TravAI Marketer</span>
+          <div className="text-right">
+            <p className="font-semibold text-slate-900">TravAI Marketer</p>
+            <p className="text-xs text-slate-500">Travel CRM</p>
+          </div>
         </div>
 
-        {/* Page Content */}
-        <main className="flex-1 overflow-y-auto">
-          {children}
-        </main>
+        <main className="flex-1 overflow-y-auto">{children}</main>
       </div>
     </div>
   );

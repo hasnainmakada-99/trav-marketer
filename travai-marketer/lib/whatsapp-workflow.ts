@@ -554,14 +554,14 @@ function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowS
 
   // Standalone callback request (no prior travel service)
   if (intent === 'callback_request') {
-    if (!slots.name || !slots.phone) return 'collect_lead';
+    if (!slots.name || !slots.phone || !slots.email) return 'collect_lead';
     return slots.callback_time ? 'confirmed' : 'ask_callback';
   }
 
   // If user explicitly requests a callback at ANY stage, skip travel collection
   // and go straight to collecting contact info → callback time.
   if (slots.post_package_action === 'arrange_callback') {
-    const hasRequiredLead = Boolean(slots.name && slots.phone);
+    const hasRequiredLead = Boolean(slots.name && slots.phone && slots.email);
     if (!hasRequiredLead) return 'collect_lead';
     return slots.callback_time ? 'confirmed' : 'ask_callback';
   }
@@ -578,7 +578,7 @@ function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowS
 
     const hasPostAction = Boolean(slots.post_package_action);
     const hasContactStart = Boolean(slots.name || slots.phone);
-    const hasRequiredLead = Boolean(slots.name && slots.phone);
+    const hasRequiredLead = Boolean(slots.name && slots.phone && slots.email);
 
     if (hasPostAction || hasContactStart) {
       if (!hasRequiredLead) return 'collect_lead';
@@ -594,7 +594,7 @@ function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowS
     }
     const hasPostAction = Boolean(slots.post_package_action);
     const hasContactStart = Boolean(slots.name || slots.phone);
-    const hasRequiredLead = Boolean(slots.name && slots.phone);
+    const hasRequiredLead = Boolean(slots.name && slots.phone && slots.email);
     if (hasPostAction || hasContactStart) {
       if (!hasRequiredLead) return 'collect_lead';
       return slots.callback_time ? 'confirmed' : 'ask_callback';
@@ -608,7 +608,7 @@ function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowS
     }
     const hasPostAction = Boolean(slots.post_package_action);
     const hasContactStart = Boolean(slots.name || slots.phone);
-    const hasRequiredLead = Boolean(slots.name && slots.phone);
+    const hasRequiredLead = Boolean(slots.name && slots.phone && slots.email);
     if (hasPostAction || hasContactStart) {
       if (!hasRequiredLead) return 'collect_lead';
       return slots.callback_time ? 'confirmed' : 'ask_callback';
@@ -617,7 +617,7 @@ function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowS
   }
 
   // Other intents: transfer, forex, visa, insurance, mice, booking_status
-  if (!slots.name || !slots.phone) return 'collect_lead';
+  if (!slots.name || !slots.phone || !slots.email) return 'collect_lead';
   return slots.callback_time ? 'confirmed' : 'ask_callback';
 }
 
@@ -758,7 +758,6 @@ export function resolveWorkflowState(args: {
   // lead collection (by tapping Arrange Callback / Get Details) — old-session contact
   // info would otherwise skip the collect_lead stage entirely.
   // Strategy:
-  // This is a sample change at line 741 to make sure oracle is keeping up with the new changes
   //   1. Parse only travel/service slots from full session history.
   //   2. Find the last message in session history that set post_package_action.
   //   3. Only if that anchor exists (we're CONTINUING lead collection, not starting it),
@@ -895,6 +894,7 @@ export function resolveWorkflowState(args: {
   }
   if (!slots.name) missingSlots.push('name');
   if (!slots.phone) missingSlots.push('phone');
+  if (!slots.email) missingSlots.push('email');
   if (!slots.callback_time) missingSlots.push('callback_time');
 
   return { intent, stage, source, slots, missingSlots, complete, leadShouldBeSaved };
@@ -1013,8 +1013,9 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
       '😊 To arrange your callback, please share:\n\n' +
       '👤 Full Name\n' +
       '📞 Contact Number\n' +
+      '✉️ Email Address\n' +
       '🕒 Preferred Callback Time\n\n' +
-      'Example: Rahul, +91 9876543210, Today at 5 PM\n\n' +
+      'Example: Rahul, +91 9876543210, rahul@email.com, Today at 5 PM\n\n' +
       'Our travel expert will call you at your preferred time! ✨'
     );
   }
@@ -1171,9 +1172,9 @@ Always end with the main menu if intent is unclear.`;
 
   } else if (intent === 'callback_request') {
     if (stage === 'collect_lead') {
-      task = `The customer has requested a callback. Ask for their Full Name and Phone Number (both are required). Email is optional. Do NOT ask about travel details.`;
+      task = `The customer has requested a callback. Ask for their Full Name, Phone Number, and Email Address (all are required) before asking callback time. Do NOT ask about travel details.`;
     } else if (stage === 'ask_callback') {
-      task = `Ask for the preferred callback time only. Already have name and phone.`;
+      task = `Ask for the preferred callback time only. Already have name, phone, and email.`;
     } else if (stage === 'confirmed') {
       task = `Confirm that the callback has been scheduled, as described for the 'confirmed' stage below.`;
     }
@@ -1305,8 +1306,8 @@ Use realistic INR pricing only. Never mention USD or $.`;
     }
 
   } else if (stage === 'collect_lead') {
-    task = `Ask the customer for their Full Name, Phone Number, and Preferred Callback Time — all three in one friendly message.
-Format example: "Rahul, +91 9876543210, Today at 5 PM"
+    task = `Ask the customer for their Full Name, Phone Number, Email Address, and Preferred Callback Time — all four in one friendly message.
+Format example: "Rahul, +91 9876543210, rahul@email.com, Today at 5 PM"
 Do NOT ask for travel details, they are already collected.
 Already have: ${collected}.
 Tell them our travel expert will call at their preferred time.`;
