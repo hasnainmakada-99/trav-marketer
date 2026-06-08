@@ -179,6 +179,27 @@ async function syncGooglePostsToAppwrite(teamId: string) {
     }
   }
 
+  const liveGoogleIds = new Set(
+    googlePosts
+      .map((post) => post.name)
+      .filter((value): value is string => typeof value === 'string' && value.length > 0)
+  );
+
+  let pruned = 0;
+  for (const document of existing.documents) {
+    const typed = document as unknown as StoredPost;
+    if (!typed.googlePostId) {
+      continue;
+    }
+    if (liveGoogleIds.has(typed.googlePostId)) {
+      continue;
+    }
+
+    // Mirror Google as the source of truth for published posts while leaving local drafts alone.
+    await deleteDocument('gbp_posts', typed.$id);
+    pruned += 1;
+  }
+
   const persisted = await listDocuments('gbp_posts', [
     Query.equal('teamId', teamId),
     Query.orderDesc('updatedAt'),
@@ -187,6 +208,7 @@ async function syncGooglePostsToAppwrite(teamId: string) {
 
   return {
     synced: googlePosts.length,
+    pruned,
     total: persisted.total,
     documents: persisted.documents.map((document) =>
       serializePost(document as unknown as StoredPost)
@@ -391,6 +413,7 @@ export async function GET(request: NextRequest) {
           teamId,
           source: 'google',
           synced: synced.synced,
+          pruned: synced.pruned,
           total: synced.total,
           documents: synced.documents,
         },

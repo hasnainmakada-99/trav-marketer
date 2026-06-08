@@ -60,6 +60,7 @@ interface GoogleReviewListResponse {
 
 interface GoogleLocalPostListResponse {
   localPosts?: GoogleLocalPost[];
+  nextPageToken?: string;
 }
 
 export interface GoogleLocalPostMedia {
@@ -390,11 +391,24 @@ export async function listGoogleLocalPosts(
   accessToken: string,
   locationName: string
 ): Promise<GoogleLocalPost[]> {
-  const url = new URL(`https://mybusiness.googleapis.com/v4/${locationName}/localPosts`);
-  url.searchParams.set('pageSize', '50');
+  const allPosts: GoogleLocalPost[] = [];
+  let nextPageToken: string | undefined;
+  let guard = 0;
 
-  const response = await googleFetch<GoogleLocalPostListResponse>(url.toString(), accessToken);
-  return response.localPosts || [];
+  do {
+    const url = new URL(`https://mybusiness.googleapis.com/v4/${locationName}/localPosts`);
+    url.searchParams.set('pageSize', '50');
+    if (nextPageToken) {
+      url.searchParams.set('pageToken', nextPageToken);
+    }
+
+    const response = await googleFetch<GoogleLocalPostListResponse>(url.toString(), accessToken);
+    allPosts.push(...(response.localPosts || []));
+    nextPageToken = response.nextPageToken;
+    guard += 1;
+  } while (nextPageToken && guard < 20);
+
+  return allPosts;
 }
 
 export async function listGoogleReviews(
