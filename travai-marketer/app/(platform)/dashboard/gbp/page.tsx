@@ -127,6 +127,31 @@ function MediaTile({ media, alt }: { media: GbpPostMedia; alt: string }) {
   );
 }
 
+function extractPostHashtags(content: string) {
+  return Array.from(new Set(content.match(/#[A-Za-z0-9_]+/g) || []));
+}
+
+function stripTrailingHashtags(content: string) {
+  return content.replace(/(?:\s*#[A-Za-z0-9_]+\s*)+$/g, '').trim();
+}
+
+function getPostParagraphs(content: string) {
+  return stripTrailingHashtags(content)
+    .split(/\n+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function getPostSourceLabel(post: GbpPost) {
+  if (post.createdBy === 'google_sync') {
+    return 'Google Sync';
+  }
+  if (post.type === 'auto_generated') {
+    return 'AI Draft';
+  }
+  return 'Manual Post';
+}
+
 function GbpPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -841,59 +866,119 @@ function GbpPageInner() {
                     <p className="mt-1 text-xs text-gray-400">Sync existing Google posts or create your first media-aware GBP post.</p>
                   </div>
                 ) : (
-                    <div className="space-y-3">
+                    <div className="space-y-4">
                       {posts.map((post) => (
-                      <div key={post.$id} className="flex flex-col gap-4 rounded-[26px] border border-slate-200 bg-white/95 p-4 shadow-sm shadow-slate-200/60 lg:flex-row lg:items-start lg:justify-between">
-                        <div className="min-w-0 flex-1 space-y-3">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Badge status={post.status} />
-                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">{post.type === 'auto_generated' ? 'AI Draft' : 'Manual Post'}</span>
-                          </div>
-                          <div className="space-y-1">
-                            <p className="text-base font-semibold tracking-tight text-slate-950">{post.title}</p>
-                            <p className="max-w-4xl text-sm leading-6 text-slate-600">{post.content}</p>
-                          </div>
-                          {!!post.media?.length && (
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              {post.media.slice(0, 4).map((media, index) => (
-                                <MediaTile key={`${post.$id}-${index}`} media={media} alt={post.title} />
-                              ))}
+                      <div key={post.$id} className="rounded-[28px] border border-slate-200 bg-white/95 p-5 shadow-sm shadow-slate-200/60">
+                        <div className="flex flex-col gap-5 xl:grid xl:grid-cols-[minmax(0,1fr)_17rem]">
+                          <div className="min-w-0 space-y-4">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="min-w-0 space-y-3">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Badge status={post.status} />
+                                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
+                                    {getPostSourceLabel(post)}
+                                  </span>
+                                  {post.media?.length ? (
+                                    <span className="rounded-full bg-sky-50 px-2.5 py-1 text-[11px] font-semibold text-sky-700">
+                                      {post.media.length} media item(s)
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <div>
+                                  <p className="text-xl font-semibold tracking-tight text-slate-950">{post.title}</p>
+                                  <p className="mt-1 text-xs font-medium uppercase tracking-[0.16em] text-slate-400">
+                                    {post.postedAt
+                                      ? `Published ${new Date(post.postedAt).toLocaleDateString('en-IN')}`
+                                      : `Saved ${new Date(post.createdAt).toLocaleDateString('en-IN')}`}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                {post.status === 'draft' && (
+                                  <button
+                                    onClick={() => handlePublishDraft(post)}
+                                    className="rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-emerald-700"
+                                  >
+                                    Publish
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => handleDeletePost(post.$id)}
+                                  className="rounded-xl border border-slate-200 p-2 text-slate-400 transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-500"
+                                  aria-label="Delete post"
+                                >
+                                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                  </svg>
+                                </button>
+                              </div>
                             </div>
-                          )}
-                          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400">
-                            {post.postedAt
-                              ? `Published ${new Date(post.postedAt).toLocaleDateString('en-IN')}`
-                              : `Draft | ${new Date(post.createdAt).toLocaleDateString('en-IN')}`}
-                            {!!post.media?.length && <span>{post.media.length} media item(s)</span>}
+
+                            <div className="rounded-[22px] border border-slate-100 bg-slate-50/80 p-4">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Caption</p>
+                              <div className="mt-3 space-y-3">
+                                {getPostParagraphs(post.content).map((paragraph, index) => (
+                                  <p key={`${post.$id}-paragraph-${index}`} className="text-sm leading-7 text-slate-700">
+                                    {paragraph}
+                                  </p>
+                                ))}
+                              </div>
+                            </div>
+
+                            {extractPostHashtags(post.content).length > 0 && (
+                              <div>
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Search hashtags</p>
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                  {extractPostHashtags(post.content).map((hashtag) => (
+                                    <span
+                                      key={`${post.$id}-${hashtag}`}
+                                      className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700"
+                                    >
+                                      {hashtag}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                           </div>
-                          {post.googleSearchUrl && (
-                            <a
-                              href={post.googleSearchUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="inline-flex text-xs font-semibold text-sky-700 hover:text-sky-800"
-                            >
-                              View on Google
-                            </a>
-                          )}
-                        </div>
-                        <div className="flex flex-shrink-0 items-center gap-2">
-                          {post.status === 'draft' && (
-                            <button
-                              onClick={() => handlePublishDraft(post)}
-                              className="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-green-700"
-                            >
-                              Publish
-                            </button>
-                          )}
-                          <button
-                            onClick={() => handleDeletePost(post.$id)}
-                            className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-500"
-                          >
-                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                            </svg>
-                          </button>
+
+                          <div className="space-y-3">
+                            <div className="rounded-[22px] border border-slate-200 bg-slate-50/80 p-4">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Media and actions</p>
+                              {!!post.media?.length ? (
+                                <div className="mt-3 grid grid-cols-2 gap-2">
+                                  {post.media.slice(0, 4).map((media, index) => (
+                                    <MediaTile key={`${post.$id}-${index}`} media={media} alt={post.title} />
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="mt-3 rounded-2xl border border-dashed border-slate-200 bg-white px-3 py-6 text-center text-xs text-slate-400">
+                                  No media attached
+                                </div>
+                              )}
+
+                              <div className="mt-4 space-y-2">
+                                <div className="rounded-2xl bg-white px-3 py-2 text-xs text-slate-500">
+                                  <span className="font-semibold text-slate-700">Source:</span> {getPostSourceLabel(post)}
+                                </div>
+                                <div className="rounded-2xl bg-white px-3 py-2 text-xs text-slate-500">
+                                  <span className="font-semibold text-slate-700">Status:</span> {post.status === 'posted' ? 'Live on profile' : 'Saved in dashboard'}
+                                </div>
+                              </div>
+
+                              {post.googleSearchUrl && (
+                                <a
+                                  href={post.googleSearchUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="mt-4 inline-flex w-full items-center justify-center rounded-2xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
+                                >
+                                  View on Google
+                                </a>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     ))}
