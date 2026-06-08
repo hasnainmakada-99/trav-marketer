@@ -54,14 +54,28 @@ function normalizeStoredReview(review: StoredReview) {
 }
 
 async function syncGoogleReviewsToAppwrite(teamId: string) {
-  const accessToken = await getAccessTokenForTeam(teamId);
   const business = await getBusinessConfigByTeamId(teamId);
 
   if (!business?.googleLocationId) {
     throw new Error('No connected Google location found for team');
   }
 
-  const googleReviews = await listGoogleReviews(accessToken, business.googleLocationId);
+  let googleReviews;
+  try {
+    const accessToken = await getAccessTokenForTeam(teamId);
+    googleReviews = await listGoogleReviews(accessToken, business.googleLocationId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const shouldRefresh =
+      message.includes('invalid authentication') ||
+      message.includes('UNAUTHENTICATED') ||
+      message.includes('401');
+    if (!shouldRefresh) {
+      throw error;
+    }
+    const freshToken = await getAccessTokenForTeam(teamId, { forceRefresh: true });
+    googleReviews = await listGoogleReviews(freshToken, business.googleLocationId);
+  }
   const existing = await listDocuments('gbp_reviews', [
     Query.equal('teamId', teamId),
     Query.limit(200),
