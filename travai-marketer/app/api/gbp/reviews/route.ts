@@ -13,6 +13,20 @@ import {
   updateDocument,
 } from '@/lib/appwrite';
 
+type StoredReview = {
+  $id: string;
+  teamId: string;
+  googleReviewId: string;
+  reviewer: string;
+  rating: string | number;
+  reviewText: string;
+  reply?: string | null;
+  replyStatus?: 'pending' | 'ready' | 'replied';
+  repliedAt?: string | null;
+  createdAt: string;
+  updatedAt?: string;
+};
+
 function starRatingToNumber(rating?: string): number {
   switch (rating) {
     case 'ONE':
@@ -28,6 +42,80 @@ function starRatingToNumber(rating?: string): number {
     default:
       return 0;
   }
+}
+
+function normalizeStoredReview(review: StoredReview) {
+  return {
+    ...review,
+    rating: Number(review.rating || 0),
+    reply: review.reply || null,
+    replyStatus: review.replyStatus || 'pending',
+  };
+}
+
+async function syncGoogleReviewsToAppwrite(teamId: string) {
+  const accessToken = await getAccessTokenForTeam(teamId);
+  const business = await getBusinessConfigByTeamId(teamId);
+
+  if (!business?.googleLocationId) {
+    throw new Error('No connected Google location found for team');
+  }
+
+  const googleReviews = await listGoogleReviews(accessToken, business.googleLocationId);
+  const existing = await listDocuments('gbp_reviews', [
+    Query.equal('teamId', teamId),
+    Query.limit(200),
+  ]);
+
+  const existingByGoogleId = new Map<string, StoredReview>();
+  for (const document of existing.documents) {
+    const typed = document as unknown as StoredReview;
+    if (typed.googleReviewId) {
+      existingByGoogleId.set(typed.googleReviewId, typed);
+    }
+  }
+
+  for (const review of googleReviews || []) {
+    const googleReviewId = review.reviewId || review.name;
+    if (!googleReviewId) {
+      continue;
+    }
+
+    const payload = {
+      teamId,
+      googleReviewId,
+      reviewer: review.reviewer?.displayName || 'Anonymous',
+      rating: String(starRatingToNumber(review.starRating)),
+      reviewText: review.comment || '',
+      reply: review.reviewReply?.comment || null,
+      replyStatus: review.reviewReply?.comment ? 'replied' : 'pending',
+      repliedAt: review.reviewReply?.comment ? review.updateTime || new Date().toISOString() : null,
+      createdAt: review.createTime || new Date().toISOString(),
+      updatedAt: review.updateTime || new Date().toISOString(),
+    };
+
+    const existingReview = existingByGoogleId.get(googleReviewId);
+    if (existingReview) {
+      await updateDocument('gbp_reviews', existingReview.$id, payload);
+    } else {
+      const created = await createDocument('gbp_reviews', payload);
+      existingByGoogleId.set(googleReviewId, created as unknown as StoredReview);
+    }
+  }
+
+  const persisted = await listDocuments('gbp_reviews', [
+    Query.equal('teamId', teamId),
+    Query.orderDesc('updatedAt'),
+    Query.limit(200),
+  ]);
+
+  return {
+    synced: (googleReviews || []).length,
+    documents: persisted.documents.map((document) =>
+      normalizeStoredReview(document as unknown as StoredReview)
+    ),
+    total: persisted.total,
+  };
 }
 
 /**
@@ -56,15 +144,16 @@ export async function POST(request: NextRequest) {
       teamId,
       googleReviewId,
       reviewer,
-      rating,
+      rating: String(rating),
       reviewText,
       reply: null,
       replyStatus: 'pending',
       repliedAt: null,
       createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     });
 
-    return NextResponse.json(review, { status: 201 });
+    return NextResponse.json(normalizeStoredReview(review as unknown as StoredReview), { status: 201 });
   } catch (error) {
     console.error('[GBP Reviews POST] Error:', error);
     return NextResponse.json(
@@ -95,32 +184,14 @@ export async function GET(request: NextRequest) {
     }
 
     if (syncFromGoogle) {
-      const accessToken = await getAccessTokenForTeam(teamId);
-      const business = await getBusinessConfigByTeamId(teamId);
-
-      if (!business?.googleLocationId) {
-        return NextResponse.json(
-          { error: 'No connected Google location found for team' },
-          { status: 400 }
-        );
-      }
-
-      const reviews = await listGoogleReviews(accessToken, business.googleLocationId);
+      const synced = await syncGoogleReviewsToAppwrite(teamId);
       return NextResponse.json(
         {
           teamId,
           source: 'google',
-          reviews: (reviews ?? []).map((review) => ({
-            name: review.name,
-            reviewId: review.reviewId,
-            reviewer: review.reviewer?.displayName || 'Anonymous',
-            rating: starRatingToNumber(review.starRating),
-            reviewText: review.comment || '',
-            reply: review.reviewReply?.comment || null,
-            replyStatus: review.reviewReply?.comment ? 'replied' : 'pending',
-            createdAt: review.createTime,
-            updatedAt: review.updateTime,
-          })),
+          synced: synced.synced,
+          total: synced.total,
+          documents: synced.documents,
         },
         { status: 200 }
       );
@@ -134,11 +205,19 @@ export async function GET(request: NextRequest) {
       queries.push(Query.equal('replyStatus', replyStatus));
     }
 
-    queries.push(Query.limit(limit), Query.offset(offset));
+    queries.push(Query.orderDesc('updatedAt'), Query.limit(limit), Query.offset(offset));
 
     const reviews = await listDocuments('gbp_reviews', queries);
 
-    return NextResponse.json(reviews, { status: 200 });
+    return NextResponse.json(
+      {
+        ...reviews,
+        documents: reviews.documents.map((document) =>
+          normalizeStoredReview(document as unknown as StoredReview)
+        ),
+      },
+      { status: 200 }
+    );
   } catch (error) {
     console.error('[GBP Reviews GET] Error:', error);
     return NextResponse.json(
@@ -149,7 +228,7 @@ export async function GET(request: NextRequest) {
 }
 
 /**
- * POST /api/gbp/reviews/[id]/reply
+ * PUT /api/gbp/reviews
  * Generate and save a reply to a review
  */
 export async function PUT(request: NextRequest) {
@@ -171,20 +250,13 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    // Get the review
     const reviews = await listDocuments('gbp_reviews', [
       Query.equal('teamId', teamId),
+      Query.limit(200),
     ]);
 
     const review = reviews.documents.find((r) => r.$id === reviewId) as
-      | {
-          $id: string;
-          googleReviewId: string;
-          reviewText: string;
-          rating: number;
-          reply?: string;
-          replyStatus?: string;
-        }
+      | StoredReview
       | undefined;
 
     if (!review) {
@@ -196,13 +268,12 @@ export async function PUT(request: NextRequest) {
 
     let replyText = customReply;
 
-    // Auto-generate reply if requested
     if (autoGenerate && !customReply) {
-      const business = businessContext || `Business Name`;
+      const business = businessContext || 'Business Name';
       replyText = await generateReviewReply(
         business,
         review.reviewText,
-        review.rating
+        Number(review.rating || 0)
       );
     }
 
@@ -213,7 +284,7 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    let replyStatusValue = 'ready';
+    let replyStatusValue: 'ready' | 'replied' = 'ready';
     const updatePayload: Record<string, unknown> = {
       reply: replyText,
       updatedAt: new Date().toISOString(),
@@ -241,14 +312,12 @@ export async function PUT(request: NextRequest) {
     }
 
     updatePayload.replyStatus = replyStatusValue;
-
-    // Update the review with the reply
     const updated = await updateDocument('gbp_reviews', reviewId, updatePayload);
 
     return NextResponse.json(
       {
         success: true,
-        review: updated,
+        review: normalizeStoredReview(updated as unknown as StoredReview),
         reply: replyText,
       },
       { status: 200 }
@@ -265,14 +334,13 @@ export async function PUT(request: NextRequest) {
 /**
  * PATCH /api/gbp/reviews
  * Dual-purpose:
- *   1. { autoReplyAll: true, teamId } — AI-generate and publish replies for all pending reviews
- *   2. { reviewId, ...updates }       — Update a single review field
+ *   1. { autoReplyAll: true, teamId } - AI-generate and publish replies for all pending reviews
+ *   2. { reviewId, ...updates }       - Update a single review field
  */
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
 
-    // ── Batch auto-reply ──────────────────────────────────────────────────────
     if (body.autoReplyAll === true) {
       const { teamId } = body;
       if (!teamId) {
@@ -293,12 +361,7 @@ export async function PATCH(request: NextRequest) {
         Query.limit(50),
       ]);
 
-      const pendingReviews = pendingResult.documents as unknown as Array<{
-        $id: string;
-        googleReviewId: string;
-        reviewText: string;
-        rating: number;
-      }>;
+      const pendingReviews = pendingResult.documents as unknown as StoredReview[];
 
       if (pendingReviews.length === 0) {
         return NextResponse.json({ replied: 0, message: 'No pending reviews' }, { status: 200 });
@@ -314,7 +377,7 @@ export async function PATCH(request: NextRequest) {
           const replyText = await generateReviewReply(
             businessContext,
             review.reviewText || '',
-            review.rating || 0
+            Number(review.rating || 0)
           );
 
           const reviewName = review.googleReviewId.startsWith('accounts/')
@@ -346,7 +409,6 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    // ── Single review field update ────────────────────────────────────────────
     const { reviewId, ...updates } = body;
 
     if (!reviewId) {
@@ -356,6 +418,9 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
+    if (updates.rating !== undefined) {
+      updates.rating = String(updates.rating);
+    }
     updates.updatedAt = new Date().toISOString();
 
     if (updates.replyStatus === 'replied' && !updates.repliedAt) {
@@ -364,7 +429,7 @@ export async function PATCH(request: NextRequest) {
 
     const updated = await updateDocument('gbp_reviews', reviewId, updates);
 
-    return NextResponse.json(updated, { status: 200 });
+    return NextResponse.json(normalizeStoredReview(updated as unknown as StoredReview), { status: 200 });
   } catch (error) {
     console.error('[GBP Reviews PATCH] Error:', error);
     return NextResponse.json(

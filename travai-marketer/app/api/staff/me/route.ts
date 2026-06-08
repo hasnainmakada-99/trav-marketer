@@ -4,6 +4,11 @@ import { listDocuments, createDocument } from '@/lib/appwrite';
 
 export type StaffRole = 'owner' | 'admin' | 'manager' | 'staff';
 
+function isInternalBootstrapUser(email?: string | null) {
+  const normalized = (email || '').trim().toLowerCase();
+  return normalized.endsWith('@travai.com') || normalized.endsWith('@traventions.com');
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -23,6 +28,10 @@ export async function GET(request: NextRequest) {
     if (result.documents.length > 0) {
       const doc = result.documents[0] as { role?: string; name?: string; email?: string; userId?: string };
       return NextResponse.json({ role: doc.role || 'staff', name: doc.name, email: doc.email, found: true });
+    }
+
+    if (isInternalBootstrapUser(email)) {
+      return NextResponse.json({ role: 'admin', found: false, bootstrap: true });
     }
 
     return NextResponse.json({ role: 'staff', found: false });

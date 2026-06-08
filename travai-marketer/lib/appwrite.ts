@@ -69,6 +69,13 @@ export const COLLECTIONS = {
   STAFF: 'staff',
 } as const;
 
+export const STORAGE_BUCKETS = {
+  GBP_MEDIA:
+    process.env.APPWRITE_GBP_MEDIA_BUCKET_ID ||
+    process.env.APPWRITE_MEDIA_BUCKET_ID ||
+    '696e9d5f0032436becb7',
+} as const;
+
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
@@ -152,6 +159,25 @@ export async function deleteDocument(
     collectionId,
     documentId
   );
+}
+
+export function getPublicFileViewUrl(bucketId: string, fileId: string): string {
+  const endpoint = (
+    process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ||
+    process.env.APPWRITE_ENDPOINT ||
+    'https://cloud.appwrite.io/v1'
+  ).replace(/\/+$/, '');
+  const projectId =
+    process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
+    process.env.APPWRITE_PROJECT_ID ||
+    '';
+
+  const url = new URL(`${endpoint}/storage/buckets/${bucketId}/files/${fileId}/view`);
+  if (projectId) {
+    url.searchParams.set('project', projectId);
+  }
+
+  return url.toString();
 }
 
 /**

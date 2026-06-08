@@ -11,7 +11,7 @@ export const ROLE_PERMISSIONS: Record<StaffRole, {
 }> = {
   owner:   { dashboard: true,  whatsapp: true,  gbp: true,  campaigns: true,  leads: true,  settings: true },
   admin:   { dashboard: true,  whatsapp: true,  gbp: true,  campaigns: true,  leads: true,  settings: false },
-  manager: { dashboard: true,  whatsapp: true,  gbp: false, campaigns: true,  leads: true,  settings: false },
+  manager: { dashboard: true,  whatsapp: true,  gbp: true,  campaigns: true,  leads: true,  settings: false },
   staff:   { dashboard: true,  whatsapp: true,  gbp: false, campaigns: false, leads: false, settings: false },
 };
 

@@ -58,6 +58,37 @@ interface GoogleReviewListResponse {
   }>;
 }
 
+interface GoogleLocalPostListResponse {
+  localPosts?: GoogleLocalPost[];
+}
+
+export interface GoogleLocalPostMedia {
+  mediaFormat: 'PHOTO' | 'VIDEO';
+  sourceUrl: string;
+}
+
+export interface GoogleLocalPost {
+  name?: string;
+  languageCode?: string;
+  summary?: string;
+  createTime?: string;
+  updateTime?: string;
+  state?: string;
+  searchUrl?: string;
+  topicType?: string;
+  media?: Array<{
+    mediaFormat?: 'PHOTO' | 'VIDEO';
+    sourceUrl?: string;
+    googleUrl?: string;
+    thumbnailUrl?: string;
+  }>;
+  callToAction?: {
+    actionType?: string;
+    url?: string;
+    phoneNumber?: string;
+  };
+}
+
 function getOAuthConfig(options?: {
   requireClientSecret?: boolean;
   redirectUriOverride?: string;
@@ -334,8 +365,9 @@ export async function createGoogleLocalPost(
   locationName: string,
   summary: string,
   languageCode = 'en',
-  callToAction?: GbpCallToAction
-): Promise<{ name?: string; state?: string }> {
+  callToAction?: GbpCallToAction,
+  media?: GoogleLocalPostMedia[]
+): Promise<GoogleLocalPost> {
   const payload: Record<string, unknown> = {
     languageCode,
     summary,
@@ -344,11 +376,25 @@ export async function createGoogleLocalPost(
   if (callToAction) {
     payload.callToAction = callToAction;
   }
-  return googleFetch<{ name?: string; state?: string }>(
+  if (media && media.length > 0) {
+    payload.media = media;
+  }
+  return googleFetch<GoogleLocalPost>(
     `https://mybusiness.googleapis.com/v4/${locationName}/localPosts`,
     accessToken,
     { method: 'POST', body: JSON.stringify(payload) }
   );
+}
+
+export async function listGoogleLocalPosts(
+  accessToken: string,
+  locationName: string
+): Promise<GoogleLocalPost[]> {
+  const url = new URL(`https://mybusiness.googleapis.com/v4/${locationName}/localPosts`);
+  url.searchParams.set('pageSize', '50');
+
+  const response = await googleFetch<GoogleLocalPostListResponse>(url.toString(), accessToken);
+  return response.localPosts || [];
 }
 
 export async function listGoogleReviews(

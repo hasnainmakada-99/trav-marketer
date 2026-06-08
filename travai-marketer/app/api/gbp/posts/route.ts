@@ -6,7 +6,10 @@ import {
   deleteGoogleLocalPost,
   getAccessTokenForTeam,
   getBusinessConfigByTeamId,
+  listGoogleLocalPosts,
   type GbpCallToAction,
+  type GoogleLocalPost,
+  type GoogleLocalPostMedia,
 } from '@/lib/gbp';
 import {
   createDocument,
@@ -15,6 +18,167 @@ import {
   updateDocument,
   deleteDocument,
 } from '@/lib/appwrite';
+
+type StoredPost = {
+  $id: string;
+  teamId: string;
+  title: string;
+  content: string;
+  googlePostId?: string | null;
+  status: 'draft' | 'posted' | 'failed';
+  postedAt?: string | null;
+  type: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt?: string;
+  mediaJson?: string;
+  callToActionJson?: string;
+  languageCode?: string;
+  googleState?: string;
+  googleSearchUrl?: string;
+  syncSource?: string;
+};
+
+type PostMediaPayload = {
+  mediaFormat: 'PHOTO' | 'VIDEO';
+  publicUrl: string;
+  fileName?: string;
+  mimeType?: string;
+  thumbnailUrl?: string;
+};
+
+function safeJsonParse<T>(value?: string | null): T | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+}
+
+function serializePost(document: StoredPost) {
+  return {
+    ...document,
+    media: safeJsonParse<PostMediaPayload[]>(document.mediaJson) || [],
+    callToAction:
+      safeJsonParse<GbpCallToAction>(document.callToActionJson) || null,
+  };
+}
+
+function inferPostTitle(content: string, title?: string | null) {
+  if (title && title.trim()) {
+    return title.trim();
+  }
+  const normalized = content.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return 'GBP Post';
+  }
+  return normalized.length > 72 ? `${normalized.slice(0, 69)}...` : normalized;
+}
+
+function toGoogleMedia(media: PostMediaPayload[] = []): GoogleLocalPostMedia[] {
+  return media
+    .filter((item) => item.publicUrl && item.mediaFormat)
+    .map((item) => ({
+      mediaFormat: item.mediaFormat,
+      sourceUrl: item.publicUrl,
+    }));
+}
+
+function mapGoogleStateToStatus(state?: string): 'draft' | 'posted' | 'failed' {
+  if (!state) {
+    return 'posted';
+  }
+  if (state === 'LIVE') {
+    return 'posted';
+  }
+  if (state === 'PROCESSING') {
+    return 'draft';
+  }
+  return 'failed';
+}
+
+function mapGooglePostToPayload(teamId: string, post: GoogleLocalPost): Omit<StoredPost, '$id'> {
+  const media = (post.media || []).map((item) => ({
+    mediaFormat: item.mediaFormat || 'PHOTO',
+    publicUrl: item.googleUrl || item.sourceUrl || item.thumbnailUrl || '',
+    thumbnailUrl: item.thumbnailUrl,
+  }));
+  const summary = String(post.summary || '').trim();
+
+  return {
+    teamId,
+    title: inferPostTitle(summary),
+    content: summary,
+    googlePostId: post.name || null,
+    status: mapGoogleStateToStatus(post.state),
+    postedAt: post.createTime || post.updateTime || new Date().toISOString(),
+    type: post.topicType ? post.topicType.toLowerCase() : 'google_sync',
+    createdBy: 'google_sync',
+    createdAt: post.createTime || new Date().toISOString(),
+    updatedAt: post.updateTime || new Date().toISOString(),
+    mediaJson: JSON.stringify(media.slice(0, 6)),
+    callToActionJson: post.callToAction ? JSON.stringify(post.callToAction) : '',
+    languageCode: post.languageCode || 'en',
+    googleState: post.state || 'LIVE',
+    googleSearchUrl: post.searchUrl || '',
+    syncSource: 'google',
+  };
+}
+
+async function syncGooglePostsToAppwrite(teamId: string) {
+  const accessToken = await getAccessTokenForTeam(teamId);
+  const business = await getBusinessConfigByTeamId(teamId);
+
+  if (!business?.googleLocationId) {
+    throw new Error('No connected Google location found. Connect GBP first.');
+  }
+
+  const googlePosts = await listGoogleLocalPosts(accessToken, business.googleLocationId);
+  const existing = await listDocuments('gbp_posts', [
+    Query.equal('teamId', teamId),
+    Query.limit(200),
+  ]);
+
+  const existingByGoogleId = new Map<string, StoredPost>();
+  for (const document of existing.documents) {
+    const typed = document as unknown as StoredPost;
+    if (typed.googlePostId) {
+      existingByGoogleId.set(typed.googlePostId, typed);
+    }
+  }
+
+  for (const post of googlePosts) {
+    if (!post.name) {
+      continue;
+    }
+
+    const payload = mapGooglePostToPayload(teamId, post);
+    const existingPost = existingByGoogleId.get(post.name);
+    if (existingPost) {
+      await updateDocument('gbp_posts', existingPost.$id, payload);
+    } else {
+      const created = await createDocument('gbp_posts', payload);
+      existingByGoogleId.set(post.name, created as unknown as StoredPost);
+    }
+  }
+
+  const persisted = await listDocuments('gbp_posts', [
+    Query.equal('teamId', teamId),
+    Query.orderDesc('updatedAt'),
+    Query.limit(200),
+  ]);
+
+  return {
+    synced: googlePosts.length,
+    total: persisted.total,
+    documents: persisted.documents.map((document) =>
+      serializePost(document as unknown as StoredPost)
+    ),
+  };
+}
 
 /**
  * POST /api/gbp/posts
@@ -35,6 +199,8 @@ export async function POST(request: NextRequest) {
       googleLocationName,
       languageCode,
       callToAction,
+      media,
+      previewOnly,
     } = body;
 
     if (!teamId || !createdBy) {
@@ -44,9 +210,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const normalizedMedia = Array.isArray(media) ? (media as PostMediaPayload[]) : [];
     let finalContent = content;
 
-    // Auto-generate content if requested
     if (autoGenerate) {
       const business = await getBusinessConfigByTeamId(teamId);
       if (!business) {
@@ -57,12 +223,16 @@ export async function POST(request: NextRequest) {
       }
       const businessContext = `Business: ${business.businessName}
 Description: ${String((business as unknown as Record<string, unknown>).businessDescription || 'No description')}`;
-      
-      const generatedContent = await generateGBPPost(
-        businessContext,
-        keywords || []
-      );
-      finalContent = generatedContent;
+
+      finalContent = await generateGBPPost(businessContext, keywords || [], {
+        title,
+        media: normalizedMedia.map((item) => ({
+          publicUrl: item.publicUrl,
+          mimeType: item.mimeType,
+          fileName: item.fileName,
+          mediaFormat: item.mediaFormat,
+        })),
+      });
     }
 
     if (!finalContent || String(finalContent).trim().length === 0) {
@@ -72,8 +242,22 @@ Description: ${String((business as unknown as Record<string, unknown>).businessD
       );
     }
 
+    if (previewOnly) {
+      return NextResponse.json(
+        {
+          title: inferPostTitle(finalContent, title),
+          content: finalContent,
+          media: normalizedMedia,
+          callToAction: callToAction || null,
+        },
+        { status: 200 }
+      );
+    }
+
     let googlePostId: string | null = null;
-    let status = 'draft';
+    let googleState = '';
+    let googleSearchUrl = '';
+    let status: 'draft' | 'posted' | 'failed' = 'draft';
     let postedAt: string | null = null;
 
     if (publishNow) {
@@ -100,36 +284,63 @@ Description: ${String((business as unknown as Record<string, unknown>).businessD
 
       const postLang = typeof languageCode === 'string' ? languageCode : 'en';
       const postContent = String(finalContent || '');
-      let createdPost: { name?: string; state?: string };
+      let createdPost: GoogleLocalPost;
       try {
-        createdPost = await createGoogleLocalPost(accessToken, locationName, postContent, postLang, resolvedCta);
+        createdPost = await createGoogleLocalPost(
+          accessToken,
+          locationName,
+          postContent,
+          postLang,
+          resolvedCta,
+          toGoogleMedia(normalizedMedia)
+        );
       } catch (googleErr) {
         const errMsg = googleErr instanceof Error ? googleErr.message : '';
-        const isAuthError = errMsg.includes('invalid authentication') || errMsg.includes('UNAUTHENTICATED') || errMsg.includes('401');
-        if (!isAuthError) throw googleErr;
+        const isAuthError =
+          errMsg.includes('invalid authentication') ||
+          errMsg.includes('UNAUTHENTICATED') ||
+          errMsg.includes('401');
+        if (!isAuthError) {
+          throw googleErr;
+        }
         const freshToken = await getAccessTokenForTeam(teamId, { forceRefresh: true });
-        createdPost = await createGoogleLocalPost(freshToken, locationName, postContent, postLang, resolvedCta);
+        createdPost = await createGoogleLocalPost(
+          freshToken,
+          locationName,
+          postContent,
+          postLang,
+          resolvedCta,
+          toGoogleMedia(normalizedMedia)
+        );
       }
 
       googlePostId = createdPost.name || null;
+      googleState = createdPost.state || 'LIVE';
+      googleSearchUrl = createdPost.searchUrl || '';
       status = 'posted';
-      postedAt = new Date().toISOString();
+      postedAt = createdPost.createTime || new Date().toISOString();
     }
 
     const post = await createDocument('gbp_posts', {
       teamId,
-      title: title || 'Auto-generated Post',
+      title: inferPostTitle(String(finalContent), title || 'Auto-generated Post'),
       content: finalContent,
       googlePostId,
       status,
       postedAt,
-      type: type || 'auto_generated',
+      type: type || (autoGenerate ? 'auto_generated' : 'manual'),
       createdBy,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      mediaJson: JSON.stringify(normalizedMedia.slice(0, 6)),
+      callToActionJson: callToAction ? JSON.stringify(callToAction) : '',
+      languageCode: typeof languageCode === 'string' ? languageCode : 'en',
+      googleState,
+      googleSearchUrl,
+      syncSource: publishNow ? 'app' : 'draft',
     });
 
-    return NextResponse.json(post, { status: 201 });
+    return NextResponse.json(serializePost(post as unknown as StoredPost), { status: 201 });
   } catch (error) {
     console.error('[GBP POST] Error:', error);
     return NextResponse.json(
@@ -148,6 +359,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const teamId = searchParams.get('teamId');
     const status = searchParams.get('status');
+    const syncFromGoogle = searchParams.get('syncFromGoogle') === 'true';
     const limit = parseInt(searchParams.get('limit') || '50');
     const offset = parseInt(searchParams.get('offset') || '0');
 
@@ -155,6 +367,20 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(
         { error: 'Missing teamId parameter' },
         { status: 400 }
+      );
+    }
+
+    if (syncFromGoogle) {
+      const synced = await syncGooglePostsToAppwrite(teamId);
+      return NextResponse.json(
+        {
+          teamId,
+          source: 'google',
+          synced: synced.synced,
+          total: synced.total,
+          documents: synced.documents,
+        },
+        { status: 200 }
       );
     }
 
@@ -166,11 +392,19 @@ export async function GET(request: NextRequest) {
       queries.push(Query.equal('status', status));
     }
 
-    queries.push(Query.limit(limit), Query.offset(offset));
+    queries.push(Query.orderDesc('updatedAt'), Query.limit(limit), Query.offset(offset));
 
     const posts = await listDocuments('gbp_posts', queries);
 
-    return NextResponse.json(posts, { status: 200 });
+    return NextResponse.json(
+      {
+        ...posts,
+        documents: posts.documents.map((document) =>
+          serializePost(document as unknown as StoredPost)
+        ),
+      },
+      { status: 200 }
+    );
   } catch (error) {
     console.error('[GBP GET] Error:', error);
     return NextResponse.json(
@@ -187,15 +421,28 @@ export async function GET(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
-    const { postId, publishNow, teamId, googleLocationName, languageCode, callToAction, ...updates } = body;
+    const { postId, publishNow, teamId, googleLocationName, languageCode, callToAction, media, ...updates } = body;
 
     if (!postId) {
       return NextResponse.json({ error: 'Missing postId' }, { status: 400 });
     }
 
-    // If publishNow, call the Google API to actually publish the post
+    const existingPost = await getDocument('gbp_posts', postId) as unknown as StoredPost;
+    const resolvedMedia =
+      Array.isArray(media)
+        ? (media as PostMediaPayload[])
+        : safeJsonParse<PostMediaPayload[]>(existingPost.mediaJson) || [];
+    const resolvedCallToAction =
+      callToAction ||
+      safeJsonParse<GbpCallToAction>(existingPost.callToActionJson) ||
+      undefined;
+    const resolvedLanguageCode =
+      typeof languageCode === 'string'
+        ? languageCode
+        : existingPost.languageCode || 'en';
+
     if (publishNow) {
-      const resolvedTeamId = teamId || process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || '';
+      const resolvedTeamId = teamId || existingPost.teamId || process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || '';
       if (!resolvedTeamId) {
         return NextResponse.json({ error: 'Missing teamId for publish' }, { status: 400 });
       }
@@ -216,38 +463,62 @@ export async function PATCH(request: NextRequest) {
         );
       }
 
-      const content = updates.content || '';
+      const content = String(updates.content || existingPost.content || '');
       if (!content.trim()) {
         return NextResponse.json({ error: 'Post content is empty' }, { status: 400 });
       }
 
       const resolvedCta: GbpCallToAction | undefined =
-        callToAction?.actionType && callToAction.actionType !== 'NONE'
-          ? (callToAction as GbpCallToAction)
+        resolvedCallToAction?.actionType && resolvedCallToAction.actionType !== 'NONE'
+          ? resolvedCallToAction
           : undefined;
 
-      const lang = typeof languageCode === 'string' ? languageCode : 'en';
-      let createdPost: { name?: string; state?: string };
+      let createdPost: GoogleLocalPost;
       try {
-        createdPost = await createGoogleLocalPost(accessToken, locationName, content, lang, resolvedCta);
+        createdPost = await createGoogleLocalPost(
+          accessToken,
+          locationName,
+          content,
+          resolvedLanguageCode,
+          resolvedCta,
+          toGoogleMedia(resolvedMedia)
+        );
       } catch (googleErr) {
         const errMsg = googleErr instanceof Error ? googleErr.message : '';
-        const isAuthError = errMsg.includes('invalid authentication') || errMsg.includes('UNAUTHENTICATED') || errMsg.includes('401');
-        if (!isAuthError) throw googleErr;
-        // Token expired — refresh and retry once
+        const isAuthError =
+          errMsg.includes('invalid authentication') ||
+          errMsg.includes('UNAUTHENTICATED') ||
+          errMsg.includes('401');
+        if (!isAuthError) {
+          throw googleErr;
+        }
         const freshToken = await getAccessTokenForTeam(resolvedTeamId, { forceRefresh: true });
-        createdPost = await createGoogleLocalPost(freshToken, locationName, content, lang, resolvedCta);
+        createdPost = await createGoogleLocalPost(
+          freshToken,
+          locationName,
+          content,
+          resolvedLanguageCode,
+          resolvedCta,
+          toGoogleMedia(resolvedMedia)
+        );
       }
 
       updates.googlePostId = createdPost.name || null;
       updates.status = 'posted';
-      updates.postedAt = new Date().toISOString();
+      updates.postedAt = createdPost.createTime || new Date().toISOString();
+      updates.googleState = createdPost.state || 'LIVE';
+      updates.googleSearchUrl = createdPost.searchUrl || '';
+      updates.syncSource = 'app';
     }
 
+    updates.mediaJson = JSON.stringify(resolvedMedia.slice(0, 6));
+    updates.callToActionJson = resolvedCallToAction ? JSON.stringify(resolvedCallToAction) : '';
+    updates.languageCode = resolvedLanguageCode;
     updates.updatedAt = new Date().toISOString();
+
     const post = await updateDocument('gbp_posts', postId, updates);
 
-    return NextResponse.json(post, { status: 200 });
+    return NextResponse.json(serializePost(post as unknown as StoredPost), { status: 200 });
   } catch (error) {
     console.error('[GBP PATCH] Error:', error);
     const msg = error instanceof Error ? error.message : 'Failed to update GBP post';
@@ -268,11 +539,8 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Missing postId' }, { status: 400 });
     }
 
-    const doc = await getDocument('gbp_posts', postId) as unknown as {
-      teamId: string; status: string; googlePostId: string | null;
-    };
+    const doc = await getDocument('gbp_posts', postId) as unknown as StoredPost;
 
-    // If the post is live on Google, delete it there first.
     if (doc.status === 'posted' && doc.googlePostId) {
       const teamId = doc.teamId || process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || '';
       if (teamId) {
@@ -282,18 +550,19 @@ export async function DELETE(request: NextRequest) {
             await deleteGoogleLocalPost(accessToken, doc.googlePostId);
           } catch (googleErr) {
             const msg = googleErr instanceof Error ? googleErr.message : '';
-            const isAuth = msg.includes('invalid authentication') || msg.includes('UNAUTHENTICATED') || msg.includes('401');
+            const isAuth =
+              msg.includes('invalid authentication') ||
+              msg.includes('UNAUTHENTICATED') ||
+              msg.includes('401');
             if (isAuth) {
               const freshToken = await getAccessTokenForTeam(teamId, { forceRefresh: true });
               await deleteGoogleLocalPost(freshToken, doc.googlePostId);
             } else if (!msg.includes('NOT_FOUND') && !msg.includes('404')) {
               throw googleErr;
             }
-            // NOT_FOUND means already deleted from Google — continue to delete from Appwrite
           }
         } catch (tokenErr) {
           console.warn('[GBP DELETE] Could not delete from Google (token issue):', tokenErr);
-          // Continue — still remove from Appwrite
         }
       }
     }

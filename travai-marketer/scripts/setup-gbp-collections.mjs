@@ -72,6 +72,12 @@ await fixCollection('gbp_posts', [
   ['createdBy',    255],
   ['createdAt',     50],
   ['updatedAt',     50],
+  ['mediaJson',   4000],
+  ['callToActionJson', 2000],
+  ['languageCode', 50],
+  ['googleState', 100],
+  ['googleSearchUrl', 1000],
+  ['syncSource', 100],
 ], [
   ['idx_teamId', 'key', ['teamId'], ['ASC']],
   ['idx_status', 'key', ['status'], ['ASC']],

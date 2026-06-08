@@ -129,22 +129,66 @@ ${targetAudience ? `Target audience: ${targetAudience}` : ''}`;
  */
 export async function generateGBPPost(
   businessContext: string,
-  keywords: string[] = []
+  keywords: string[] = [],
+  options?: {
+    title?: string;
+    media?: Array<{
+      publicUrl: string;
+      mimeType?: string;
+      fileName?: string;
+      mediaFormat?: 'PHOTO' | 'VIDEO';
+    }>;
+  }
 ): Promise<string> {
   try {
     const systemPrompt = `You are an SEO expert and social media strategist.
 Generate an engaging Google Business Profile post that:
 - Includes relevant keywords for local SEO
 - Is 150-300 characters
-- Includes a call-to-action
-- Is professional yet approachable`;
+- Includes a clear call-to-action
+- Is professional yet approachable
+- Matches the exact offer, destination, or visual context from the uploaded media when media is provided
+- Never invent details that are not visible or not mentioned in the business context`;
 
     const keywordsStr =
       keywords.length > 0 ? `Include these keywords: ${keywords.join(', ')}` : '';
+    const media = options?.media || [];
+    const imageMedia = media.filter(
+      (item) => item.mediaFormat === 'PHOTO' && item.publicUrl
+    );
+    const nonImageMedia = media.filter(
+      (item) => item.mediaFormat !== 'PHOTO' || !item.publicUrl
+    );
+
+    const mediaNotes =
+      nonImageMedia.length > 0
+        ? `Additional uploaded media metadata:\n${nonImageMedia
+            .map((item) => `- ${item.fileName || 'Untitled media'} (${item.mimeType || item.mediaFormat || 'unknown'})`)
+            .join('\n')}`
+        : '';
 
     const userPrompt = `Generate a GBP post for this business:
 ${businessContext}
-${keywordsStr}`;
+${options?.title ? `Post title/context: ${options.title}` : ''}
+${keywordsStr}
+${media.length > 0 ? 'Use the uploaded post media as the primary creative context for the caption.' : ''}
+${mediaNotes}`.trim();
+
+    const userContent: Array<Record<string, unknown>> = [
+      {
+        type: 'text',
+        text: userPrompt,
+      },
+    ];
+
+    for (const item of imageMedia.slice(0, 4)) {
+      userContent.push({
+        type: 'image_url',
+        image_url: {
+          url: item.publicUrl,
+        },
+      });
+    }
 
     const response = await getOpenAI().chat.completions.create({
       model: 'gpt-4o',
@@ -155,7 +199,7 @@ ${keywordsStr}`;
         },
         {
           role: 'user',
-          content: userPrompt,
+          content: userContent as never,
         },
       ],
       temperature: 0.7,

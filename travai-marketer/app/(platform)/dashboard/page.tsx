@@ -140,6 +140,12 @@ export default function DashboardPage() {
       href: '/dashboard/campaigns',
       cta: 'Manage campaigns',
     },
+    {
+      title: 'Google Business',
+      desc: 'Sync live reviews and posts, generate media-aware AI captions, and publish directly to your business profile.',
+      href: '/dashboard/gbp',
+      cta: 'Open GBP workspace',
+    },
   ];
 
   if (loading) {

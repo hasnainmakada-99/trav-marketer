@@ -1,33 +1,83 @@
 'use client';
 
-import { useState, useEffect, useCallback, Suspense } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getCurrentUser } from '@/lib/appwrite-client';
 
-interface AppwriteUser { $id: string; name: string; email: string }
+interface AppwriteUser {
+  $id: string;
+  name: string;
+  email: string;
+}
+
+interface GbpPostMedia {
+  fileId?: string;
+  fileName?: string;
+  mimeType?: string;
+  mediaFormat: 'PHOTO' | 'VIDEO';
+  publicUrl: string;
+  thumbnailUrl?: string;
+}
+
+interface GbpCallToAction {
+  actionType: 'BOOK' | 'ORDER' | 'SHOP' | 'LEARN_MORE' | 'SIGN_UP' | 'CALL';
+  url?: string;
+  phoneNumber?: string;
+}
+
 interface GbpPost {
-  $id: string; teamId: string; title: string; content: string;
-  status: 'draft' | 'posted' | 'failed'; googlePostId: string | null;
-  postedAt: string | null; type: string; createdBy: string; createdAt: string;
+  $id: string;
+  teamId: string;
+  title: string;
+  content: string;
+  status: 'draft' | 'posted' | 'failed';
+  googlePostId: string | null;
+  postedAt: string | null;
+  type: string;
+  createdBy: string;
+  createdAt: string;
+  media?: GbpPostMedia[];
+  callToAction?: GbpCallToAction | null;
+  googleSearchUrl?: string | null;
 }
+
 interface GbpReview {
-  $id?: string; name?: string; reviewId?: string; googleReviewId?: string;
-  reviewer: string; rating: number; reviewText: string;
-  reply: string | null; replyStatus: 'pending' | 'replied'; createdAt: string;
+  $id?: string;
+  reviewId?: string;
+  googleReviewId?: string;
+  reviewer: string;
+  rating: number;
+  reviewText: string;
+  reply: string | null;
+  replyStatus: 'pending' | 'ready' | 'replied';
+  createdAt: string;
 }
+
 interface GbpAccountLocation {
-  resourceName: string; v4LocationName: string; title?: string;
+  resourceName: string;
+  v4LocationName: string;
+  title?: string;
 }
+
 interface GbpAccount {
-  accountName: string; accountDisplayName?: string; locations: GbpAccountLocation[];
+  accountName: string;
+  accountDisplayName?: string;
+  locations: GbpAccountLocation[];
 }
+
+type Tab = 'posts' | 'reviews' | 'setup';
 
 function StarRating({ rating }: { rating: number }) {
   return (
     <div className="flex gap-0.5">
-      {[1,2,3,4,5].map(s => (
-        <svg key={s} className={`w-4 h-4 ${s <= rating ? 'text-yellow-400' : 'text-gray-200'}`} fill="currentColor" viewBox="0 0 20 20">
-          <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+      {[1, 2, 3, 4, 5].map((step) => (
+        <svg
+          key={step}
+          className={`h-4 w-4 ${step <= rating ? 'text-yellow-400' : 'text-gray-200'}`}
+          fill="currentColor"
+          viewBox="0 0 20 20"
+        >
+          <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
         </svg>
       ))}
     </div>
@@ -35,22 +85,47 @@ function StarRating({ rating }: { rating: number }) {
 }
 
 function Badge({ status }: { status: string }) {
-  const map: Record<string, string> = {
+  const tone: Record<string, string> = {
     draft: 'bg-yellow-50 text-yellow-700 border-yellow-200',
     posted: 'bg-green-50 text-green-700 border-green-200',
     failed: 'bg-red-50 text-red-700 border-red-200',
     pending: 'bg-orange-50 text-orange-700 border-orange-200',
+    ready: 'bg-blue-50 text-blue-700 border-blue-200',
     replied: 'bg-green-50 text-green-700 border-green-200',
   };
-  const labels: Record<string, string> = { draft: 'Draft', posted: 'Live', failed: 'Failed', pending: 'Needs Reply', replied: 'Replied' };
+  const label: Record<string, string> = {
+    draft: 'Draft',
+    posted: 'Live',
+    failed: 'Failed',
+    pending: 'Needs Reply',
+    ready: 'Ready',
+    replied: 'Replied',
+  };
+
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${map[status] || 'bg-gray-50 text-gray-600 border-gray-200'}`}>
-      {labels[status] || status}
+    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${tone[status] || 'bg-gray-50 text-gray-600 border-gray-200'}`}>
+      {label[status] || status}
     </span>
   );
 }
 
-type Tab = 'posts' | 'reviews' | 'setup';
+function MediaTile({ media, alt }: { media: GbpPostMedia; alt: string }) {
+  if (media.mediaFormat === 'VIDEO') {
+    return (
+      <div className="flex h-20 w-24 items-center justify-center rounded-lg border border-gray-200 bg-slate-950 text-xs font-semibold text-white">
+        VIDEO
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={media.thumbnailUrl || media.publicUrl}
+      alt={alt}
+      className="h-20 w-24 rounded-lg border border-gray-200 object-cover"
+    />
+  );
+}
 
 function GbpPageInner() {
   const router = useRouter();
@@ -58,88 +133,103 @@ function GbpPageInner() {
 
   const [user, setUser] = useState<AppwriteUser | null>(null);
   const [teamId, setTeamId] = useState('');
+  const [tab, setTab] = useState<Tab>('posts');
+  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
-  // Connection
   const [connected, setConnected] = useState(false);
   const [hasLocation, setHasLocation] = useState(false);
   const [savedLocationId, setSavedLocationId] = useState<string | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
 
-  // Locations from Google API
   const [accounts, setAccounts] = useState<GbpAccount[]>([]);
   const [locationsLoading, setLocationsLoading] = useState(false);
-  const [locationsError, setLocationsError] = useState<string | null>(null);
   const [locationsLoaded, setLocationsLoaded] = useState(false);
+  const [locationsError, setLocationsError] = useState<string | null>(null);
   const [manualLocationId, setManualLocationId] = useState('');
 
-  // UI
-  const [tab, setTab] = useState<Tab>('posts');
-  const [toast, setToast] = useState<{msg: string; ok: boolean} | null>(null);
-
-  // Posts
   const [posts, setPosts] = useState<GbpPost[]>([]);
   const [postsLoading, setPostsLoading] = useState(false);
-  const [showPostModal, setShowPostModal] = useState(false);
-  const [postForm, setPostForm] = useState({
-    title: '', content: '', keywords: '',
-    autoGenerate: true, publishNow: false,
-    callToAction: 'NONE', callToActionUrl: '', callToActionPhone: '',
-  });
-  const [postSubmitting, setPostSubmitting] = useState(false);
+  const [postsSyncing, setPostsSyncing] = useState(false);
 
-  // Auto-generate single post
-  const [aiGenerating, setAiGenerating] = useState(false);
-  const [aiPostPreview, setAiPostPreview] = useState('');
-
-  // Reviews
   const [reviews, setReviews] = useState<GbpReview[]>([]);
   const [reviewsLoading, setReviewsLoading] = useState(false);
-  const [syncing, setSyncing] = useState(false);
+  const [reviewsSyncing, setReviewsSyncing] = useState(false);
   const [autoReplying, setAutoReplying] = useState(false);
-  const [replyModal, setReplyModal] = useState<{review: GbpReview; text: string; loading: boolean} | null>(null);
 
-  const flash = (msg: string, ok = true) => {
+  const [showPostModal, setShowPostModal] = useState(false);
+  const [postSubmitting, setPostSubmitting] = useState(false);
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [mediaUploading, setMediaUploading] = useState(false);
+  const [selectedMedia, setSelectedMedia] = useState<GbpPostMedia[]>([]);
+  const [replyModal, setReplyModal] = useState<{ review: GbpReview; text: string; loading: boolean } | null>(null);
+  const [postForm, setPostForm] = useState({
+    title: '',
+    content: '',
+    keywords: '',
+    autoGenerate: true,
+    publishNow: false,
+    callToAction: 'NONE',
+    callToActionUrl: '',
+    callToActionPhone: '',
+  });
+
+  const flash = useCallback((msg: string, ok = true) => {
     setToast({ msg, ok });
-    setTimeout(() => setToast(null), 4500);
-  };
+    window.setTimeout(() => setToast(null), 4500);
+  }, []);
 
-  // ── Auth ──
+  const resetPostComposer = useCallback(() => {
+    setPostForm({
+      title: '',
+      content: '',
+      keywords: '',
+      autoGenerate: true,
+      publishNow: false,
+      callToAction: 'NONE',
+      callToActionUrl: '',
+      callToActionPhone: '',
+    });
+    setSelectedMedia([]);
+  }, []);
+
   useEffect(() => {
-    getCurrentUser().then(u => {
-      if (!u) { router.push('/login'); return; }
-      setUser(u as AppwriteUser);
-      // GBP always operates under the canonical client team ID,
-      // not the demo CRM user's Appwrite ID.
-      setTeamId(process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || (u as AppwriteUser).$id);
+    getCurrentUser().then((currentUser) => {
+      if (!currentUser) {
+        router.push('/login');
+        return;
+      }
+      const typed = currentUser as AppwriteUser;
+      setUser(typed);
+      setTeamId(process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || typed.$id);
     });
   }, [router]);
 
-  // ── OAuth callback toast ──
   useEffect(() => {
-    const c = searchParams.get('connected');
-    if (c === 'true') flash('Google Business Profile connected!');
-    else if (c === 'false') flash(`Connection failed: ${searchParams.get('reason') || 'Unknown error'}`, false);
-  }, [searchParams]);
+    const connectedParam = searchParams.get('connected');
+    if (connectedParam === 'true') {
+      flash('Google Business Profile connected.');
+    } else if (connectedParam === 'false') {
+      flash(`Connection failed: ${searchParams.get('reason') || 'Unknown error'}`, false);
+    }
+  }, [flash, searchParams]);
 
-  // ── Status check (DB only, fast) ──
-  const checkStatus = useCallback(async (tid: string) => {
+  const checkStatus = useCallback(async (resolvedTeamId: string) => {
     setStatusLoading(true);
     try {
-      const res = await fetch(`/api/gbp/status?teamId=${encodeURIComponent(tid)}`, { cache: 'no-store' });
+      const res = await fetch(`/api/gbp/status?teamId=${encodeURIComponent(resolvedTeamId)}`, {
+        cache: 'no-store',
+      });
       const data = await res.json();
       if (!data.connected) {
-        // Auto-migrate any orphaned Google config to this canonical teamId.
-        const migRes = await fetch('/api/gbp/migrate', { method: 'POST' });
-        const migData = await migRes.json();
-        if (migData.migrated) {
-          // Re-fetch status — skip browser cache so we see the just-migrated state.
-          const res2 = await fetch(`/api/gbp/status?teamId=${encodeURIComponent(tid)}&_=${Date.now()}`, { cache: 'no-store' });
-          const data2 = await res2.json();
-          setConnected(!!data2.connected);
-          setHasLocation(!!data2.hasLocation);
-          setSavedLocationId(data2.googleLocationId || null);
-          return;
-        }
+        await fetch('/api/gbp/migrate', { method: 'POST' });
+        const retry = await fetch(`/api/gbp/status?teamId=${encodeURIComponent(resolvedTeamId)}&_=${Date.now()}`, {
+          cache: 'no-store',
+        });
+        const nextData = await retry.json();
+        setConnected(!!nextData.connected);
+        setHasLocation(!!nextData.hasLocation);
+        setSavedLocationId(nextData.googleLocationId || null);
+        return;
       }
       setConnected(!!data.connected);
       setHasLocation(!!data.hasLocation);
@@ -151,111 +241,237 @@ function GbpPageInner() {
     }
   }, []);
 
-  useEffect(() => { if (teamId) checkStatus(teamId); }, [teamId, checkStatus]);
+  useEffect(() => {
+    if (teamId) {
+      checkStatus(teamId);
+    }
+  }, [checkStatus, teamId]);
 
-  // ── Load locations — reads from DB cache by default, passes ?refresh=true to force Google API ──
-  const loadGoogleLocations = useCallback(async (tid: string, refresh = false) => {
+  const loadGoogleLocations = useCallback(async (resolvedTeamId: string, refresh = false) => {
     setLocationsLoading(true);
     setLocationsError(null);
     try {
-      const url = `/api/gbp/locations?teamId=${encodeURIComponent(tid)}${refresh ? '&refresh=true' : ''}`;
-      const res = await fetch(url);
+      const res = await fetch(
+        `/api/gbp/locations?teamId=${encodeURIComponent(resolvedTeamId)}${refresh ? '&refresh=true' : ''}`
+      );
       const data = await res.json();
       setAccounts(data.accounts || []);
       setLocationsLoaded(true);
-      if (data.error) setLocationsError(data.error === 'quota_exceeded' ? 'quota_exceeded' : (data.reason || data.error));
-    } catch (e) {
-      setLocationsError(String(e));
+      if (data.error) {
+        setLocationsError(data.reason || data.error);
+      }
+    } catch (error) {
+      setLocationsError(error instanceof Error ? error.message : 'Failed to load locations');
     } finally {
       setLocationsLoading(false);
     }
   }, []);
 
-  // Load locations from cache on connect — reads DB only, no Google API call.
   useEffect(() => {
-    if (teamId && connected) loadGoogleLocations(teamId, false);
-  }, [teamId, connected, loadGoogleLocations]);
+    if (teamId && connected) {
+      loadGoogleLocations(teamId);
+    }
+  }, [connected, loadGoogleLocations, teamId]);
 
-  // ── Posts ──
-  const loadPosts = useCallback(async () => {
+  const loadPosts = useCallback(async (syncFromGoogle = false) => {
     if (!teamId) return;
     setPostsLoading(true);
     try {
-      const res = await fetch(`/api/gbp/posts?teamId=${encodeURIComponent(teamId)}&limit=50`);
-      if (res.ok) { const d = await res.json(); setPosts(d.documents || []); }
-    } finally { setPostsLoading(false); }
+      const res = await fetch(
+        `/api/gbp/posts?teamId=${encodeURIComponent(teamId)}&limit=50${syncFromGoogle ? '&syncFromGoogle=true' : ''}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setPosts(data.documents || []);
+      }
+    } finally {
+      setPostsLoading(false);
+    }
   }, [teamId]);
 
-  // ── Reviews ──
   const loadReviews = useCallback(async () => {
     if (!teamId) return;
     setReviewsLoading(true);
     try {
       const res = await fetch(`/api/gbp/reviews?teamId=${encodeURIComponent(teamId)}&limit=50`);
-      if (res.ok) { const d = await res.json(); setReviews(d.documents || []); }
-    } finally { setReviewsLoading(false); }
+      if (res.ok) {
+        const data = await res.json();
+        setReviews(data.documents || []);
+      }
+    } finally {
+      setReviewsLoading(false);
+    }
   }, [teamId]);
 
   useEffect(() => {
-    if (!teamId || !connected) return;
-    if (tab === 'posts') loadPosts();
-    if (tab === 'reviews') loadReviews();
-  }, [tab, teamId, connected, loadPosts, loadReviews]);
+    if (!connected || !teamId) return;
+    if (tab === 'posts') {
+      loadPosts();
+    }
+    if (tab === 'reviews') {
+      loadReviews();
+    }
+  }, [connected, loadPosts, loadReviews, tab, teamId]);
+
+  const allLocations = useMemo(
+    () => accounts.flatMap((account) => account.locations.map((location) => ({ ...location, accountName: account.accountName }))),
+    [accounts]
+  );
+
+  const postStats = useMemo(
+    () => ({
+      total: posts.length,
+      live: posts.filter((post) => post.status === 'posted').length,
+      drafts: posts.filter((post) => post.status === 'draft').length,
+    }),
+    [posts]
+  );
+
+  const reviewStats = useMemo(
+    () => ({
+      total: reviews.length,
+      pending: reviews.filter((review) => review.replyStatus === 'pending').length,
+      avg: reviews.length
+        ? (reviews.reduce((sum, review) => sum + (review.rating || 0), 0) / reviews.length).toFixed(1)
+        : '-',
+    }),
+    [reviews]
+  );
 
   const handleConnect = () => {
     if (!teamId) return;
     window.location.href = `/api/gbp/connect?teamId=${encodeURIComponent(teamId)}&redirectTo=/dashboard/gbp`;
   };
 
-  // ── Select & save location ──
-  const handleSelectLocation = async (v4LocationName: string) => {
+  const handleSelectLocation = async (googleLocationId: string) => {
     try {
-      await fetch('/api/gbp/status', {
+      const res = await fetch('/api/gbp/status', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ teamId, googleLocationId: v4LocationName }),
+        body: JSON.stringify({ teamId, googleLocationId }),
       });
-      setSavedLocationId(v4LocationName);
+      if (!res.ok) {
+        throw new Error('Failed to save location');
+      }
+      setSavedLocationId(googleLocationId);
       setHasLocation(true);
-      flash('Location saved! Posts and reviews will now use this location.');
-    } catch {
-      flash('Failed to save location', false);
+      flash('Location saved. Posts and reviews will now use this location.');
+    } catch (error) {
+      flash(error instanceof Error ? error.message : 'Failed to save location', false);
     }
   };
 
-  // ── AI Generate post preview ──
-  const handleAiGeneratePreview = async () => {
-    setAiGenerating(true);
-    setAiPostPreview('');
+  const handleUploadMedia = async (files: FileList | File[]) => {
+    if (!teamId || files.length === 0) return;
+    setMediaUploading(true);
     try {
-      const body = {
-        teamId, title: postForm.title || 'AI Travel Post',
-        content: '', type: 'auto_generated', createdBy: user?.$id,
-        autoGenerate: true,
-        keywords: postForm.keywords.split(',').map(k => k.trim()).filter(Boolean),
-        publishNow: false,
-      };
-      const res = await fetch('/api/gbp/posts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      if (res.ok) {
-        const d = await res.json();
-        setAiPostPreview(d.content || '');
-        setPostForm(p => ({ ...p, content: d.content || '', autoGenerate: false }));
-        flash('AI content generated! Edit if needed, then post.');
-        loadPosts();
-      } else {
-        const e = await res.json();
-        flash(e.error || 'AI generation failed', false);
+      const formData = new FormData();
+      formData.set('teamId', teamId);
+      Array.from(files).forEach((file) => formData.append('files', file));
+
+      const res = await fetch('/api/gbp/media', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Upload failed');
       }
-    } finally { setAiGenerating(false); }
+
+      setSelectedMedia((current) => [...current, ...(data.files || [])]);
+      flash(`${data.files?.length || 0} media item(s) uploaded.`);
+    } catch (error) {
+      flash(error instanceof Error ? error.message : 'Failed to upload media', false);
+    } finally {
+      setMediaUploading(false);
+    }
   };
 
-  // ── Create post ──
+  const handleSyncPosts = async () => {
+    if (!hasLocation) {
+      flash('Set a Google Business location first.', false);
+      return;
+    }
+    setPostsSyncing(true);
+    try {
+      const res = await fetch(`/api/gbp/posts?teamId=${encodeURIComponent(teamId)}&syncFromGoogle=true`);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to sync posts');
+      }
+      setPosts(data.documents || []);
+      flash(`Synced ${data.synced || 0} post(s) from Google.`);
+    } catch (error) {
+      flash(error instanceof Error ? error.message : 'Failed to sync posts', false);
+    } finally {
+      setPostsSyncing(false);
+    }
+  };
+
+  const handleSyncReviews = async () => {
+    if (!hasLocation) {
+      flash('Set a Google Business location first.', false);
+      return;
+    }
+    setReviewsSyncing(true);
+    try {
+      const res = await fetch(`/api/gbp/reviews?teamId=${encodeURIComponent(teamId)}&syncFromGoogle=true`);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to sync reviews');
+      }
+      setReviews(data.documents || []);
+      flash(`Synced ${data.synced || 0} review(s) from Google.`);
+    } catch (error) {
+      flash(error instanceof Error ? error.message : 'Failed to sync reviews', false);
+    } finally {
+      setReviewsSyncing(false);
+    }
+  };
+
+  const handleAiGeneratePreview = async () => {
+    if (!user) return;
+    setAiGenerating(true);
+    try {
+      const res = await fetch('/api/gbp/posts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teamId,
+          createdBy: user.$id,
+          title: postForm.title || 'AI Travel Post',
+          content: '',
+          type: 'auto_generated',
+          autoGenerate: true,
+          previewOnly: true,
+          publishNow: false,
+          keywords: postForm.keywords.split(',').map((item) => item.trim()).filter(Boolean),
+          media: selectedMedia,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to generate post');
+      }
+      setPostForm((current) => ({ ...current, content: data.content || '', autoGenerate: false }));
+      flash('AI content generated. Review it, then save or publish.');
+    } catch (error) {
+      flash(error instanceof Error ? error.message : 'Failed to generate post', false);
+    } finally {
+      setAiGenerating(false);
+    }
+  };
+
   const handleCreatePost = async () => {
     if (!user) return;
-    if (!postForm.content.trim()) { flash('Enter content or click "Generate with AI" first', false); return; }
+    if (!postForm.content.trim()) {
+      flash('Enter content or generate it with AI first.', false);
+      return;
+    }
+
     setPostSubmitting(true);
     try {
-      const ctaPayload =
+      const callToAction =
         postForm.callToAction !== 'NONE'
           ? {
               actionType: postForm.callToAction,
@@ -264,126 +480,168 @@ function GbpPageInner() {
                 : { url: postForm.callToActionUrl }),
             }
           : undefined;
-      const body = {
-        teamId, title: postForm.title || 'GBP Post', content: postForm.content,
-        type: postForm.autoGenerate ? 'auto_generated' : 'manual', createdBy: user.$id,
-        autoGenerate: postForm.autoGenerate,
-        keywords: postForm.keywords.split(',').map(k => k.trim()).filter(Boolean),
-        publishNow: postForm.publishNow,
-        googleLocationName: savedLocationId,
-        callToAction: ctaPayload,
-      };
-      const res = await fetch('/api/gbp/posts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      if (res.ok) {
-        flash(postForm.publishNow ? 'Post published to Google!' : 'Post saved as draft.');
-        setShowPostModal(false);
-        setPostForm({ title: '', content: '', keywords: '', autoGenerate: true, publishNow: false, callToAction: 'NONE', callToActionUrl: '', callToActionPhone: '' });
-        setAiPostPreview('');
-        loadPosts();
-      } else {
-        const e = await res.json();
-        flash(e.error || 'Failed to create post', false);
+
+      const res = await fetch('/api/gbp/posts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teamId,
+          createdBy: user.$id,
+          title: postForm.title || 'GBP Post',
+          content: postForm.content,
+          type: postForm.autoGenerate ? 'auto_generated' : 'manual',
+          autoGenerate: false,
+          publishNow: postForm.publishNow && hasLocation,
+          googleLocationName: savedLocationId,
+          keywords: postForm.keywords.split(',').map((item) => item.trim()).filter(Boolean),
+          media: selectedMedia,
+          callToAction,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to create post');
       }
-    } finally { setPostSubmitting(false); }
+      setShowPostModal(false);
+      resetPostComposer();
+      await loadPosts();
+      flash(postForm.publishNow && hasLocation ? 'Post published to Google.' : 'Post saved as draft.');
+    } catch (error) {
+      flash(error instanceof Error ? error.message : 'Failed to create post', false);
+    } finally {
+      setPostSubmitting(false);
+    }
   };
 
-  // ── Publish draft ──
   const handlePublishDraft = async (post: GbpPost) => {
     try {
       const res = await fetch('/api/gbp/posts', {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ postId: post.$id, publishNow: true, teamId: post.teamId || teamId, content: post.content }),
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          postId: post.$id,
+          publishNow: true,
+          teamId: post.teamId || teamId,
+          content: post.content,
+          media: post.media || [],
+          callToAction: post.callToAction || undefined,
+        }),
       });
-      if (res.ok) { flash('Published!'); loadPosts(); }
-      else { const e = await res.json(); flash(e.error || 'Failed', false); }
-    } catch { flash('Network error', false); }
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to publish post');
+      }
+      await loadPosts();
+      flash('Draft published to Google.');
+    } catch (error) {
+      flash(error instanceof Error ? error.message : 'Failed to publish post', false);
+    }
   };
 
-  // ── Delete post ──
   const handleDeletePost = async (postId: string) => {
     if (!confirm('Delete this post?')) return;
     try {
-      const res = await fetch(`/api/gbp/posts?postId=${encodeURIComponent(postId)}`, { method: 'DELETE' });
-      if (res.ok) { flash('Deleted.'); setPosts(p => p.filter(x => x.$id !== postId)); }
-    } catch { flash('Network error', false); }
-  };
-
-  // ── Sync reviews ──
-  const handleSyncReviews = async () => {
-    setSyncing(true);
-    try {
-      const res = await fetch(`/api/gbp/reviews?teamId=${encodeURIComponent(teamId)}&syncFromGoogle=true`);
-      if (res.ok) {
-        const d = await res.json();
-        flash(`Synced ${d.reviews?.length || 0} reviews from Google.`);
-        loadReviews();
-      } else {
-        const e = await res.json();
-        flash(e.error || 'Sync failed', false);
+      const res = await fetch(`/api/gbp/posts?postId=${encodeURIComponent(postId)}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to delete post');
       }
-    } finally { setSyncing(false); }
+      setPosts((current) => current.filter((post) => post.$id !== postId));
+      flash('Post deleted.');
+    } catch (error) {
+      flash(error instanceof Error ? error.message : 'Failed to delete post', false);
+    }
   };
 
-  // ── Auto-reply all ──
   const handleAutoReplyAll = async () => {
-    const pending = reviews.filter(r => r.replyStatus === 'pending');
-    if (!pending.length) { flash('No pending reviews.', false); return; }
-    if (!confirm(`Auto-generate and publish AI replies for ${pending.length} review(s)?`)) return;
+    if (!reviewStats.pending) {
+      flash('No pending reviews to reply to.', false);
+      return;
+    }
+    if (!confirm(`Generate and publish AI replies for ${reviewStats.pending} review(s)?`)) {
+      return;
+    }
     setAutoReplying(true);
     try {
       const res = await fetch('/api/gbp/reviews', {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ teamId, autoReplyAll: true }),
       });
-      if (res.ok) {
-        const d = await res.json();
-        flash(`AI replied to ${d.replied || 0} reviews!`);
-        loadReviews();
-      } else {
-        const e = await res.json();
-        flash(e.error || 'Auto-reply failed', false);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to auto-reply');
       }
-    } finally { setAutoReplying(false); }
+      await loadReviews();
+      flash(`AI replied to ${data.replied || 0} review(s).`);
+    } catch (error) {
+      flash(error instanceof Error ? error.message : 'Failed to auto-reply', false);
+    } finally {
+      setAutoReplying(false);
+    }
   };
 
-  // ── Generate single AI reply ──
   const handleGenerateAiReply = async () => {
     if (!replyModal) return;
-    setReplyModal(p => p && ({ ...p, loading: true }));
+    setReplyModal((current) => current && ({ ...current, loading: true }));
     try {
       const res = await fetch('/api/gbp/reviews', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reviewId: replyModal.review.$id || replyModal.review.reviewId, teamId, autoGenerate: true, publishNow: false }),
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reviewId: replyModal.review.$id || replyModal.review.reviewId,
+          teamId,
+          autoGenerate: true,
+          publishNow: false,
+        }),
       });
-      if (res.ok) { const d = await res.json(); setReplyModal(p => p && ({ ...p, text: d.reply || '', loading: false })); }
-      else { flash('Failed to generate reply', false); setReplyModal(p => p && ({ ...p, loading: false })); }
-    } catch { setReplyModal(p => p && ({ ...p, loading: false })); }
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to generate reply');
+      }
+      setReplyModal((current) => current && ({ ...current, text: data.reply || '', loading: false }));
+    } catch (error) {
+      flash(error instanceof Error ? error.message : 'Failed to generate reply', false);
+      setReplyModal((current) => current && ({ ...current, loading: false }));
+    }
   };
 
-  // ── Submit reply ──
   const handleSubmitReply = async () => {
     if (!replyModal?.text.trim()) return;
-    setReplyModal(p => p && ({ ...p, loading: true }));
+    setReplyModal((current) => current && ({ ...current, loading: true }));
     try {
       const res = await fetch('/api/gbp/reviews', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reviewId: replyModal.review.$id || replyModal.review.reviewId, teamId, autoGenerate: false, customReply: replyModal.text, publishNow: true }),
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reviewId: replyModal.review.$id || replyModal.review.reviewId,
+          teamId,
+          autoGenerate: false,
+          customReply: replyModal.text,
+          publishNow: true,
+        }),
       });
-      if (res.ok) { flash('Reply published to Google!'); setReplyModal(null); loadReviews(); }
-      else { const e = await res.json(); flash(e.error || 'Failed', false); setReplyModal(p => p && ({ ...p, loading: false })); }
-    } catch { setReplyModal(p => p && ({ ...p, loading: false })); }
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to publish reply');
+      }
+      setReplyModal(null);
+      await loadReviews();
+      flash('Reply published to Google.');
+    } catch (error) {
+      flash(error instanceof Error ? error.message : 'Failed to publish reply', false);
+      setReplyModal((current) => current && ({ ...current, loading: false }));
+    }
   };
-
-  const allLocations = accounts.flatMap(a => a.locations.map(l => ({ ...l, accountName: a.accountName })));
-  const postStats = { total: posts.length, live: posts.filter(p => p.status === 'posted').length, drafts: posts.filter(p => p.status === 'draft').length };
-  const reviewStats = { total: reviews.length, pending: reviews.filter(r => r.replyStatus === 'pending').length, avg: reviews.length ? (reviews.reduce((s, r) => s + (r.rating || 0), 0) / reviews.length).toFixed(1) : '—' };
 
   if (!user || statusLoading) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center px-4">
         <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600 mb-4" />
-          <p className="text-sm text-gray-500">Loading Google Business Profile…</p>
+          <div className="inline-block h-10 w-10 animate-spin rounded-full border-b-2 border-indigo-600" />
+          <p className="mt-3 text-sm text-gray-500">Loading Google Business Profile...</p>
         </div>
       </div>
     );
@@ -391,229 +649,220 @@ function GbpPageInner() {
 
   return (
     <div className="min-h-full px-4 py-4 sm:px-6 sm:py-6 xl:px-8">
-      {/* Toast */}
       {toast && (
-        <div className={`fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg text-sm font-medium ${toast.ok ? 'bg-green-600 text-white' : 'bg-red-600 text-white'}`}>
-          {toast.ok ? '✓' : '✕'} {toast.msg}
+        <div className={`fixed right-4 top-4 z-50 rounded-xl px-4 py-3 text-sm font-medium text-white shadow-lg ${toast.ok ? 'bg-green-600' : 'bg-red-600'}`}>
+          {toast.msg}
         </div>
       )}
 
-      {/* Header */}
       <div className="rounded-[32px] border border-slate-200 bg-white/90 px-5 py-5 shadow-xl shadow-slate-200/60 sm:px-6">
         <div className="mx-auto flex max-w-6xl flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-xl font-bold text-gray-900">Google Business Profile</h1>
-            <p className="text-sm text-gray-500 mt-0.5">AI-powered posts, reviews & local SEO</p>
+            <p className="mt-0.5 text-sm text-gray-500">Live posts, review sync, AI replies, and media-aware captions</p>
           </div>
           {connected && (
-            <div className="flex items-center gap-2 text-xs bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded-full">
-              <span className="w-2 h-2 rounded-full bg-green-500" />
+            <div className="flex items-center gap-2 rounded-full border border-green-200 bg-green-50 px-3 py-1.5 text-xs text-green-700">
+              <span className="h-2 w-2 rounded-full bg-green-500" />
               Connected
-              {hasLocation && <span className="text-green-500">· Location set</span>}
+              {hasLocation && <span className="text-green-500">Location set</span>}
             </div>
           )}
         </div>
       </div>
 
-      <div className="max-w-6xl mx-auto py-6">
-
-        {/* ── NOT CONNECTED ── */}
+      <div className="mx-auto max-w-6xl py-6">
         {!connected && (
-          <div className="bg-white rounded-2xl border border-dashed border-gray-300 p-8 text-center sm:p-12">
-            <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">🌐</div>
-            <h2 className="text-xl font-semibold text-gray-900 mb-2">Connect Google Business Profile</h2>
-            <p className="text-sm text-gray-500 max-w-md mx-auto mb-6">
-              Connect your Google account to publish AI posts, auto-reply to reviews, and boost your local SEO — all from one place.
+          <div className="rounded-2xl border border-dashed border-gray-300 bg-white p-8 text-center sm:p-12">
+            <h2 className="text-xl font-semibold text-gray-900">Connect Google Business Profile</h2>
+            <p className="mx-auto mt-2 max-w-md text-sm text-gray-500">
+              Connect the Google account that manages the live business listing so TravAI can sync posts, reviews, and replies directly.
             </p>
-            <button onClick={handleConnect} className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-medium text-sm shadow transition-colors">
-              <svg className="w-4 h-4" viewBox="0 0 24 24"><path d="M21.35 11.1H12v2.8h5.35C16.85 16.35 14.65 18 12 18c-3.3 0-6-2.7-6-6s2.7-6 6-6c1.55 0 2.95.6 4.05 1.55L18 5.6C16.35 4.05 14.3 3 12 3 7.03 3 3 7.03 3 12s4.03 9 9 9c5.14 0 8.75-3.6 8.75-8.9 0-.6-.06-1.15-.15-1.7l.75-.3z" fill="#4285F4"/></svg>
+            <button
+              onClick={handleConnect}
+              className="mt-6 rounded-xl bg-indigo-600 px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
+            >
               Connect with Google
             </button>
           </div>
         )}
 
-        {/* ── CONNECTED ── */}
         {connected && (
           <>
-            {/* Location picker banner */}
             {!hasLocation && (
-              <div className="mb-5 bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
+              <div className="mb-5 space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <p className="text-sm font-semibold text-amber-800">Select your Google Business location</p>
-                    <p className="text-xs text-amber-600 mt-0.5">Required to publish posts and sync reviews from Google.</p>
+                    <p className="text-xs text-amber-600">Required before publishing posts or syncing reviews.</p>
                   </div>
-                  <button onClick={() => loadGoogleLocations(teamId, true)} disabled={locationsLoading}
-                    className="flex-shrink-0 text-xs text-amber-700 hover:text-amber-900 underline disabled:opacity-50 whitespace-nowrap">
-                    {locationsLoading ? 'Loading…' : '↻ Refresh from Google'}
+                  <button
+                    onClick={() => loadGoogleLocations(teamId, true)}
+                    disabled={locationsLoading}
+                    className="text-xs font-medium text-amber-800 underline disabled:opacity-50"
+                  >
+                    {locationsLoading ? 'Loading...' : 'Refresh from Google'}
                   </button>
                 </div>
 
-                {/* Loading spinner */}
-                {locationsLoading && (
-                  <div className="flex items-center gap-2 text-xs text-amber-600">
-                    <span className="w-3 h-3 border-2 border-amber-500 border-t-transparent rounded-full animate-spin inline-block" />
-                    Loading locations…
+                {locationsError && (
+                  <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                    {locationsError}
                   </div>
                 )}
 
-                {/* Quota error */}
-                {!locationsLoading && locationsError === 'quota_exceeded' && (
-                  <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 text-xs text-orange-800">
-                    <p className="font-semibold mb-1">Google Business Profile API not yet enabled for this project</p>
-                    <p className="mb-2">
-                      This is a one-time setup issue. Either{' '}
-                      <strong>reconnect with the correct owner Gmail account</strong> (location will auto-detect),
-                      or enter the location ID manually below.
-                    </p>
-                    <button onClick={handleConnect}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg font-medium transition-colors">
-                      ↻ Reconnect with the correct Google account
-                    </button>
-                  </div>
-                )}
-
-                {/* Other errors */}
-                {!locationsLoading && locationsError && locationsError !== 'quota_exceeded' && (
-                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700">
-                    <p className="font-semibold mb-0.5">Could not load locations:</p>
-                    <p className="font-mono break-all mb-1">{locationsError}</p>
-                    <button onClick={handleConnect} className="underline">Reconnect with Google</button>
-                  </div>
-                )}
-
-                {/* Location buttons from cache */}
-                {!locationsLoading && !locationsError && allLocations.length > 0 && (
+                {!locationsError && allLocations.length > 0 && (
                   <div className="flex flex-wrap gap-2">
-                    {allLocations.map((loc, i) => (
-                      <button key={i} onClick={() => handleSelectLocation(loc.v4LocationName)}
-                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-medium transition-colors">
-                        {loc.title || loc.v4LocationName}
+                    {allLocations.map((location) => (
+                      <button
+                        key={location.v4LocationName}
+                        onClick={() => handleSelectLocation(location.v4LocationName)}
+                        className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-amber-700"
+                      >
+                        {location.title || location.v4LocationName}
                       </button>
                     ))}
                   </div>
                 )}
 
-                {!locationsLoading && !locationsError && locationsLoaded && allLocations.length === 0 && (
-                  <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 text-xs text-orange-800">
-                    <p className="font-semibold mb-1">Wrong Google account connected</p>
-                    <p className="mb-2">
-                      The connected Google account does not manage any Google Business Profile.
-                      You need to reconnect using the Gmail account that is listed as the{' '}
-                      <strong>owner or manager</strong> of your business on Google.
-                    </p>
-                    <button onClick={handleConnect}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg font-medium transition-colors">
-                      ↻ Reconnect with the correct Google account
-                    </button>
+                {!locationsError && locationsLoaded && allLocations.length === 0 && (
+                  <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm text-orange-800">
+                    No business locations were found for this Google account. Reconnect with the owner or manager account for the live listing.
                   </div>
                 )}
 
-                {/* Manual entry — always visible */}
                 <div className="border-t border-amber-200 pt-3">
-                  <p className="text-xs text-amber-700 font-medium mb-1">Enter location ID manually (advanced):</p>
-                  <p className="text-xs text-amber-600 mb-1.5">
-                    Open <a href="https://business.google.com" target="_blank" rel="noreferrer" className="underline font-medium">business.google.com</a>,
-                    click your business, and copy the numbers from the URL:{' '}
-                    <span className="font-mono bg-amber-100 px-1 rounded">…/n/<strong>ACCOUNT_ID</strong>/location/<strong>LOCATION_ID</strong>/…</span>{' '}
-                    then enter <span className="font-mono bg-amber-100 px-1 rounded">accounts/ACCOUNT_ID/locations/LOCATION_ID</span> below.
-                  </p>
+                  <p className="mb-2 text-xs font-medium text-amber-700">Enter location ID manually</p>
                   <div className="flex flex-col gap-2 sm:flex-row">
-                    <input type="text" value={manualLocationId} onChange={e => setManualLocationId(e.target.value)}
+                    <input
+                      type="text"
+                      value={manualLocationId}
+                      onChange={(event) => setManualLocationId(event.target.value)}
                       placeholder="accounts/123456789/locations/987654321"
-                      className="flex-1 border border-amber-300 bg-white rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-amber-400" />
-                    <button onClick={() => { if (manualLocationId.trim()) handleSelectLocation(manualLocationId.trim()); }}
+                      className="flex-1 rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    />
+                    <button
+                      onClick={() => manualLocationId.trim() && handleSelectLocation(manualLocationId.trim())}
                       disabled={!manualLocationId.trim()}
-                      className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-medium disabled:opacity-50 transition-colors">
-                      Use this
+                      className="rounded-lg bg-amber-600 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-amber-700 disabled:opacity-50"
+                    >
+                      Use this location
                     </button>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* Stats row */}
             <div className="mb-6 grid grid-cols-2 gap-4 xl:grid-cols-4">
               {[
-                { label: 'Total Posts', value: postStats.total, sub: `${postStats.live} live`, color: 'text-gray-900' },
-                { label: 'Draft Posts', value: postStats.drafts, sub: 'Awaiting publish', color: 'text-yellow-600' },
-                { label: 'Avg. Rating', value: reviewStats.avg, sub: 'out of 5 stars', color: 'text-gray-900' },
-                { label: 'Pending Replies', value: reviewStats.pending, sub: 'Need response', color: 'text-orange-600' },
-              ].map(({ label, value, sub, color }) => (
-                <div key={label} className="bg-white rounded-xl border border-gray-200 p-4">
-                  <p className="text-xs text-gray-500 uppercase tracking-wide">{label}</p>
-                  <p className={`text-2xl font-bold mt-1 ${color}`}>{value}</p>
-                  <p className="text-xs text-gray-400 mt-1">{sub}</p>
+                { label: 'Total Posts', value: postStats.total, sub: `${postStats.live} live` },
+                { label: 'Draft Posts', value: postStats.drafts, sub: 'Awaiting publish' },
+                { label: 'Avg. Rating', value: reviewStats.avg, sub: 'out of 5 stars' },
+                { label: 'Pending Replies', value: reviewStats.pending, sub: 'Need response' },
+              ].map((card) => (
+                <div key={card.label} className="rounded-xl border border-gray-200 bg-white p-4">
+                  <p className="text-xs uppercase tracking-wide text-gray-500">{card.label}</p>
+                  <p className="mt-1 text-2xl font-bold text-gray-900">{card.value}</p>
+                  <p className="mt-1 text-xs text-gray-400">{card.sub}</p>
                 </div>
               ))}
             </div>
 
-            {/* Tabs */}
             <div className="mb-6 overflow-x-auto rounded-t-xl border-b border-gray-200 bg-white">
-              {(['posts', 'reviews', 'setup'] as Tab[]).map(t => (
-                <button key={t} onClick={() => setTab(t)}
-                  className={`px-6 py-3.5 text-sm font-medium capitalize transition-colors border-b-2 -mb-px ${tab === t ? 'border-indigo-600 text-indigo-600 bg-indigo-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                  {t === 'posts' ? '📝 ' : t === 'reviews' ? '⭐ ' : '⚙️ '}
-                  {t.charAt(0).toUpperCase() + t.slice(1)}
+              {(['posts', 'reviews', 'setup'] as Tab[]).map((value) => (
+                <button
+                  key={value}
+                  onClick={() => setTab(value)}
+                  className={`border-b-2 px-6 py-3.5 text-sm font-medium capitalize transition-colors ${tab === value ? 'border-indigo-600 bg-indigo-50/50 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                >
+                  {value}
                 </button>
               ))}
             </div>
 
-            {/* ── POSTS TAB ── */}
             {tab === 'posts' && (
-              <div>
-                {/* AI automation bar */}
-                <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-100 rounded-xl p-4 mb-5 flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className="space-y-5">
+                <div className="flex flex-col gap-3 rounded-xl border border-indigo-100 bg-gradient-to-r from-indigo-50 to-purple-50 p-4 sm:flex-row sm:items-center">
                   <div className="flex-1">
                     <p className="text-sm font-semibold text-indigo-900">AI Post Generator</p>
-                    <p className="text-xs text-indigo-600 mt-0.5">Enter keywords → AI writes an SEO-optimized GBP post in seconds</p>
+                    <p className="mt-0.5 text-xs text-indigo-600">Upload post creatives, sync existing Google posts, and generate captions that reflect the actual uploaded media.</p>
                   </div>
-                  <button onClick={() => setShowPostModal(true)}
-                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium shadow-sm transition-colors flex-shrink-0">
-                    🤖 Generate AI Post
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={handleSyncPosts}
+                      disabled={postsSyncing || !hasLocation}
+                      className="rounded-xl border border-indigo-200 bg-white px-4 py-2 text-sm font-medium text-indigo-700 transition-colors hover:bg-indigo-50 disabled:opacity-50"
+                    >
+                      {postsSyncing ? 'Syncing...' : 'Sync from Google'}
+                    </button>
+                    <button
+                      onClick={() => setShowPostModal(true)}
+                      className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
+                    >
+                      Create Post
+                    </button>
+                  </div>
                 </div>
 
                 {postsLoading ? (
-                  <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
-                    <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
-                    <p className="text-sm text-gray-400 mt-3">Loading posts…</p>
+                  <div className="rounded-xl border border-gray-200 bg-white p-8 text-center">
+                    <div className="inline-block h-8 w-8 animate-spin rounded-full border-b-2 border-indigo-600" />
+                    <p className="mt-3 text-sm text-gray-400">Loading posts...</p>
                   </div>
                 ) : posts.length === 0 ? (
-                  <div className="bg-white rounded-xl border border-dashed border-gray-300 p-10 text-center">
-                    <span className="text-4xl block mb-3">📝</span>
-                    <p className="font-medium text-gray-700 mb-1">No posts yet</p>
-                    <p className="text-xs text-gray-400 mb-4">Create your first AI-powered GBP post to boost local SEO</p>
-                    <button onClick={() => setShowPostModal(true)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium">
-                      Generate First Post
-                    </button>
+                  <div className="rounded-xl border border-dashed border-gray-300 bg-white p-10 text-center">
+                    <p className="font-medium text-gray-700">No posts in the workspace yet</p>
+                    <p className="mt-1 text-xs text-gray-400">Sync existing Google posts or create your first media-aware GBP post.</p>
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {posts.map(post => (
-                      <div key={post.$id} className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
+                    {posts.map((post) => (
+                      <div key={post.$id} className="flex flex-col gap-4 rounded-xl border border-gray-200 bg-white p-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="min-w-0 flex-1">
+                          <div className="mb-1 flex items-center gap-2">
                             <Badge status={post.status} />
-                            <span className="text-xs text-gray-400">{post.type === 'auto_generated' ? '🤖 AI' : '✍️ Manual'}</span>
+                            <span className="text-xs text-gray-400">{post.type === 'auto_generated' ? 'AI' : 'Manual'}</span>
                           </div>
-                          <p className="text-sm font-medium text-gray-900 mb-1">{post.title}</p>
-                          <p className="text-sm text-gray-500 line-clamp-2">{post.content}</p>
-                          <p className="text-xs text-gray-400 mt-2">
-                            {post.postedAt ? `Published ${new Date(post.postedAt).toLocaleDateString('en-IN')}` : `Draft · ${new Date(post.createdAt).toLocaleDateString('en-IN')}`}
+                          <p className="mb-1 text-sm font-medium text-gray-900">{post.title}</p>
+                          <p className="text-sm text-gray-500">{post.content}</p>
+                          {!!post.media?.length && (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {post.media.slice(0, 4).map((media, index) => (
+                                <MediaTile key={`${post.$id}-${index}`} media={media} alt={post.title} />
+                              ))}
+                            </div>
+                          )}
+                          <p className="mt-2 text-xs text-gray-400">
+                            {post.postedAt
+                              ? `Published ${new Date(post.postedAt).toLocaleDateString('en-IN')}`
+                              : `Draft | ${new Date(post.createdAt).toLocaleDateString('en-IN')}`}
                           </p>
+                          {post.googleSearchUrl && (
+                            <a
+                              href={post.googleSearchUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mt-2 inline-flex text-xs font-medium text-indigo-600 hover:text-indigo-800"
+                            >
+                              View on Google
+                            </a>
+                          )}
                         </div>
-                        <div className="flex items-center gap-2 flex-shrink-0">
+                        <div className="flex flex-shrink-0 items-center gap-2">
                           {post.status === 'draft' && (
-                            <button onClick={() => handlePublishDraft(post)}
-                              className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-medium transition-colors">
+                            <button
+                              onClick={() => handlePublishDraft(post)}
+                              className="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-green-700"
+                            >
                               Publish
                             </button>
                           )}
-                          <button onClick={() => handleDeletePost(post.$id)}
-                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                          <button
+                            onClick={() => handleDeletePost(post.$id)}
+                            className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-500"
+                          >
+                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                             </svg>
                           </button>
                         </div>
@@ -624,48 +873,46 @@ function GbpPageInner() {
               </div>
             )}
 
-            {/* ── REVIEWS TAB ── */}
             {tab === 'reviews' && (
-              <div>
-                <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
                   <h2 className="text-base font-semibold text-gray-900">Customer Reviews</h2>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <button onClick={handleSyncReviews} disabled={syncing || !hasLocation}
-                      className="flex items-center gap-1.5 px-3 py-2 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-xl text-sm font-medium disabled:opacity-50 transition-colors"
-                      title={!hasLocation ? 'Set a location first' : ''}>
-                      {syncing ? <span className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin inline-block" /> : '🔄'} Sync from Google
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={handleSyncReviews}
+                      disabled={reviewsSyncing || !hasLocation}
+                      className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      {reviewsSyncing ? 'Syncing...' : 'Sync from Google'}
                     </button>
-                    <button onClick={handleAutoReplyAll} disabled={autoReplying || reviewStats.pending === 0}
-                      className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium disabled:opacity-50 transition-colors">
-                      {autoReplying ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin inline-block" /> : '🤖'} Auto-Reply All ({reviewStats.pending})
+                    <button
+                      onClick={handleAutoReplyAll}
+                      disabled={autoReplying || reviewStats.pending === 0}
+                      className="rounded-xl bg-indigo-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      {autoReplying ? 'Replying...' : `Auto-Reply All (${reviewStats.pending})`}
                     </button>
                   </div>
                 </div>
 
                 {reviewsLoading ? (
-                  <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
-                    <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
-                    <p className="text-sm text-gray-400 mt-3">Loading reviews…</p>
+                  <div className="rounded-xl border border-gray-200 bg-white p-8 text-center">
+                    <div className="inline-block h-8 w-8 animate-spin rounded-full border-b-2 border-indigo-600" />
+                    <p className="mt-3 text-sm text-gray-400">Loading reviews...</p>
                   </div>
                 ) : reviews.length === 0 ? (
-                  <div className="bg-white rounded-xl border border-dashed border-gray-300 p-10 text-center">
-                    <span className="text-4xl block mb-3">⭐</span>
-                    <p className="font-medium text-gray-700 mb-1">No reviews synced yet</p>
-                    <p className="text-xs text-gray-400 mb-4">{hasLocation ? 'Click "Sync from Google" to import reviews' : 'Set a business location first, then sync'}</p>
-                    {hasLocation && (
-                      <button onClick={handleSyncReviews} disabled={syncing} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium disabled:opacity-60">
-                        Sync Reviews Now
-                      </button>
-                    )}
+                  <div className="rounded-xl border border-dashed border-gray-300 bg-white p-10 text-center">
+                    <p className="font-medium text-gray-700">No reviews synced yet</p>
+                    <p className="mt-1 text-xs text-gray-400">{hasLocation ? 'Sync reviews from Google to bring the live listing into Appwrite.' : 'Set a business location first, then sync reviews.'}</p>
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {reviews.map((review, idx) => (
-                      <div key={review.$id || review.reviewId || idx} className="bg-white rounded-xl border border-gray-200 p-4">
+                    {reviews.map((review, index) => (
+                      <div key={review.$id || review.googleReviewId || review.reviewId || index} className="rounded-xl border border-gray-200 bg-white p-4">
                         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-3 mb-2">
-                              <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
+                          <div className="min-w-0 flex-1">
+                            <div className="mb-2 flex items-center gap-3">
+                              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-indigo-400 to-purple-500 text-sm font-bold text-white">
                                 {review.reviewer?.[0]?.toUpperCase() || '?'}
                               </div>
                               <div>
@@ -676,19 +923,21 @@ function GbpPageInner() {
                                 </div>
                               </div>
                             </div>
-                            <p className="text-sm text-gray-600 ml-12">{review.reviewText || 'No text'}</p>
+                            <p className="ml-12 text-sm text-gray-600">{review.reviewText || 'No review text'}</p>
                             {review.reply && (
-                              <div className="mt-3 rounded-lg border border-indigo-100 bg-indigo-50 p-3 sm:ml-12">
-                                <p className="text-xs font-semibold text-indigo-600 mb-1">Your reply:</p>
+                              <div className="ml-12 mt-3 rounded-lg border border-indigo-100 bg-indigo-50 p-3">
+                                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-indigo-600">Your reply</p>
                                 <p className="text-sm text-gray-700">{review.reply}</p>
                               </div>
                             )}
                           </div>
-                          <div className="flex flex-col items-end gap-2 flex-shrink-0">
+                          <div className="flex flex-col items-end gap-2">
                             <Badge status={review.replyStatus || 'pending'} />
                             {review.replyStatus === 'pending' && (
-                              <button onClick={() => setReplyModal({ review, text: '', loading: false })}
-                                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium">
+                              <button
+                                onClick={() => setReplyModal({ review, text: '', loading: false })}
+                                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-indigo-700"
+                              >
                                 Reply
                               </button>
                             )}
@@ -701,51 +950,43 @@ function GbpPageInner() {
               </div>
             )}
 
-            {/* ── SETUP TAB ── */}
             {tab === 'setup' && (
               <div className="space-y-4">
-                <h2 className="text-base font-semibold text-gray-900">Connection Settings</h2>
-
-                {/* Location selector */}
-                <div className="bg-white rounded-xl border border-gray-200 p-5">
-                  <div className="mb-1 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <h3 className="text-sm font-semibold text-gray-700">Google Business Location</h3>
-                    <button onClick={() => loadGoogleLocations(teamId, true)} disabled={locationsLoading}
-                      className="text-xs text-indigo-600 hover:text-indigo-800 underline disabled:opacity-50">
-                      {locationsLoading ? 'Loading…' : '↻ Refresh from Google'}
+                <div className="rounded-xl border border-gray-200 bg-white p-5">
+                  <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-700">Google Business Location</h3>
+                      <p className="text-xs text-gray-400">Choose the location used for live post publishing and review sync.</p>
+                    </div>
+                    <button
+                      onClick={() => loadGoogleLocations(teamId, true)}
+                      disabled={locationsLoading}
+                      className="text-xs font-medium text-indigo-600 underline disabled:opacity-50"
+                    >
+                      {locationsLoading ? 'Loading...' : 'Refresh from Google'}
                     </button>
                   </div>
-                  <p className="text-xs text-gray-400 mb-3">Select which location to use for publishing posts and syncing reviews.</p>
-                  {locationsLoading ? (
-                    <p className="text-sm text-gray-400">Loading locations from Google…</p>
-                  ) : locationsError && locationsError !== 'quota_exceeded' ? (
-                    <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">
-                      <p className="font-medium mb-1">Error: {locationsError === 'quota_exceeded' ? 'Quota exceeded — wait 1–2 min and retry' : locationsError}</p>
-                      <button onClick={() => { setLocationsError(null); setLocationsLoaded(false); }} className="text-xs underline mr-3">Retry</button>
-                      <button onClick={handleConnect} className="text-xs underline">Reconnect with Google</button>
-                    </div>
-                  ) : allLocations.length === 0 && locationsLoaded ? (
-                    <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
-                      No locations found. Make sure your Google account is linked to a{' '}
-                      <a href="https://business.google.com" target="_blank" rel="noreferrer" className="underline">Google Business Profile</a>.
-                    </div>
-                  ) : allLocations.length === 0 ? (
-                    <p className="text-xs text-gray-400">Click "Load from Google" to fetch your business locations.</p>
+
+                  {allLocations.length === 0 ? (
+                    <p className="text-sm text-gray-400">No locations cached yet. Refresh from Google or reconnect the correct account.</p>
                   ) : (
                     <div className="space-y-2">
-                      {allLocations.map((loc, i) => (
-                        <div key={i} className={`flex flex-col gap-3 rounded-lg border p-3 transition-colors sm:flex-row sm:items-center sm:justify-between ${savedLocationId === loc.v4LocationName ? 'border-indigo-400 bg-indigo-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                      {allLocations.map((location) => (
+                        <div
+                          key={location.v4LocationName}
+                          className={`flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between ${savedLocationId === location.v4LocationName ? 'border-indigo-400 bg-indigo-50' : 'border-gray-200'}`}
+                        >
                           <div>
-                            <p className="text-sm font-medium text-gray-900">{loc.title || 'Unnamed Location'}</p>
-                            <p className="text-xs text-gray-400 font-mono mt-0.5">{loc.v4LocationName}</p>
+                            <p className="text-sm font-medium text-gray-900">{location.title || 'Unnamed Location'}</p>
+                            <p className="mt-0.5 text-xs font-mono text-gray-400">{location.v4LocationName}</p>
                           </div>
-                          {savedLocationId === loc.v4LocationName ? (
-                            <span className="flex items-center gap-1 text-xs bg-green-50 text-green-700 border border-green-200 px-2 py-0.5 rounded-full">
-                              <span className="w-1.5 h-1.5 rounded-full bg-green-500" /> Active
-                            </span>
+                          {savedLocationId === location.v4LocationName ? (
+                            <span className="rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-xs text-green-700">Active</span>
                           ) : (
-                            <button onClick={() => handleSelectLocation(loc.v4LocationName)}
-                              className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium">
+                            <button
+                              onClick={() => handleSelectLocation(location.v4LocationName)}
+                              className="rounded-lg bg-indigo-600 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-indigo-700"
+                            >
                               Select
                             </button>
                           )}
@@ -755,20 +996,15 @@ function GbpPageInner() {
                   )}
                 </div>
 
-                {/* Reconnect */}
-                <div className="bg-white rounded-xl border border-gray-200 p-5">
-                  <h3 className="text-sm font-semibold text-gray-700 mb-1">Reconnect Account</h3>
-                  <p className="text-xs text-gray-400 mb-3">Reconnect if your token expired or you want to switch accounts.</p>
-                  <button onClick={handleConnect} className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-xl text-sm font-medium transition-colors">
-                    <svg className="w-4 h-4" viewBox="0 0 24 24"><path d="M21.35 11.1H12v2.8h5.35C16.85 16.35 14.65 18 12 18c-3.3 0-6-2.7-6-6s2.7-6 6-6c1.55 0 2.95.6 4.05 1.55L18 5.6C16.35 4.05 14.3 3 12 3 7.03 3 3 7.03 3 12s4.03 9 9 9c5.14 0 8.75-3.6 8.75-8.9 0-.6-.06-1.15-.15-1.7l.75-.3z" fill="#4285F4"/></svg>
+                <div className="rounded-xl border border-gray-200 bg-white p-5">
+                  <h3 className="text-sm font-semibold text-gray-700">Reconnect Account</h3>
+                  <p className="mt-1 text-xs text-gray-400">Reconnect if the token expires or you need to switch Google accounts.</p>
+                  <button
+                    onClick={handleConnect}
+                    className="mt-4 rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+                  >
                     Reconnect with Google
                   </button>
-                </div>
-
-                <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
-                  <p className="text-xs text-blue-600">
-                    TravAI uses the <code className="bg-blue-100 px-1 rounded">business.manage</code> scope to read locations, publish posts, and reply to reviews on your behalf. We never modify billing or account settings.
-                  </p>
                 </div>
               </div>
             )}
@@ -776,105 +1012,124 @@ function GbpPageInner() {
         )}
       </div>
 
-      {/* ── CREATE POST MODAL ── */}
       {showPostModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-3 sm:p-6">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[95vh] flex flex-col">
-
-            {/* Header */}
-            <div className="flex flex-wrap items-center gap-3 px-5 py-4 border-b border-gray-200">
-              <button onClick={() => { setShowPostModal(false); setAiPostPreview(''); }}
-                className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/>
-                </svg>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 sm:p-6">
+          <div className="flex max-h-[95vh] w-full max-w-3xl flex-col rounded-2xl bg-white shadow-2xl">
+            <div className="flex flex-wrap items-center gap-3 border-b border-gray-200 px-5 py-4">
+              <button
+                onClick={() => {
+                  setShowPostModal(false);
+                  resetPostComposer();
+                }}
+                className="rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
+              >
+                Back
               </button>
-              <h2 className="text-base font-semibold text-gray-900 flex-1">Add post</h2>
-              <button onClick={handleAiGeneratePreview} disabled={aiGenerating}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-60">
-                {aiGenerating
-                  ? <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin inline-block" />
-                  : '✨'}
-                {aiGenerating ? 'Generating…' : 'Generate with AI'}
+              <h2 className="flex-1 text-base font-semibold text-gray-900">Create Google post</h2>
+              <button
+                onClick={handleAiGeneratePreview}
+                disabled={aiGenerating}
+                className="rounded-lg bg-purple-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-purple-700 disabled:opacity-60"
+              >
+                {aiGenerating ? 'Generating...' : 'Generate with AI'}
               </button>
-              <button onClick={() => { setShowPostModal(false); setAiPostPreview(''); }}
-                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors ml-1">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
-                </svg>
+              <button
+                onClick={() => {
+                  setShowPostModal(false);
+                  resetPostComposer();
+                }}
+                className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+              >
+                Close
               </button>
             </div>
 
-            {/* Body — scrollable */}
-            <div className="flex-1 overflow-y-auto">
-
-              {/* Top split: description + image */}
-              <div className="flex flex-col sm:flex-row gap-0 sm:divide-x sm:divide-gray-200">
-
-                {/* Left: Description */}
-                <div className="flex-1 p-5 flex flex-col">
+            <div className="flex-1 space-y-4 overflow-y-auto p-5">
+              <div className="grid gap-4 lg:grid-cols-[1.35fr_0.65fr]">
+                <div className="space-y-3">
+                  <input
+                    type="text"
+                    value={postForm.title}
+                    onChange={(event) => setPostForm((current) => ({ ...current, title: event.target.value }))}
+                    placeholder="Post headline or internal label"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
                   <textarea
                     value={postForm.content}
-                    onChange={e => setPostForm(p => ({ ...p, content: e.target.value, autoGenerate: false }))}
+                    onChange={(event) => setPostForm((current) => ({ ...current, content: event.target.value, autoGenerate: false }))}
+                    rows={10}
                     maxLength={1500}
-                    rows={8}
-                    placeholder="Description"
-                    className={`flex-1 w-full border-0 outline-none text-sm text-gray-800 placeholder-gray-400 resize-none leading-relaxed ${aiPostPreview ? 'bg-purple-50/30' : ''}`}
+                    placeholder="Write the post copy or generate it with AI"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-3 text-sm leading-relaxed text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
-                  <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-100">
-                    <span className="text-xs text-gray-400">{aiPostPreview ? '✨ AI generated — edit freely' : ''}</span>
-                    <span className="text-xs text-gray-400">{postForm.content.length}/1,500</span>
+                  <div className="flex items-center justify-between text-xs text-gray-400">
+                    <span>{postForm.content.length}/1500</span>
+                    <span>{selectedMedia.length ? `${selectedMedia.length} media item(s) attached` : 'No media attached yet'}</span>
                   </div>
                 </div>
 
-                {/* Right: Image upload */}
-                <div className="sm:w-56 p-5 flex flex-col items-center justify-center bg-gray-50 min-h-[160px] sm:min-h-0">
-                  <div className="border-2 border-dashed border-gray-300 rounded-xl p-6 flex flex-col items-center text-center w-full h-full justify-center gap-3">
-                    <svg className="w-8 h-8 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
-                    </svg>
-                    <p className="text-xs text-gray-500 leading-tight">Drag images and videos here</p>
-                    <span className="text-xs text-gray-400">or</span>
-                    <label className="cursor-pointer text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1">
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.069A1 1 0 0121 8.82V15.18a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/>
-                      </svg>
-                      Select images and videos
-                      <input type="file" accept="image/*,video/*" multiple className="hidden" />
-                    </label>
-                  </div>
+                <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-4">
+                  <p className="text-sm font-medium text-gray-700">Media</p>
+                  <p className="mt-1 text-xs text-gray-400">Upload images or videos first so AI and Google posts use the same creative context.</p>
+                  <label className="mt-4 block cursor-pointer rounded-lg border border-gray-300 bg-white px-3 py-2 text-center text-xs font-medium text-indigo-600 transition-colors hover:bg-indigo-50">
+                    {mediaUploading ? 'Uploading...' : 'Select images and videos'}
+                    <input
+                      type="file"
+                      accept="image/*,video/*"
+                      multiple
+                      className="hidden"
+                      onChange={(event) => {
+                        if (event.target.files?.length) {
+                          handleUploadMedia(event.target.files);
+                          event.target.value = '';
+                        }
+                      }}
+                    />
+                  </label>
+                  {selectedMedia.length > 0 && (
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {selectedMedia.map((media, index) => (
+                        <div key={`${media.fileId || media.publicUrl}-${index}`} className="relative">
+                          <MediaTile media={media} alt={media.fileName || 'Media'} />
+                          <button
+                            onClick={() => setSelectedMedia((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                            className="absolute -right-2 -top-2 rounded-full bg-slate-950 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+                          >
+                            x
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
 
-              {/* Schedule this post */}
-              <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between">
-                <span className="text-sm text-gray-700">Schedule this post</span>
-                <div onClick={() => setPostForm(p => ({ ...p, publishNow: !p.publishNow }))}
-                  className={`relative w-11 h-6 rounded-full cursor-pointer transition-colors ${postForm.publishNow ? 'bg-indigo-600' : 'bg-gray-300'}`}>
-                  <span className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${postForm.publishNow ? 'translate-x-5' : 'translate-x-1'}`} />
-                </div>
-              </div>
-
-              {postForm.publishNow && !hasLocation && (
-                <div className="mx-5 mb-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                  No location set — post will be saved as draft. Go to Setup tab to select a location.
-                </div>
-              )}
-
-              {/* Divider */}
-              <div className="border-t border-gray-200" />
-
-              {/* Add more details */}
-              <div className="px-5 py-4 space-y-4">
-                <p className="text-sm font-medium text-gray-700">Add more details</p>
-
-                {/* CTA button selector */}
+              <div className="grid gap-4 md:grid-cols-2">
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1.5">Add a button (optional)</label>
+                  <label className="mb-1.5 block text-xs text-gray-500">SEO keywords for AI generation</label>
+                  <input
+                    type="text"
+                    value={postForm.keywords}
+                    onChange={(event) => setPostForm((current) => ({ ...current, keywords: event.target.value }))}
+                    placeholder="e.g. Dubai holiday, family tours, premium travel"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-xs text-gray-500">Call to action</label>
                   <select
                     value={postForm.callToAction}
-                    onChange={e => setPostForm(p => ({ ...p, callToAction: e.target.value, callToActionUrl: '', callToActionPhone: '' }))}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
+                    onChange={(event) =>
+                      setPostForm((current) => ({
+                        ...current,
+                        callToAction: event.target.value,
+                        callToActionUrl: '',
+                        callToActionPhone: '',
+                      }))
+                    }
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
                     <option value="NONE">None</option>
                     <option value="BOOK">Book</option>
                     <option value="ORDER">Order online</option>
@@ -883,87 +1138,106 @@ function GbpPageInner() {
                     <option value="SIGN_UP">Sign up</option>
                     <option value="CALL">Call now</option>
                   </select>
-
-                  {postForm.callToAction !== 'NONE' && postForm.callToAction !== 'CALL' && (
-                    <input
-                      type="url"
-                      value={postForm.callToActionUrl}
-                      onChange={e => setPostForm(p => ({ ...p, callToActionUrl: e.target.value }))}
-                      placeholder="https://your-website.com"
-                      className="mt-2 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                  )}
-                  {postForm.callToAction === 'CALL' && (
-                    <input
-                      type="tel"
-                      value={postForm.callToActionPhone}
-                      onChange={e => setPostForm(p => ({ ...p, callToActionPhone: e.target.value }))}
-                      placeholder="+91 98765 43210"
-                      className="mt-2 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                  )}
                 </div>
+              </div>
 
-                {/* SEO Keywords (AI hint) */}
+              {postForm.callToAction !== 'NONE' && postForm.callToAction !== 'CALL' && (
+                <input
+                  type="url"
+                  value={postForm.callToActionUrl}
+                  onChange={(event) => setPostForm((current) => ({ ...current, callToActionUrl: event.target.value }))}
+                  placeholder="https://your-website.com"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              )}
+
+              {postForm.callToAction === 'CALL' && (
+                <input
+                  type="tel"
+                  value={postForm.callToActionPhone}
+                  onChange={(event) => setPostForm((current) => ({ ...current, callToActionPhone: event.target.value }))}
+                  placeholder="+91 98765 43210"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              )}
+
+              <div className="flex items-center justify-between rounded-xl border border-gray-200 px-4 py-3">
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1.5">SEO keywords for AI generation (optional)</label>
-                  <input type="text" value={postForm.keywords}
-                    onChange={e => setPostForm(p => ({ ...p, keywords: e.target.value }))}
-                    placeholder="e.g. Dubai holiday, travel packages, family tour India"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                  <p className="text-sm font-medium text-gray-700">Publish immediately</p>
+                  <p className="text-xs text-gray-400">If no location is set, the post will be saved as a draft.</p>
                 </div>
+                <button
+                  onClick={() => setPostForm((current) => ({ ...current, publishNow: !current.publishNow }))}
+                  className={`relative h-6 w-11 rounded-full transition-colors ${postForm.publishNow ? 'bg-indigo-600' : 'bg-gray-300'}`}
+                >
+                  <span className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow transition-transform ${postForm.publishNow ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
               </div>
             </div>
 
-            {/* Footer */}
-            <div className="flex flex-col-reverse gap-3 rounded-b-2xl bg-white px-5 py-4 border-t border-gray-200 sm:flex-row sm:items-center sm:justify-between">
-              <button onClick={() => { setShowPostModal(false); setAiPostPreview(''); }}
-                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition-colors">
+            <div className="flex flex-col-reverse gap-3 border-t border-gray-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <button
+                onClick={() => {
+                  setShowPostModal(false);
+                  resetPostComposer();
+                }}
+                className="rounded-lg px-4 py-2 text-sm text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-800"
+              >
                 Cancel
               </button>
-              <button onClick={handleCreatePost}
+              <button
+                onClick={handleCreatePost}
                 disabled={postSubmitting || !postForm.content.trim()}
-                className="flex items-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-semibold disabled:opacity-60 transition-colors shadow-sm">
-                {postSubmitting && <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin inline-block" />}
-                {postForm.publishNow && hasLocation ? 'Post' : 'Save Draft'}
+                className="rounded-xl bg-blue-600 px-6 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:opacity-60"
+              >
+                {postSubmitting ? 'Saving...' : postForm.publishNow && hasLocation ? 'Publish Post' : 'Save Draft'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ── REPLY MODAL ── */}
       {replyModal && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
               <h2 className="text-base font-semibold text-gray-900">Reply to Review</h2>
-              <button onClick={() => setReplyModal(null)} className="p-1 text-gray-400 hover:text-gray-600 rounded">✕</button>
+              <button onClick={() => setReplyModal(null)} className="rounded p-1 text-gray-400 hover:text-gray-600">
+                Close
+              </button>
             </div>
-            <div className="px-6 py-5 space-y-4">
-              <div className="bg-gray-50 rounded-xl p-4">
-                <div className="flex items-center gap-2 mb-2">
+            <div className="space-y-4 px-6 py-5">
+              <div className="rounded-xl bg-gray-50 p-4">
+                <div className="mb-2 flex items-center gap-2">
                   <span className="text-sm font-medium text-gray-800">{replyModal.review.reviewer}</span>
                   <StarRating rating={replyModal.review.rating} />
                 </div>
                 <p className="text-sm text-gray-600">{replyModal.review.reviewText}</p>
               </div>
-              <button onClick={handleGenerateAiReply} disabled={replyModal.loading}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-medium disabled:opacity-60 transition-colors">
-                {replyModal.loading ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin inline-block" /> : '✨'} Generate AI Reply
+              <button
+                onClick={handleGenerateAiReply}
+                disabled={replyModal.loading}
+                className="w-full rounded-xl bg-purple-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-purple-700 disabled:opacity-60"
+              >
+                {replyModal.loading ? 'Generating...' : 'Generate AI Reply'}
               </button>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Reply (AI generated or write your own)</label>
-                <textarea value={replyModal.text} onChange={e => setReplyModal(p => p && ({ ...p, text: e.target.value }))}
-                  rows={4} placeholder="Click Generate AI Reply or write your own…"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none" />
-              </div>
+              <textarea
+                value={replyModal.text}
+                onChange={(event) => setReplyModal((current) => current && ({ ...current, text: event.target.value }))}
+                rows={5}
+                placeholder="Write or generate the reply"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
             </div>
-            <div className="flex flex-col-reverse gap-3 px-6 py-4 border-t border-gray-200 sm:flex-row sm:justify-end">
-              <button onClick={() => setReplyModal(null)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
-              <button onClick={handleSubmitReply} disabled={!replyModal.text.trim() || replyModal.loading}
-                className="flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium disabled:opacity-60 transition-colors">
-                {replyModal.loading && <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin inline-block" />}
+            <div className="flex flex-col-reverse gap-3 border-t border-gray-200 px-6 py-4 sm:flex-row sm:justify-end">
+              <button onClick={() => setReplyModal(null)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmitReply}
+                disabled={!replyModal.text.trim() || replyModal.loading}
+                className="rounded-xl bg-indigo-600 px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-60"
+              >
                 Publish Reply
               </button>
             </div>
@@ -976,11 +1250,13 @@ function GbpPageInner() {
 
 export default function GbpPage() {
   return (
-    <Suspense fallback={
-      <div className="flex min-h-[60vh] items-center justify-center px-4">
-        <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600" />
-      </div>
-    }>
+    <Suspense
+      fallback={
+        <div className="flex min-h-[60vh] items-center justify-center px-4">
+          <div className="inline-block h-10 w-10 animate-spin rounded-full border-b-2 border-indigo-600" />
+        </div>
+      }
+    >
       <GbpPageInner />
     </Suspense>
   );
