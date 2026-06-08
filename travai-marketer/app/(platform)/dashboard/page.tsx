@@ -56,7 +56,7 @@ export default function DashboardPage() {
         setStats(await response.json());
       }
     } catch {
-      // keep existing dashboard state
+      // keep existing dashboard state if refresh fails
     }
   }, []);
 
@@ -89,64 +89,64 @@ export default function DashboardPage() {
   const statCards = [
     {
       label: 'Total Leads',
-      value: stats?.totalLeads ?? '—',
+      value: stats?.totalLeads ?? '-',
       sub: 'All live CRM leads',
       href: '/dashboard/leads',
       panel: 'from-sky-500 to-cyan-500',
     },
     {
       label: 'Active Chats',
-      value: stats?.activeConversations ?? '—',
+      value: stats?.activeConversations ?? '-',
       sub: 'Customer messages in the last 24h',
       href: '/dashboard/whatsapp',
       panel: 'from-emerald-500 to-teal-500',
     },
     {
       label: 'Campaigns Sent',
-      value: stats?.campaignsSent ?? '—',
+      value: stats?.campaignsSent ?? '-',
       sub: 'Broadcasts already delivered',
       href: '/dashboard/campaigns',
       panel: 'from-amber-500 to-orange-500',
     },
     {
       label: 'Reviews Replied',
-      value: stats?.reviewsReplied ?? '—',
+      value: stats?.reviewsReplied ?? '-',
       sub: 'Google reviews with AI reply',
       href: '/dashboard/gbp',
       panel: 'from-violet-500 to-fuchsia-500',
     },
   ];
 
-  const totalPipeline = stats
-    ? CRM_STATUS_ORDER.reduce((sum, status) => sum + (stats.leadsByStatus?.[status] || 0), 0)
-    : 0;
-
-  const featureCards = [
+  const workspaceLinks = [
+    {
+      title: 'Google Business',
+      desc: 'Create posts, sync reviews, and publish faster.',
+      href: '/dashboard/gbp',
+      accent: 'from-emerald-400/20 to-cyan-400/10',
+    },
     {
       title: 'WhatsApp CRM',
-      desc: 'See full chat history, CRM stages, callback handling, and contact identities in one inbox.',
+      desc: 'Reply to live chats and move leads through stages.',
       href: '/dashboard/whatsapp',
-      cta: 'Open WhatsApp desk',
+      accent: 'from-sky-400/20 to-indigo-400/10',
     },
     {
       title: 'Lead Pipeline',
-      desc: 'Track AI-qualified leads from New Lead to Converted, then hand off invoices or staff action.',
+      desc: 'Check where follow-up is needed right now.',
       href: '/dashboard/leads',
-      cta: 'Open lead pipeline',
+      accent: 'from-amber-400/20 to-orange-400/10',
     },
     {
-      title: 'Campaign Engine',
-      desc: 'Broadcast follow-ups and offers with a repaired campaign send flow and clearer delivery states.',
+      title: 'Campaigns',
+      desc: 'Launch broadcasts and review delivery results.',
       href: '/dashboard/campaigns',
-      cta: 'Manage campaigns',
-    },
-    {
-      title: 'Google Business',
-      desc: 'Sync live reviews and posts, generate media-aware AI captions, and publish directly to your business profile.',
-      href: '/dashboard/gbp',
-      cta: 'Open GBP workspace',
+      accent: 'from-fuchsia-400/20 to-violet-400/10',
     },
   ];
+
+  const totalPipeline = stats
+    ? CRM_STATUS_ORDER.reduce((sum, status) => sum + (stats.leadsByStatus?.[status] || 0), 0)
+    : 0;
 
   if (loading) {
     return (
@@ -161,27 +161,44 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-full px-4 py-4 sm:px-6 sm:py-6 xl:px-8">
-      <div className="rounded-[34px] border border-slate-200 bg-[linear-gradient(135deg,#07111f_0%,#0f172a_42%,#0f766e_100%)] px-5 py-6 text-white shadow-2xl shadow-slate-200/70 sm:px-6 sm:py-7 lg:px-8">
-        <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-emerald-200">
-              Traventions Command Center
-            </p>
-            <h1 className="mt-3 text-3xl font-semibold sm:text-4xl xl:text-5xl">
-              {greeting}
-              {user?.name ? `, ${user.name.split(' ')[0]}` : ''}
-            </h1>
-            <p className="mt-3 max-w-3xl text-sm text-slate-200">
-              The CRM now treats WhatsApp as the front desk for sales: contact-aware inbox,
-              callback capture with email confirmation, and AI lead stages that stay visible to the team.
-            </p>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(20rem,0.85fr)]">
+        <div className="rounded-[34px] border border-slate-200 bg-[linear-gradient(135deg,#07111f_0%,#0f172a_42%,#0f766e_100%)] px-5 py-6 text-white shadow-2xl shadow-slate-200/70 sm:px-6 sm:py-7 lg:px-8">
+          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-emerald-200">Traventions Command Center</p>
+          <h1 className="mt-3 text-3xl font-semibold sm:text-4xl xl:text-5xl">
+            {greeting}
+            {user?.name ? `, ${user.name.split(' ')[0]}` : ''}
+          </h1>
+          <p className="mt-3 max-w-3xl text-sm text-slate-200 sm:text-base">
+            Run GBP, WhatsApp, campaigns, and lead follow-up from one screen without jumping through blank panels or buried actions.
+          </p>
+
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+            <button
+              onClick={() => router.push('/dashboard/gbp')}
+              className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-50"
+            >
+              Open GBP workspace
+            </button>
+            <button
+              onClick={loadStats}
+              className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/20"
+            >
+              Refresh dashboard
+            </button>
           </div>
-          <button
-            onClick={loadStats}
-            className="w-full rounded-2xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/20 sm:w-auto xl:self-start"
-          >
-            Refresh dashboard
-          </button>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
+          <div className="rounded-[28px] border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/60">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Live sync</p>
+            <p className="mt-3 text-3xl font-semibold text-slate-950">{stats?.activeConversations ?? 0}</p>
+            <p className="mt-1 text-sm text-slate-500">Active WhatsApp chats that may need a fast reply.</p>
+          </div>
+          <div className="rounded-[28px] border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/60">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">GBP focus</p>
+            <p className="mt-3 text-3xl font-semibold text-slate-950">{stats?.reviewsReplied ?? 0}</p>
+            <p className="mt-1 text-sm text-slate-500">Reviews already answered with AI support and synced to Google.</p>
+          </div>
         </div>
       </div>
 
@@ -201,14 +218,38 @@ export default function DashboardPage() {
         ))}
       </div>
 
+      <div className="mt-6 rounded-[30px] border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/60 sm:p-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-slate-500">Jump back in</p>
+            <h2 className="mt-2 text-2xl font-semibold text-slate-950">The most-used workspaces, without extra scrolling</h2>
+          </div>
+          <p className="text-sm text-slate-400">GBP is now promoted in the sidebar as well.</p>
+        </div>
+
+        <div className="mt-5 grid gap-3 lg:grid-cols-2 2xl:grid-cols-4">
+          {workspaceLinks.map((item) => (
+            <button
+              key={item.title}
+              onClick={() => router.push(item.href)}
+              className={`rounded-[24px] border border-slate-200 bg-gradient-to-br ${item.accent} p-4 text-left transition hover:-translate-y-0.5 hover:border-slate-300`}
+            >
+              <p className="text-lg font-semibold text-slate-950">{item.title}</p>
+              <p className="mt-2 text-sm text-slate-600">{item.desc}</p>
+              <span className="mt-4 inline-flex rounded-full bg-slate-950 px-3 py-1 text-xs font-semibold text-white">
+                Open workspace
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
       {stats && totalPipeline > 0 && (
         <div className="mt-6 rounded-[30px] border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/60 sm:p-6">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="text-sm font-semibold uppercase tracking-[0.24em] text-slate-500">Lead pipeline</p>
-              <h2 className="mt-2 text-2xl font-semibold text-slate-950">
-                Frontline lead CRM powered by the WhatsApp bot
-              </h2>
+              <h2 className="mt-2 text-2xl font-semibold text-slate-950">Frontline lead CRM powered by the WhatsApp bot</h2>
             </div>
             <p className="text-sm text-slate-400">{totalPipeline} total tracked leads</p>
           </div>
@@ -242,9 +283,7 @@ export default function DashboardPage() {
                     {CRM_STATUS_META[status].shortLabel}
                   </span>
                 </div>
-                <p className="mt-3 text-3xl font-semibold text-slate-950">
-                  {stats.leadsByStatus?.[status] || 0}
-                </p>
+                <p className="mt-3 text-3xl font-semibold text-slate-950">{stats.leadsByStatus?.[status] || 0}</p>
                 <p className="mt-1 text-sm text-slate-500">{CRM_STATUS_META[status].label}</p>
               </button>
             ))}
@@ -252,90 +291,68 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div className="mt-6 grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
-        <div className="rounded-[30px] border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/60 sm:p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-slate-500">Recent activity</p>
-              <h2 className="mt-2 text-2xl font-semibold text-slate-950">WhatsApp and lead updates</h2>
-            </div>
-            <button
-              onClick={() => router.push('/dashboard/whatsapp')}
-              className="hidden rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 sm:inline-flex"
-            >
-              Open inbox
-            </button>
+      <div className="mt-6 rounded-[30px] border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/60 sm:p-6">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-slate-500">Recent activity</p>
+            <h2 className="mt-2 text-2xl font-semibold text-slate-950">WhatsApp and lead updates</h2>
           </div>
-
-          <div className="mt-5 grid gap-4 lg:grid-cols-2">
-            <div className="rounded-[26px] border border-slate-100 bg-slate-50 p-4">
-              <h3 className="text-sm font-semibold text-slate-900">Recent conversations</h3>
-              <div className="mt-4 space-y-3">
-                {stats?.recentConversations?.length ? (
-                  stats.recentConversations.map((conversation) => (
-                    <div key={conversation.$id} className="rounded-2xl border border-white bg-white px-4 py-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="truncate font-semibold text-slate-900">
-                            {conversation.name || conversation.phone}
-                          </p>
-                          <p className="truncate text-xs text-slate-400">{conversation.phone}</p>
-                        </div>
-                        <span className="text-xs text-slate-400">{ago(conversation.$createdAt || conversation.createdAt)}</span>
-                      </div>
-                      <p className="mt-2 truncate text-sm text-slate-500">{conversation.message || '—'}</p>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-sm text-slate-400">No conversations yet.</p>
-                )}
-              </div>
-            </div>
-
-            <div className="rounded-[26px] border border-slate-100 bg-slate-50 p-4">
-              <h3 className="text-sm font-semibold text-slate-900">Recent leads</h3>
-              <div className="mt-4 space-y-3">
-                {stats?.recentLeads?.length ? (
-                  stats.recentLeads.map((lead) => (
-                    <div key={lead.$id} className="rounded-2xl border border-white bg-white px-4 py-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="truncate font-semibold text-slate-900">{lead.name || lead.phone}</p>
-                          <p className="truncate text-xs text-slate-400">{lead.phone}</p>
-                        </div>
-                        {lead.status && (
-                          <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${CRM_STATUS_META[lead.status].badge}`}>
-                            {CRM_STATUS_META[lead.status].label}
-                          </span>
-                        )}
-                      </div>
-                      <p className="mt-2 text-xs text-slate-400">{ago(lead.$createdAt || lead.createdAt)}</p>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-sm text-slate-400">No leads yet.</p>
-                )}
-              </div>
-            </div>
-          </div>
+          <button
+            onClick={() => router.push('/dashboard/whatsapp')}
+            className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 lg:self-start"
+          >
+            Open inbox
+          </button>
         </div>
 
-        <div className="space-y-4">
-          {featureCards.map((card) => (
-            <div
-              key={card.title}
-              className="h-full rounded-[30px] border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/60 sm:p-6"
-            >
-              <h3 className="text-2xl font-semibold text-slate-950">{card.title}</h3>
-              <p className="mt-2 text-sm text-slate-500">{card.desc}</p>
-              <button
-                onClick={() => router.push(card.href)}
-                className="mt-5 rounded-2xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
-              >
-                {card.cta}
-              </button>
+        <div className="mt-5 grid gap-4 xl:grid-cols-2">
+          <div className="rounded-[26px] border border-slate-100 bg-slate-50 p-4">
+            <h3 className="text-sm font-semibold text-slate-900">Recent conversations</h3>
+            <div className="mt-4 space-y-3">
+              {stats?.recentConversations?.length ? (
+                stats.recentConversations.map((conversation) => (
+                  <div key={conversation.$id} className="rounded-2xl border border-white bg-white px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-slate-900">{conversation.name || conversation.phone}</p>
+                        <p className="truncate text-xs text-slate-400">{conversation.phone}</p>
+                      </div>
+                      <span className="text-xs text-slate-400">{ago(conversation.$createdAt || conversation.createdAt)}</span>
+                    </div>
+                    <p className="mt-2 truncate text-sm text-slate-500">{conversation.message || '-'}</p>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-slate-400">No conversations yet.</p>
+              )}
             </div>
-          ))}
+          </div>
+
+          <div className="rounded-[26px] border border-slate-100 bg-slate-50 p-4">
+            <h3 className="text-sm font-semibold text-slate-900">Recent leads</h3>
+            <div className="mt-4 space-y-3">
+              {stats?.recentLeads?.length ? (
+                stats.recentLeads.map((lead) => (
+                  <div key={lead.$id} className="rounded-2xl border border-white bg-white px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-slate-900">{lead.name || lead.phone}</p>
+                        <p className="truncate text-xs text-slate-400">{lead.phone}</p>
+                      </div>
+                      {lead.status && (
+                        <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${CRM_STATUS_META[lead.status].badge}`}>
+                          {CRM_STATUS_META[lead.status].label}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-2 text-xs text-slate-400">{ago(lead.$createdAt || lead.createdAt)}</p>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-slate-400">No leads yet.</p>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </div>

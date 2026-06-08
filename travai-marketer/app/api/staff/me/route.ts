@@ -27,7 +27,17 @@ export async function GET(request: NextRequest) {
 
     if (result.documents.length > 0) {
       const doc = result.documents[0] as { role?: string; name?: string; email?: string; userId?: string };
-      return NextResponse.json({ role: doc.role || 'staff', name: doc.name, email: doc.email, found: true });
+      const resolvedEmail = doc.email || email;
+      const resolvedRole = isInternalBootstrapUser(resolvedEmail) && (doc.role || 'staff') === 'staff'
+        ? 'admin'
+        : (doc.role || 'staff');
+      return NextResponse.json({
+        role: resolvedRole,
+        name: doc.name,
+        email: doc.email,
+        found: true,
+        bootstrap: resolvedRole !== (doc.role || 'staff'),
+      });
     }
 
     if (isInternalBootstrapUser(email)) {

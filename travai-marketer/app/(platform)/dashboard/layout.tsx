@@ -73,6 +73,7 @@ function SidebarInner(props: {
   const navItems = ALL_NAV_ITEMS.filter(
     (item) => !item.feature || canAccess(props.role, item.feature as Parameters<typeof canAccess>[1])
   );
+  const quickLinks = navItems.filter((item) => item.href !== '/dashboard').slice(0, 2);
 
   return (
     <div className="flex h-full flex-col bg-[linear-gradient(180deg,#091221_0%,#101828_45%,#162032_100%)] text-white">
@@ -111,7 +112,7 @@ function SidebarInner(props: {
         </div>
       </div>
 
-      <nav className={`flex-1 space-y-1.5 overflow-y-auto ${props.collapsed ? 'px-3 py-3.5' : 'px-3 py-4'}`}>
+      <nav className={`space-y-1.5 ${props.collapsed ? 'px-3 py-3.5' : 'px-3 py-4'}`}>
         {navItems.map((item) => {
           const isActive = item.exact ? props.pathname === item.href : props.pathname.startsWith(item.href);
           return (
@@ -141,11 +142,46 @@ function SidebarInner(props: {
         })}
       </nav>
 
-      <div className={`border-t border-white/10 ${props.collapsed ? 'p-3' : 'p-3.5'}`}>
+      <div className={`border-t border-white/10 ${props.collapsed ? 'px-3 py-3' : 'px-3 pb-3'}`}>
+        {props.collapsed ? (
+          quickLinks.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              onClick={props.closeMobile}
+              className="mt-2 flex h-10 items-center justify-center rounded-2xl border border-white/10 bg-white/6 text-[11px] font-semibold text-emerald-100 transition hover:bg-emerald-400/15"
+              title={item.label}
+            >
+              {item.shortLabel}
+            </Link>
+          ))
+        ) : (
+          <div className="rounded-[24px] border border-white/10 bg-white/6 p-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">Quick access</p>
+            <div className="mt-3 space-y-2">
+              {quickLinks.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  onClick={props.closeMobile}
+                  className="flex items-center justify-between rounded-2xl border border-white/10 bg-slate-950/30 px-3 py-2.5 text-sm font-medium text-white transition hover:border-emerald-300/30 hover:bg-emerald-400/10"
+                >
+                  <span>{item.label}</span>
+                  <span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-100">
+                    Open
+                  </span>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className={`mt-auto border-t border-white/10 ${props.collapsed ? 'p-3' : 'p-3.5'}`}>
         {props.user && (
           <div
             className={`mb-3 rounded-[26px] border border-white/10 bg-white/5 ${props.collapsed ? 'p-3' : 'p-3.5'}`}
-            title={props.collapsed ? `${props.user.name} • ${props.user.email}` : undefined}
+            title={props.collapsed ? `${props.user.name} - ${props.user.email}` : undefined}
           >
             <div className={`flex items-center ${props.collapsed ? 'justify-center' : 'gap-3'}`}>
               <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/10 font-semibold">
