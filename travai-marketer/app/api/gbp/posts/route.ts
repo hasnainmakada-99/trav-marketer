@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
-import { generateGBPPost } from '@/lib/openai';
+import { generateGBPKeywordSuggestions, generateGBPPost } from '@/lib/openai';
 import {
   createGoogleLocalPost,
   deleteGoogleLocalPost,
@@ -248,6 +248,9 @@ export async function POST(request: NextRequest) {
 
     const normalizedMedia = Array.isArray(media) ? (media as PostMediaPayload[]) : [];
     let finalContent = content;
+    let resolvedKeywords = Array.isArray(keywords)
+      ? keywords.map((item) => String(item).trim()).filter(Boolean)
+      : [];
 
     if (autoGenerate) {
       const business = await getBusinessConfigByTeamId(teamId);
@@ -269,6 +272,17 @@ Description: ${String((business as unknown as Record<string, unknown>).businessD
           mediaFormat: item.mediaFormat,
         })),
       });
+
+      resolvedKeywords = await generateGBPKeywordSuggestions(businessContext, {
+        title,
+        content: String(finalContent || ''),
+        media: normalizedMedia.map((item) => ({
+          publicUrl: item.publicUrl,
+          mimeType: item.mimeType,
+          fileName: item.fileName,
+          mediaFormat: item.mediaFormat,
+        })),
+      });
     }
 
     if (!finalContent || String(finalContent).trim().length === 0) {
@@ -283,6 +297,7 @@ Description: ${String((business as unknown as Record<string, unknown>).businessD
         {
           title: inferPostTitle(finalContent, title),
           content: finalContent,
+          keywords: resolvedKeywords,
           media: normalizedMedia,
           callToAction: callToAction || null,
         },

@@ -460,8 +460,13 @@ function GbpPageInner() {
       if (!res.ok) {
         throw new Error(data.error || 'Failed to generate post');
       }
-      setPostForm((current) => ({ ...current, content: data.content || '', autoGenerate: false }));
-      flash('AI content generated. Review it, then save or publish.');
+      setPostForm((current) => ({
+        ...current,
+        content: data.content || '',
+        keywords: Array.isArray(data.keywords) ? data.keywords.join(', ') : current.keywords,
+        autoGenerate: false,
+      }));
+      flash('AI content and SEO keywords generated. Review it, then save or publish.');
     } catch (error) {
       flash(error instanceof Error ? error.message : 'Failed to generate post', false);
     } finally {
@@ -1129,7 +1134,7 @@ function GbpPageInner() {
                         className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
                       />
                       <p className="mt-2 text-xs leading-5 text-slate-500">
-                        Use destination, holiday type, and travel-intent phrases that customers actually search for.
+                        AI fills this after generation using destination, business context, and uploaded media. You can fine-tune it manually any time.
                       </p>
                     </div>
 

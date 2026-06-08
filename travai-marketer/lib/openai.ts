@@ -278,6 +278,79 @@ ${mediaNotes}`.trim();
   }
 }
 
+export async function generateGBPKeywordSuggestions(
+  businessContext: string,
+  options?: {
+    title?: string;
+    content?: string;
+    media?: Array<{
+      publicUrl: string;
+      mimeType?: string;
+      fileName?: string;
+      mediaFormat?: 'PHOTO' | 'VIDEO';
+    }>;
+  }
+): Promise<string[]> {
+  try {
+    const media = options?.media || [];
+    const mediaHints = media
+      .map((item) => `${item.fileName || 'Untitled media'} (${item.mimeType || item.mediaFormat || 'unknown'})`)
+      .slice(0, 6)
+      .join('\n');
+
+    const response = await getOpenAI().chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a local SEO strategist for Google Business Profile posts.
+Return 6 to 8 focused keyword phrases that a customer might actually search for.
+Rules:
+- Prefer destination-led, package-led, and travel-intent phrases
+- Keep each keyword phrase short, natural, and high intent
+- Do not return hashtags
+- Do not number the list
+- Avoid duplicate meaning
+- Return ONLY valid JSON in this shape: {"keywords":["keyword 1","keyword 2"]}`,
+        },
+        {
+          role: 'user',
+          content: `Business context:
+${businessContext}
+${options?.title ? `Post title: ${options.title}` : ''}
+${options?.content ? `Post content: ${options.content}` : ''}
+${mediaHints ? `Media context:\n${mediaHints}` : ''}`.trim(),
+        },
+      ],
+      temperature: 0.4,
+      max_tokens: 220,
+    });
+
+    const raw = (response.choices[0]?.message?.content || '').trim();
+    const cleaned = raw
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
+    const parsed = JSON.parse(cleaned) as { keywords?: unknown };
+    if (!Array.isArray(parsed.keywords)) {
+      return [];
+    }
+
+    return Array.from(
+      new Set(
+        parsed.keywords
+          .filter((item): item is string => typeof item === 'string')
+          .map((item) => item.trim())
+          .filter(Boolean)
+      )
+    ).slice(0, 8);
+  } catch (error) {
+    console.error('Error generating GBP keyword suggestions:', error);
+    return [];
+  }
+}
+
 /**
  * Generate reply to Google review
  */
