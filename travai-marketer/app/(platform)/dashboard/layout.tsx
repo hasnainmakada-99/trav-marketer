@@ -13,36 +13,36 @@ const ALL_NAV_ITEMS = [
     href: '/dashboard',
     label: 'Command Center',
     shortLabel: 'Home',
-    icon: '◈',
+    icon: 'CC',
     exact: true,
     feature: 'dashboard' as keyof ReturnType<typeof canAccess> | null,
-  },
-  {
-    href: '/dashboard/whatsapp',
-    label: 'WhatsApp CRM',
-    shortLabel: 'WA',
-    icon: '◎',
-    feature: 'whatsapp' as const,
   },
   {
     href: '/dashboard/gbp',
     label: 'Google Business',
     shortLabel: 'GBP',
-    icon: '◌',
+    icon: 'GB',
     feature: 'gbp' as const,
+  },
+  {
+    href: '/dashboard/whatsapp',
+    label: 'WhatsApp CRM',
+    shortLabel: 'WA',
+    icon: 'WA',
+    feature: 'whatsapp' as const,
   },
   {
     href: '/dashboard/campaigns',
     label: 'Campaigns',
     shortLabel: 'Camp',
-    icon: '⬢',
+    icon: 'CM',
     feature: 'campaigns' as const,
   },
   {
     href: '/dashboard/leads',
     label: 'Lead Pipeline',
     shortLabel: 'Leads',
-    icon: '◆',
+    icon: 'LP',
     feature: 'leads' as const,
   },
 ] as const;
@@ -75,13 +75,9 @@ function SidebarInner(props: {
   );
 
   return (
-    <div className="flex h-full flex-col bg-[linear-gradient(180deg,#091221_0%,#101828_48%,#162032_100%)] text-white">
-      <div className={`border-b border-white/10 ${props.collapsed ? 'px-3 py-4' : 'px-5 py-5'}`}>
-        <div
-          className={`rounded-[28px] border border-white/10 bg-white/6 backdrop-blur ${
-            props.collapsed ? 'p-3' : 'p-4'
-          }`}
-        >
+    <div className="flex h-full flex-col bg-[linear-gradient(180deg,#091221_0%,#101828_45%,#162032_100%)] text-white">
+      <div className={`border-b border-white/10 ${props.collapsed ? 'px-3 py-3.5' : 'px-4 py-4'}`}>
+        <div className={`rounded-[28px] border border-white/10 bg-white/6 backdrop-blur ${props.collapsed ? 'p-3' : 'p-3.5'}`}>
           <div className={`flex items-center ${props.collapsed ? 'justify-center' : 'justify-between gap-3'}`}>
             <div className={`flex items-center ${props.collapsed ? 'justify-center' : 'gap-3'}`}>
               <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-400 via-sky-500 to-emerald-400 font-bold text-slate-950 shadow-lg">
@@ -102,20 +98,20 @@ function SidebarInner(props: {
                 aria-label={props.collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
                 title={props.collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
               >
-                {props.collapsed ? '→' : '←'}
+                {props.collapsed ? '->' : '<-'}
               </button>
             )}
           </div>
 
           {!props.collapsed && (
-            <div className="mt-4 rounded-2xl bg-emerald-400/10 px-3 py-2 text-xs text-emerald-200 ring-1 ring-emerald-300/15">
-              WhatsApp leads, callback workflows, CRM, and campaigns in one place.
+            <div className="mt-3 rounded-2xl bg-emerald-400/10 px-3 py-2 text-[11px] leading-relaxed text-emerald-200 ring-1 ring-emerald-300/15">
+              GBP, WhatsApp, campaigns, and leads in one clean operating desk.
             </div>
           )}
         </div>
       </div>
 
-      <nav className={`flex-1 space-y-2 overflow-y-auto ${props.collapsed ? 'px-3 py-4' : 'px-4 py-5'}`}>
+      <nav className={`flex-1 space-y-1.5 overflow-y-auto ${props.collapsed ? 'px-3 py-3.5' : 'px-3 py-4'}`}>
         {navItems.map((item) => {
           const isActive = item.exact ? props.pathname === item.href : props.pathname.startsWith(item.href);
           return (
@@ -124,7 +120,7 @@ function SidebarInner(props: {
               href={item.href}
               onClick={props.closeMobile}
               className={`group flex items-center rounded-2xl text-sm font-medium transition-all ${
-                props.collapsed ? 'justify-center px-0 py-3' : 'gap-3 px-4 py-3'
+                props.collapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3.5 py-2.5'
               } ${
                 isActive
                   ? 'bg-white text-slate-950 shadow-lg shadow-cyan-950/20'
@@ -133,11 +129,11 @@ function SidebarInner(props: {
               title={props.collapsed ? item.label : undefined}
             >
               <span
-                className={`flex h-10 w-10 items-center justify-center rounded-xl text-sm ${
+                className={`flex h-9 w-9 items-center justify-center rounded-xl text-[11px] font-semibold tracking-wide ${
                   isActive ? 'bg-slate-100 text-slate-900' : 'bg-white/8 text-slate-100'
                 }`}
               >
-                {item.icon}
+                {props.collapsed ? item.shortLabel : item.icon}
               </span>
               {!props.collapsed && <span>{item.label}</span>}
             </Link>
@@ -145,12 +141,10 @@ function SidebarInner(props: {
         })}
       </nav>
 
-      <div className={`border-t border-white/10 ${props.collapsed ? 'p-3' : 'p-4'}`}>
+      <div className={`border-t border-white/10 ${props.collapsed ? 'p-3' : 'p-3.5'}`}>
         {props.user && (
           <div
-            className={`mb-3 rounded-[26px] border border-white/10 bg-white/5 ${
-              props.collapsed ? 'p-3' : 'p-4'
-            }`}
+            className={`mb-3 rounded-[26px] border border-white/10 bg-white/5 ${props.collapsed ? 'p-3' : 'p-3.5'}`}
             title={props.collapsed ? `${props.user.name} • ${props.user.email}` : undefined}
           >
             <div className={`flex items-center ${props.collapsed ? 'justify-center' : 'gap-3'}`}>
@@ -162,9 +156,7 @@ function SidebarInner(props: {
                   <div className="flex items-center gap-2">
                     <p className="truncate text-sm font-semibold text-white">{props.user.name}</p>
                     {!props.roleLoading && (
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-[11px] font-semibold capitalize ${ROLE_BADGE[props.role]}`}
-                      >
+                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold capitalize ${ROLE_BADGE[props.role]}`}>
                         {props.role}
                       </span>
                     )}
@@ -183,7 +175,7 @@ function SidebarInner(props: {
           }`}
           title={props.collapsed ? 'Sign out' : undefined}
         >
-          {props.collapsed ? '↗' : 'Sign out'}
+          {props.collapsed ? 'Out' : 'Sign out'}
         </button>
       </div>
     </div>
@@ -240,14 +232,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     }
   };
 
-  const desktopSidebarWidth = useMemo(() => (sidebarCollapsed ? '5.5rem' : '17rem'), [sidebarCollapsed]);
+  const desktopSidebarWidth = useMemo(() => (sidebarCollapsed ? '5.25rem' : '16rem'), [sidebarCollapsed]);
 
   return (
     <div className="flex min-h-screen bg-transparent lg:h-screen lg:overflow-hidden">
-      <aside
-        className="hidden shrink-0 border-r border-slate-200/10 lg:flex lg:flex-col"
-        style={{ width: desktopSidebarWidth }}
-      >
+      <aside className="hidden shrink-0 border-r border-slate-200/10 lg:flex lg:flex-col" style={{ width: desktopSidebarWidth }}>
         <SidebarInner
           pathname={pathname}
           user={user}
@@ -260,10 +249,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </aside>
 
       {mobileOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-slate-950/55 backdrop-blur-sm lg:hidden"
-          onClick={() => setMobileOpen(false)}
-        />
+        <div className="fixed inset-0 z-40 bg-slate-950/55 backdrop-blur-sm lg:hidden" onClick={() => setMobileOpen(false)} />
       )}
 
       <aside

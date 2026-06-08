@@ -26,6 +26,61 @@ function getOpenAI(): OpenAI {
   return _openai;
 }
 
+function toHashtag(value: string): string | null {
+  const cleaned = value
+    .replace(/[#.,/\\]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.replace(/[^a-zA-Z0-9]/g, ''))
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join('');
+
+  return cleaned.length >= 3 ? `#${cleaned}` : null;
+}
+
+function ensureGBPSeoFormatting(
+  content: string,
+  businessContext: string,
+  keywords: string[],
+  title?: string
+) {
+  const trimmedContent = content.trim();
+  const existingHashtags = Array.from(
+    new Set(trimmedContent.match(/#[A-Za-z0-9_]+/g) || [])
+  );
+  const businessNameMatch = businessContext.match(/Business:\s*(.+)/i);
+  const businessName = businessNameMatch?.[1]?.split('\n')[0]?.trim() || '';
+
+  const candidates = [
+    ...(title ? [title] : []),
+    ...keywords,
+    businessName,
+    businessName.includes('Traventions') ? 'TravelWithTraventions' : '',
+    businessName.includes('Traventions') ? 'Traventions' : '',
+    'TravelExperts',
+  ]
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => toHashtag(item))
+    .filter((item): item is string => Boolean(item));
+
+  const fallbackHashtags = Array.from(
+    new Set([...existingHashtags, ...candidates])
+  ).slice(0, 5);
+
+  if (fallbackHashtags.length === 0) {
+    return trimmedContent;
+  }
+
+  const baseWithoutHashtags = trimmedContent
+    .replace(/(?:\s*#[A-Za-z0-9_]+\s*)+$/g, '')
+    .trim();
+
+  return `${baseWithoutHashtags} ${fallbackHashtags.join(' ')}`.trim();
+}
+
 interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
@@ -144,11 +199,15 @@ export async function generateGBPPost(
     const systemPrompt = `You are an SEO expert and social media strategist.
 Generate an engaging Google Business Profile post that:
 - Includes relevant keywords for local SEO
-- Is 150-300 characters
+- Feels natural, high-conviction, and easy to scan
+- Prioritizes destination, offer, and business relevance for Google local discovery
 - Includes a clear call-to-action
 - Is professional yet approachable
 - Matches the exact offer, destination, or visual context from the uploaded media when media is provided
-- Never invent details that are not visible or not mentioned in the business context`;
+- Never invent details that are not visible or not mentioned in the business context
+- Ends with 3 to 5 focused hashtags that improve local search relevance
+- Uses hashtags related to destination, travel intent, and the brand
+- Keeps hashtags at the end of the caption`;
 
     const keywordsStr =
       keywords.length > 0 ? `Include these keywords: ${keywords.join(', ')}` : '';
@@ -206,7 +265,13 @@ ${mediaNotes}`.trim();
       max_tokens: 200,
     });
 
-    return response.choices[0]?.message?.content || '';
+    const generated = response.choices[0]?.message?.content || '';
+    return ensureGBPSeoFormatting(
+      generated,
+      businessContext,
+      keywords,
+      options?.title
+    );
   } catch (error) {
     console.error('Error generating GBP post:', error);
     throw error;

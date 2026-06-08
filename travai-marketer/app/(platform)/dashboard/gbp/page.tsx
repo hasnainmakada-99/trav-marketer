@@ -338,6 +338,13 @@ function GbpPageInner() {
     [reviews]
   );
 
+  const hashtagCount = useMemo(
+    () => (postForm.content.match(/#[A-Za-z0-9_]+/g) || []).length,
+    [postForm.content]
+  );
+
+  const canPublishImmediately = postForm.publishNow && hasLocation;
+
   const handleConnect = () => {
     if (!teamId) return;
     window.location.href = `/api/gbp/connect?teamId=${encodeURIComponent(teamId)}&redirectTo=/dashboard/gbp`;
@@ -655,23 +662,35 @@ function GbpPageInner() {
         </div>
       )}
 
-      <div className="rounded-[32px] border border-slate-200 bg-white/90 px-5 py-5 shadow-xl shadow-slate-200/60 sm:px-6">
-        <div className="mx-auto flex max-w-6xl flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">Google Business Profile</h1>
-            <p className="mt-0.5 text-sm text-gray-500">Live posts, review sync, AI replies, and media-aware captions</p>
+      <div className="overflow-hidden rounded-[34px] border border-slate-200 bg-[radial-gradient(circle_at_top_right,_rgba(56,189,248,0.16),_transparent_28%),linear-gradient(135deg,#f8fbff_0%,#eef6ff_42%,#f8fffc_100%)] px-5 py-5 shadow-xl shadow-slate-200/60 sm:px-6 sm:py-6">
+        <div className="mx-auto flex max-w-7xl flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+          <div className="max-w-3xl">
+            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-700">Google Presence Studio</p>
+            <h1 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">
+              Publish sharper GBP posts and keep reviews in sync
+            </h1>
+            <p className="mt-3 text-sm leading-6 text-slate-600">
+              This workspace now handles live Google sync, media-aware AI captions, stronger local-search hashtags,
+              and cleaner publishing controls so the team can work faster without fighting the form.
+            </p>
           </div>
-          {connected && (
-            <div className="flex items-center gap-2 rounded-full border border-green-200 bg-green-50 px-3 py-1.5 text-xs text-green-700">
-              <span className="h-2 w-2 rounded-full bg-green-500" />
-              Connected
-              {hasLocation && <span className="text-green-500">Location set</span>}
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:min-w-[26rem]">
+            <div className="rounded-2xl border border-white/70 bg-white/80 px-4 py-3 shadow-sm">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Connection</p>
+              <p className="mt-2 text-sm font-semibold text-slate-900">{connected ? 'Google account connected' : 'Needs Google connection'}</p>
+              <p className="mt-1 text-xs text-slate-500">{hasLocation ? 'A live business location is selected.' : 'Pick a location before you publish.'}</p>
             </div>
-          )}
+            <div className="rounded-2xl border border-white/70 bg-white/80 px-4 py-3 shadow-sm">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Search Lift</p>
+              <p className="mt-2 text-sm font-semibold text-slate-900">AI captions now bias toward local SEO</p>
+              <p className="mt-1 text-xs text-slate-500">Destination-led copy, CTA, and 3-5 focused hashtags at the end.</p>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div className="mx-auto max-w-6xl py-6">
+      <div className="mx-auto max-w-7xl py-5">
         {!connected && (
           <div className="rounded-2xl border border-dashed border-gray-300 bg-white p-8 text-center sm:p-12">
             <h2 className="text-xl font-semibold text-gray-900">Connect Google Business Profile</h2>
@@ -753,27 +772,27 @@ function GbpPageInner() {
               </div>
             )}
 
-            <div className="mb-6 grid grid-cols-2 gap-4 xl:grid-cols-4">
+            <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               {[
                 { label: 'Total Posts', value: postStats.total, sub: `${postStats.live} live` },
                 { label: 'Draft Posts', value: postStats.drafts, sub: 'Awaiting publish' },
                 { label: 'Avg. Rating', value: reviewStats.avg, sub: 'out of 5 stars' },
                 { label: 'Pending Replies', value: reviewStats.pending, sub: 'Need response' },
               ].map((card) => (
-                <div key={card.label} className="rounded-xl border border-gray-200 bg-white p-4">
-                  <p className="text-xs uppercase tracking-wide text-gray-500">{card.label}</p>
-                  <p className="mt-1 text-2xl font-bold text-gray-900">{card.value}</p>
-                  <p className="mt-1 text-xs text-gray-400">{card.sub}</p>
+                <div key={card.label} className="rounded-[26px] border border-slate-200 bg-white/90 p-4 shadow-sm shadow-slate-200/60">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{card.label}</p>
+                  <p className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">{card.value}</p>
+                  <p className="mt-1 text-xs text-slate-400">{card.sub}</p>
                 </div>
               ))}
             </div>
 
-            <div className="mb-6 overflow-x-auto rounded-t-xl border-b border-gray-200 bg-white">
+            <div className="mb-5 overflow-x-auto rounded-[24px] border border-slate-200 bg-white/90 p-1 shadow-sm shadow-slate-200/50">
               {(['posts', 'reviews', 'setup'] as Tab[]).map((value) => (
                 <button
                   key={value}
                   onClick={() => setTab(value)}
-                  className={`border-b-2 px-6 py-3.5 text-sm font-medium capitalize transition-colors ${tab === value ? 'border-indigo-600 bg-indigo-50/50 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                  className={`rounded-2xl px-5 py-3 text-sm font-medium capitalize transition-colors ${tab === value ? 'bg-slate-950 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'}`}
                 >
                   {value}
                 </button>
@@ -782,24 +801,26 @@ function GbpPageInner() {
 
             {tab === 'posts' && (
               <div className="space-y-5">
-                <div className="flex flex-col gap-3 rounded-xl border border-indigo-100 bg-gradient-to-r from-indigo-50 to-purple-50 p-4 sm:flex-row sm:items-center">
+                <div className="flex flex-col gap-3 rounded-[28px] border border-sky-100 bg-[linear-gradient(135deg,#f7fbff_0%,#eef4ff_58%,#f9f5ff_100%)] p-4 sm:flex-row sm:items-center">
                   <div className="flex-1">
-                    <p className="text-sm font-semibold text-indigo-900">AI Post Generator</p>
-                    <p className="mt-0.5 text-xs text-indigo-600">Upload post creatives, sync existing Google posts, and generate captions that reflect the actual uploaded media.</p>
+                    <p className="text-sm font-semibold text-slate-900">GBP Post Studio</p>
+                    <p className="mt-1 text-xs leading-5 text-slate-600">
+                      Generate destination-aware captions, cleaner hashtags, and post copy that actually matches the media your customer uploads.
+                    </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <button
                       onClick={handleSyncPosts}
                       disabled={postsSyncing || !hasLocation}
-                      className="rounded-xl border border-indigo-200 bg-white px-4 py-2 text-sm font-medium text-indigo-700 transition-colors hover:bg-indigo-50 disabled:opacity-50"
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
                     >
                       {postsSyncing ? 'Syncing...' : 'Sync from Google'}
                     </button>
                     <button
                       onClick={() => setShowPostModal(true)}
-                      className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
+                      className="rounded-xl bg-slate-950 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800"
                     >
-                      Create Post
+                      Create AI Post
                     </button>
                   </div>
                 </div>
@@ -815,16 +836,18 @@ function GbpPageInner() {
                     <p className="mt-1 text-xs text-gray-400">Sync existing Google posts or create your first media-aware GBP post.</p>
                   </div>
                 ) : (
-                  <div className="space-y-3">
-                    {posts.map((post) => (
-                      <div key={post.$id} className="flex flex-col gap-4 rounded-xl border border-gray-200 bg-white p-4 lg:flex-row lg:items-start lg:justify-between">
-                        <div className="min-w-0 flex-1">
-                          <div className="mb-1 flex items-center gap-2">
+                    <div className="space-y-3">
+                      {posts.map((post) => (
+                      <div key={post.$id} className="flex flex-col gap-4 rounded-[26px] border border-slate-200 bg-white/95 p-4 shadow-sm shadow-slate-200/60 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="min-w-0 flex-1 space-y-3">
+                          <div className="flex flex-wrap items-center gap-2">
                             <Badge status={post.status} />
-                            <span className="text-xs text-gray-400">{post.type === 'auto_generated' ? 'AI' : 'Manual'}</span>
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">{post.type === 'auto_generated' ? 'AI Draft' : 'Manual Post'}</span>
                           </div>
-                          <p className="mb-1 text-sm font-medium text-gray-900">{post.title}</p>
-                          <p className="text-sm text-gray-500">{post.content}</p>
+                          <div className="space-y-1">
+                            <p className="text-base font-semibold tracking-tight text-slate-950">{post.title}</p>
+                            <p className="max-w-4xl text-sm leading-6 text-slate-600">{post.content}</p>
+                          </div>
                           {!!post.media?.length && (
                             <div className="mt-3 flex flex-wrap gap-2">
                               {post.media.slice(0, 4).map((media, index) => (
@@ -832,17 +855,18 @@ function GbpPageInner() {
                               ))}
                             </div>
                           )}
-                          <p className="mt-2 text-xs text-gray-400">
+                          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400">
                             {post.postedAt
                               ? `Published ${new Date(post.postedAt).toLocaleDateString('en-IN')}`
                               : `Draft | ${new Date(post.createdAt).toLocaleDateString('en-IN')}`}
-                          </p>
+                            {!!post.media?.length && <span>{post.media.length} media item(s)</span>}
+                          </div>
                           {post.googleSearchUrl && (
                             <a
                               href={post.googleSearchUrl}
                               target="_blank"
                               rel="noreferrer"
-                              className="mt-2 inline-flex text-xs font-medium text-indigo-600 hover:text-indigo-800"
+                              className="inline-flex text-xs font-semibold text-sky-700 hover:text-sky-800"
                             >
                               View on Google
                             </a>
@@ -1013,23 +1037,26 @@ function GbpPageInner() {
       </div>
 
       {showPostModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 sm:p-6">
-          <div className="flex max-h-[95vh] w-full max-w-3xl flex-col rounded-2xl bg-white shadow-2xl">
-            <div className="flex flex-wrap items-center gap-3 border-b border-gray-200 px-5 py-4">
+        <div className="fixed inset-0 z-50 bg-black/62 p-3 sm:p-5">
+          <div className="mx-auto flex h-full max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-[30px] border border-white/20 bg-white shadow-2xl shadow-slate-950/30">
+            <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white/95 px-5 py-4 backdrop-blur">
               <button
                 onClick={() => {
                   setShowPostModal(false);
                   resetPostComposer();
                 }}
-                className="rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
+                className="rounded-xl px-3 py-2 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
               >
                 Back
               </button>
-              <h2 className="flex-1 text-base font-semibold text-gray-900">Create Google post</h2>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-lg font-semibold tracking-tight text-slate-950">Create Google post</h2>
+                <p className="text-xs text-slate-500">Build a tighter caption, stronger hashtags, and a cleaner publish flow.</p>
+              </div>
               <button
                 onClick={handleAiGeneratePreview}
                 disabled={aiGenerating}
-                className="rounded-lg bg-purple-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-purple-700 disabled:opacity-60"
+                className="rounded-xl bg-[linear-gradient(135deg,#7c3aed_0%,#9333ea_52%,#3b82f6_100%)] px-4 py-2 text-sm font-semibold text-white transition-transform hover:scale-[1.01] disabled:opacity-60"
               >
                 {aiGenerating ? 'Generating...' : 'Generate with AI'}
               </button>
@@ -1038,159 +1065,259 @@ function GbpPageInner() {
                   setShowPostModal(false);
                   resetPostComposer();
                 }}
-                className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+                className="rounded-xl px-3 py-2 text-sm font-medium text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
               >
                 Close
               </button>
             </div>
 
-            <div className="flex-1 space-y-4 overflow-y-auto p-5">
-              <div className="grid gap-4 lg:grid-cols-[1.35fr_0.65fr]">
-                <div className="space-y-3">
-                  <input
-                    type="text"
-                    value={postForm.title}
-                    onChange={(event) => setPostForm((current) => ({ ...current, title: event.target.value }))}
-                    placeholder="Post headline or internal label"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                  <textarea
-                    value={postForm.content}
-                    onChange={(event) => setPostForm((current) => ({ ...current, content: event.target.value, autoGenerate: false }))}
-                    rows={10}
-                    maxLength={1500}
-                    placeholder="Write the post copy or generate it with AI"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-3 text-sm leading-relaxed text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                  <div className="flex items-center justify-between text-xs text-gray-400">
-                    <span>{postForm.content.length}/1500</span>
-                    <span>{selectedMedia.length ? `${selectedMedia.length} media item(s) attached` : 'No media attached yet'}</span>
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-4">
-                  <p className="text-sm font-medium text-gray-700">Media</p>
-                  <p className="mt-1 text-xs text-gray-400">Upload images or videos first so AI and Google posts use the same creative context.</p>
-                  <label className="mt-4 block cursor-pointer rounded-lg border border-gray-300 bg-white px-3 py-2 text-center text-xs font-medium text-indigo-600 transition-colors hover:bg-indigo-50">
-                    {mediaUploading ? 'Uploading...' : 'Select images and videos'}
+            <div className="grid min-h-0 flex-1 gap-0 xl:grid-cols-[minmax(0,1.45fr)_340px]">
+              <div className="min-h-0 overflow-y-auto bg-[linear-gradient(180deg,#ffffff_0%,#fbfdff_100%)] px-5 py-5">
+                <div className="space-y-4">
+                  <div className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/50">
+                    <label className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Post Headline
+                    </label>
                     <input
-                      type="file"
-                      accept="image/*,video/*"
-                      multiple
-                      className="hidden"
-                      onChange={(event) => {
-                        if (event.target.files?.length) {
-                          handleUploadMedia(event.target.files);
-                          event.target.value = '';
-                        }
-                      }}
+                      type="text"
+                      value={postForm.title}
+                      onChange={(event) => setPostForm((current) => ({ ...current, title: event.target.value }))}
+                      placeholder="Travel South Goa"
+                      className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-base text-slate-900 outline-none transition focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
                     />
-                  </label>
-                  {selectedMedia.length > 0 && (
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      {selectedMedia.map((media, index) => (
-                        <div key={`${media.fileId || media.publicUrl}-${index}`} className="relative">
-                          <MediaTile media={media} alt={media.fileName || 'Media'} />
-                          <button
-                            onClick={() => setSelectedMedia((current) => current.filter((_, itemIndex) => itemIndex !== index))}
-                            className="absolute -right-2 -top-2 rounded-full bg-slate-950 px-1.5 py-0.5 text-[10px] font-semibold text-white"
-                          >
-                            x
-                          </button>
-                        </div>
-                      ))}
+                  </div>
+
+                  <div className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/50">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Caption</p>
+                        <p className="mt-1 text-xs text-slate-500">Keep it sharp, local, and visually connected to the uploaded creative.</p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-500">{postForm.content.length}/1500 chars</span>
+                        <span className={`rounded-full px-2.5 py-1 font-medium ${hashtagCount >= 3 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
+                          {hashtagCount} hashtag{hashtagCount === 1 ? '' : 's'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <textarea
+                      value={postForm.content}
+                      onChange={(event) => setPostForm((current) => ({ ...current, content: event.target.value, autoGenerate: false }))}
+                      rows={9}
+                      maxLength={1500}
+                      placeholder="Write the post copy or generate it with AI"
+                      className="min-h-[280px] w-full rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4 text-base leading-8 text-slate-800 outline-none transition focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
+                    />
+
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                      <span>{selectedMedia.length ? `${selectedMedia.length} media item(s) attached` : 'Attach media before generating for the best result'}</span>
+                      <span>Best practice: end with 3-5 location-driven hashtags</span>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <div className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/50">
+                      <label className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        SEO Keywords
+                      </label>
+                      <input
+                        type="text"
+                        value={postForm.keywords}
+                        onChange={(event) => setPostForm((current) => ({ ...current, keywords: event.target.value }))}
+                        placeholder="e.g. South Goa holiday, Palolem beach, luxury trip"
+                        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
+                      />
+                      <p className="mt-2 text-xs leading-5 text-slate-500">
+                        Use destination, holiday type, and travel-intent phrases that customers actually search for.
+                      </p>
+                    </div>
+
+                    <div className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/50">
+                      <label className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        Call To Action
+                      </label>
+                      <select
+                        value={postForm.callToAction}
+                        onChange={(event) =>
+                          setPostForm((current) => ({
+                            ...current,
+                            callToAction: event.target.value,
+                            callToActionUrl: '',
+                            callToActionPhone: '',
+                          }))
+                        }
+                        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
+                      >
+                        <option value="NONE">None</option>
+                        <option value="BOOK">Book</option>
+                        <option value="ORDER">Order online</option>
+                        <option value="SHOP">Shop</option>
+                        <option value="LEARN_MORE">Learn more</option>
+                        <option value="SIGN_UP">Sign up</option>
+                        <option value="CALL">Call now</option>
+                      </select>
+                      <p className="mt-2 text-xs leading-5 text-slate-500">
+                        Choose one strong action so the post feels focused instead of crowded.
+                      </p>
+                    </div>
+                  </div>
+
+                  {postForm.callToAction !== 'NONE' && postForm.callToAction !== 'CALL' && (
+                    <div className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/50">
+                      <label className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        Destination URL
+                      </label>
+                      <input
+                        type="url"
+                        value={postForm.callToActionUrl}
+                        onChange={(event) => setPostForm((current) => ({ ...current, callToActionUrl: event.target.value }))}
+                        placeholder="https://your-website.com"
+                        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
+                      />
+                    </div>
+                  )}
+
+                  {postForm.callToAction === 'CALL' && (
+                    <div className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/50">
+                      <label className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        Phone Number
+                      </label>
+                      <input
+                        type="tel"
+                        value={postForm.callToActionPhone}
+                        onChange={(event) => setPostForm((current) => ({ ...current, callToActionPhone: event.target.value }))}
+                        placeholder="+91 98765 43210"
+                        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
+                      />
                     </div>
                   )}
                 </div>
               </div>
 
-              <div className="grid gap-4 md:grid-cols-2">
-                <div>
-                  <label className="mb-1.5 block text-xs text-gray-500">SEO keywords for AI generation</label>
-                  <input
-                    type="text"
-                    value={postForm.keywords}
-                    onChange={(event) => setPostForm((current) => ({ ...current, keywords: event.target.value }))}
-                    placeholder="e.g. Dubai holiday, family tours, premium travel"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
+              <aside className="min-h-0 overflow-y-auto border-t border-slate-200 bg-[linear-gradient(180deg,#f8fbff_0%,#f6f9ff_58%,#fbfffd_100%)] px-5 py-5 xl:border-l xl:border-t-0">
+                <div className="space-y-4">
+                  <div className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/50">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Media Panel</p>
+                    <h3 className="mt-2 text-lg font-semibold tracking-tight text-slate-950">Upload the creative first</h3>
+                    <p className="mt-1 text-sm leading-6 text-slate-500">
+                      The AI now reads the actual uploaded post context before building the caption.
+                    </p>
+
+                    <label className="mt-4 flex cursor-pointer items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-sky-700 transition-colors hover:bg-sky-50">
+                      {mediaUploading ? 'Uploading...' : 'Select images and videos'}
+                      <input
+                        type="file"
+                        accept="image/*,video/*"
+                        multiple
+                        className="hidden"
+                        onChange={(event) => {
+                          if (event.target.files?.length) {
+                            handleUploadMedia(event.target.files);
+                            event.target.value = '';
+                          }
+                        }}
+                      />
+                    </label>
+
+                    {selectedMedia.length > 0 ? (
+                      <div className="mt-4 grid grid-cols-2 gap-2">
+                        {selectedMedia.map((media, index) => (
+                          <div key={`${media.fileId || media.publicUrl}-${index}`} className="relative overflow-hidden rounded-2xl border border-slate-200 bg-slate-950/95 p-2">
+                            <MediaTile media={media} alt={media.fileName || 'Media'} />
+                            <button
+                              onClick={() => setSelectedMedia((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                              className="absolute right-2 top-2 rounded-full bg-white/95 px-1.5 py-0.5 text-[10px] font-semibold text-slate-900 shadow"
+                            >
+                              x
+                            </button>
+                            <p className="mt-2 truncate text-[11px] font-medium text-white/90">{media.fileName || media.mediaFormat}</p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-center text-xs leading-6 text-slate-500">
+                        Add at least one image or video to help the AI stay aligned with the exact destination or offer.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/50">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Publishing</p>
+                    <div className="mt-3 flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-base font-semibold text-slate-900">Publish immediately</p>
+                        <p className="mt-1 text-sm leading-6 text-slate-500">
+                          If no location is selected, the post will still save safely as a draft.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={postForm.publishNow}
+                        onClick={() => setPostForm((current) => ({ ...current, publishNow: !current.publishNow }))}
+                        className={`inline-flex h-8 w-14 shrink-0 items-center rounded-full p-1 transition-colors ${
+                          postForm.publishNow ? 'bg-slate-950' : 'bg-slate-200'
+                        }`}
+                      >
+                        <span
+                          className={`h-6 w-6 rounded-full bg-white shadow-sm transition-transform ${
+                            postForm.publishNow ? 'translate-x-6' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    <div className="mt-4 rounded-2xl bg-slate-50 px-4 py-3 text-xs leading-6 text-slate-600">
+                      {canPublishImmediately
+                        ? 'This post is ready to publish to the live Google Business location as soon as you click publish.'
+                        : 'This post will save as a draft until a GBP location is selected or publish is toggled back on later.'}
+                    </div>
+                  </div>
+
+                  <div className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/50">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Caption Checklist</p>
+                    <div className="mt-3 space-y-2 text-sm text-slate-600">
+                      <div className="flex items-center justify-between rounded-2xl bg-slate-50 px-3 py-2">
+                        <span>Media attached</span>
+                        <span className={selectedMedia.length ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>
+                          {selectedMedia.length ? 'Yes' : 'Add one'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between rounded-2xl bg-slate-50 px-3 py-2">
+                        <span>SEO keywords</span>
+                        <span className={postForm.keywords.trim() ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>
+                          {postForm.keywords.trim() ? 'Ready' : 'Optional'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between rounded-2xl bg-slate-50 px-3 py-2">
+                        <span>Hashtag strength</span>
+                        <span className={hashtagCount >= 3 ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>
+                          {hashtagCount >= 3 ? 'Strong' : 'Needs 3+'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
-
-                <div>
-                  <label className="mb-1.5 block text-xs text-gray-500">Call to action</label>
-                  <select
-                    value={postForm.callToAction}
-                    onChange={(event) =>
-                      setPostForm((current) => ({
-                        ...current,
-                        callToAction: event.target.value,
-                        callToActionUrl: '',
-                        callToActionPhone: '',
-                      }))
-                    }
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  >
-                    <option value="NONE">None</option>
-                    <option value="BOOK">Book</option>
-                    <option value="ORDER">Order online</option>
-                    <option value="SHOP">Shop</option>
-                    <option value="LEARN_MORE">Learn more</option>
-                    <option value="SIGN_UP">Sign up</option>
-                    <option value="CALL">Call now</option>
-                  </select>
-                </div>
-              </div>
-
-              {postForm.callToAction !== 'NONE' && postForm.callToAction !== 'CALL' && (
-                <input
-                  type="url"
-                  value={postForm.callToActionUrl}
-                  onChange={(event) => setPostForm((current) => ({ ...current, callToActionUrl: event.target.value }))}
-                  placeholder="https://your-website.com"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-              )}
-
-              {postForm.callToAction === 'CALL' && (
-                <input
-                  type="tel"
-                  value={postForm.callToActionPhone}
-                  onChange={(event) => setPostForm((current) => ({ ...current, callToActionPhone: event.target.value }))}
-                  placeholder="+91 98765 43210"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-              )}
-
-              <div className="flex items-center justify-between rounded-xl border border-gray-200 px-4 py-3">
-                <div>
-                  <p className="text-sm font-medium text-gray-700">Publish immediately</p>
-                  <p className="text-xs text-gray-400">If no location is set, the post will be saved as a draft.</p>
-                </div>
-                <button
-                  onClick={() => setPostForm((current) => ({ ...current, publishNow: !current.publishNow }))}
-                  className={`relative h-6 w-11 rounded-full transition-colors ${postForm.publishNow ? 'bg-indigo-600' : 'bg-gray-300'}`}
-                >
-                  <span className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow transition-transform ${postForm.publishNow ? 'translate-x-6' : 'translate-x-1'}`} />
-                </button>
-              </div>
+              </aside>
             </div>
 
-            <div className="flex flex-col-reverse gap-3 border-t border-gray-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col-reverse gap-3 border-t border-slate-200 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
               <button
                 onClick={() => {
                   setShowPostModal(false);
                   resetPostComposer();
                 }}
-                className="rounded-lg px-4 py-2 text-sm text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-800"
+                className="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
               >
                 Cancel
               </button>
               <button
                 onClick={handleCreatePost}
                 disabled={postSubmitting || !postForm.content.trim()}
-                className="rounded-xl bg-blue-600 px-6 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:opacity-60"
+                className="rounded-2xl bg-[linear-gradient(135deg,#2563eb_0%,#1d4ed8_58%,#3b82f6_100%)] px-7 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-200 transition-transform hover:scale-[1.01] disabled:opacity-60"
               >
-                {postSubmitting ? 'Saving...' : postForm.publishNow && hasLocation ? 'Publish Post' : 'Save Draft'}
+                {postSubmitting ? 'Saving...' : canPublishImmediately ? 'Publish Post' : 'Save Draft'}
               </button>
             </div>
           </div>
