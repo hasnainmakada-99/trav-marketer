@@ -18,7 +18,7 @@ type StoredReview = {
   teamId: string;
   googleReviewId: string;
   reviewer: string;
-  rating: string | number;
+  rating: number;
   reviewText: string;
   reply?: string | null;
   replyStatus?: 'pending' | 'ready' | 'replied';
@@ -99,7 +99,7 @@ async function syncGoogleReviewsToAppwrite(teamId: string) {
       teamId,
       googleReviewId,
       reviewer: review.reviewer?.displayName || 'Anonymous',
-      rating: String(starRatingToNumber(review.starRating)),
+      rating: starRatingToNumber(review.starRating),
       reviewText: review.comment || '',
       reply: review.reviewReply?.comment || null,
       replyStatus: review.reviewReply?.comment ? 'replied' : 'pending',
@@ -158,7 +158,7 @@ export async function POST(request: NextRequest) {
       teamId,
       googleReviewId,
       reviewer,
-      rating: String(rating),
+      rating: Number(rating),
       reviewText,
       reply: null,
       replyStatus: 'pending',
@@ -433,7 +433,7 @@ export async function PATCH(request: NextRequest) {
     }
 
     if (updates.rating !== undefined) {
-      updates.rating = String(updates.rating);
+      updates.rating = Number(updates.rating);
     }
     updates.updatedAt = new Date().toISOString();
 
