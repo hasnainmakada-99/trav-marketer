@@ -942,12 +942,17 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
   if (state.intent === 'unknown' || state.stage === 'unknown') return null;
 
   const { stage, slots, intent } = state;
+  const joinMissing = (items: string[]) => {
+    if (items.length <= 1) return items[0] || '';
+    if (items.length === 2) return `${items[0]} and ${items[1]}`;
+    return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
+  };
 
   // â”€â”€ ask_destination â”€â”€
   if (stage === 'ask_destination') {
     return (
-      'Amazing!\n\n' +
-      'Which destination are you planning to visit?\n\n' +
+      'That sounds lovely.\n\n' +
+      'Which destination are you planning for?\n\n' +
       'Example: Dubai, Bali, Kashmir, Thailand'
     );
   }
@@ -958,9 +963,9 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
     const tagline = getDestinationTagline(dest);
     return (
       `Great choice! ${dest} is ${tagline}.\n\n` +
-      'How would you like to plan your holiday?\n\n' +
-      'Exclusive Holiday Deals\n' +
-      'Personalized Holidays'
+      'Would you prefer ready holiday options or a more personalized plan?\n\n' +
+      '1. Exclusive Holiday Deals\n' +
+      '2. Personalized Holidays'
     );
   }
 
@@ -969,47 +974,55 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
     if (intent === 'plan_holiday') {
       if (slots.holiday_type === 'personalized') {
         const dest = slots.destination || 'your destination';
+        const missing = [
+          !slots.travellers ? 'number of travellers' : '',
+          !slots.travel_time ? 'travel month or dates' : '',
+          !slots.departure_city ? 'departure city' : '',
+          !slots.nights ? 'number of nights' : '',
+          !slots.hotel_preference ? 'hotel preference' : '',
+        ].filter(Boolean);
         return (
-          `Wonderful! Let's create your personalized ${dest} holiday.\n\n` +
-          'Please share your travel preferences:\n\n' +
-          (!slots.travellers ? 'Number of Travellers\n' : '') +
-          (!slots.travel_time ? 'Travel Month or Dates\n' : '') +
-          (!slots.departure_city ? 'Departure City\n' : '') +
-          (!slots.nights ? 'Number of Nights\n' : '') +
-          (!slots.hotel_preference ? 'Hotel Preference (3 / 4 / 5 Star)\n' : '') +
-          '\nExample:\n2 Adults, 10th July, Delhi, 5 Nights, 4 Star Hotels'
+          `Lovely, I'll shape a personalized ${dest} holiday for you.\n\n` +
+          `Just send me your ${joinMissing(missing)} in one message if that's easy.\n\n` +
+          'Example:\n2 Adults, 10th July, Delhi, 5 Nights, 4 Star Hotels'
         );
       }
       // exclusive
+      const missing = [
+        !slots.travellers ? 'number of travellers' : '',
+        !slots.travel_time ? 'travel month or dates' : '',
+        !slots.departure_city ? 'departure city' : '',
+        !slots.nights ? 'number of nights' : '',
+      ].filter(Boolean);
       return (
-        'Perfect! Please share:\n\n' +
-        (!slots.travellers ? 'Number of Travellers\n' : '') +
-        (!slots.travel_time ? 'Travel Month or Dates\n' : '') +
-        (!slots.departure_city ? 'Departure City\n' : '') +
-        (!slots.nights ? 'Number of Nights\n' : '') +
-        '\nExample:\n2 Adults, July, Bangalore, 5 Nights'
+        `Perfect. Send me your ${joinMissing(missing)} and I'll suggest the best holiday options.\n\n` +
+        'Example:\n2 Adults, July, Bangalore, 5 Nights'
       );
     }
 
     if (intent === 'flights') {
+      const missing = [
+        !slots.from_city ? 'departure city' : '',
+        !slots.to_city ? 'destination city' : '',
+        !slots.travel_time ? 'travel date' : '',
+        !slots.travellers ? 'number of travellers' : '',
+      ].filter(Boolean);
       return (
-        'Sure! Please share:\n\n' +
-        (!slots.from_city ? 'From City\n' : '') +
-        (!slots.to_city ? 'To City\n' : '') +
-        (!slots.travel_time ? 'Travel Date\n' : '') +
-        (!slots.travellers ? 'Number of Travellers\n' : '') +
-        '\nExample:\nDelhi to Mumbai, 25th June, 2 Adults'
+        `Sure, send me your ${joinMissing(missing)} and I'll check suitable flight options.\n\n` +
+        'Example:\nDelhi to Mumbai, 25th June, 2 Adults'
       );
     }
 
     if (intent === 'hotels') {
+      const missing = [
+        !slots.destination ? 'destination' : '',
+        !slots.travellers ? 'number of travellers' : '',
+        !slots.travel_time ? 'travel month or dates' : '',
+        !slots.nights ? 'number of nights' : '',
+      ].filter(Boolean);
       return (
-        'Amazing! Please share:\n\n' +
-        (!slots.destination ? 'Destination\n' : '') +
-        (!slots.travellers ? 'Number of Travellers\n' : '') +
-        (!slots.travel_time ? 'Travel Month or Dates\n' : '') +
-        (!slots.nights ? 'Number of Nights\n' : '') +
-        '\nExample:\nDubai, 2 Adults, July, 4 Nights'
+        `Of course. Send me your ${joinMissing(missing)} and I'll share hotel options that fit.\n\n` +
+        'Example:\nDubai, 2 Adults, July, 4 Nights'
       );
     }
 
@@ -1054,11 +1067,12 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
       : '';
 
     return (
-      'To arrange your callback, please share the remaining details:\n\n' +
+      'I can arrange a quick call from our travel expert.\n\n' +
+      'Please share the remaining details:\n\n' +
       capturedBlock +
       `${missingLeadLines.join('\n')}\n\n` +
       exampleBlock +
-      'Our travel expert will call you at your preferred time.'
+      'We will call you at the time that suits you best.'
     );
   }
 
@@ -1066,8 +1080,8 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
   if (stage === 'ask_callback') {
     const name = slots.name ? `, ${slots.name}` : '';
     return (
-      `Thank you${name}! Your details have been received.\n\n` +
-      'When would you like us to call you?\n\n' +
+      `Thanks${name}.\n\n` +
+      'What time would be convenient for your callback?\n\n' +
       'Example: Today at 5 PM  /  Tomorrow Morning'
     );
   }
@@ -1203,14 +1217,14 @@ export function getWorkflowSystemPromptBlock(
   if (intent === 'unknown' || stage === 'unknown') {
     task = `The customer's intent is not yet identified. Respond warmly and naturally.
 Guidelines:
-- Greeting (Hi, Hello, etc.) -> warmly greet and show: "How may I assist you today?\n\n1. Plan a Holiday\n2. Flights\n3. Hotels"
-- Travel-related question -> briefly answer, then show the main menu
-- Off-topic question (weather, jokes, math, etc.) -> say "That's a bit outside my expertise. I'm here to help plan your trip." and show the menu
-- Confused or unclear message -> empathize and show the menu
-- User says they want to speak to a human -> say "Sure. You can reach our team at info@traventions.com or WhatsApp us at +91 XXXXX. Meanwhile, I can help you explore options."
-- Profanity or frustration -> stay calm, empathize: "I understand your concern. Let me connect you with our team who can help you better."
-- Random characters/test messages -> respond friendly: "Hello. I'm Sini, your travel assistant. How can I help you today?"
-Always end with the main menu if intent is unclear.`;
+- Greeting (Hi, Hello, etc.) -> warmly greet and invite the travel requirement naturally, then offer: "1. Plan a Holiday  2. Flights  3. Hotels"
+- Travel-related question -> answer directly first, and only offer options if needed
+- Off-topic question (weather, jokes, math, etc.) -> politely say you can help with travel planning and booking support
+- Confused or unclear message -> respond with empathy and ask what kind of trip they are planning
+- User says they want to speak to a human -> say "Sure, our team can take it from here. You can also share your trip details and I will help right away."
+- Profanity or frustration -> stay calm, acknowledge the concern, and help move the conversation forward
+- Random characters/test messages -> respond briefly and warmly, without sounding automated
+Do not sound like a scripted bot.`;
 
   } else if (intent === 'callback_request') {
     if (stage === 'collect_lead') {
@@ -1227,9 +1241,9 @@ Ask for the destination ONLY - nothing else yet.`;
 
   } else if (stage === 'ask_holiday_type') {
     task = `Ask the customer to choose between:
-ðŸŒŸ Exclusive Holiday Deals
-âœ¨ Personalized Holidays
-Do NOT ask about travel details yet. Only ask for the holiday type.`;
+1. Exclusive Holiday Deals
+2. Personalized Holidays
+Do NOT ask about travel details yet. Only ask for the holiday type in a natural way.`;
 
   } else if (stage === 'ask_travel_details') {
     const missing: string[] = [];
@@ -1254,7 +1268,8 @@ Do NOT ask about travel details yet. Only ask for the holiday type.`;
     task = `Ask for ONLY these missing travel details: ${missing.length ? missing.join(', ') : 'none - all collected'}.
 ALREADY COLLECTED - DO NOT ASK AGAIN: ${collected}.
 If the customer asks a travel question (visa, weather, currency, etc.) -> briefly answer it, THEN re-ask the missing details in the same reply.
-If the customer seems confused or off-topic -> gently redirect and re-ask the missing details.`;
+If the customer seems confused or off-topic -> gently redirect and re-ask the missing details.
+Keep it conversational, like a real travel consultant typing on WhatsApp.`;
 
   } else if (stage === 'show_packages') {
     if (intent === 'flights') {
@@ -1274,7 +1289,7 @@ Option 2: 1-Stop Flight
 Highlights: cheaper option, [layover duration] layover at [hub]
 
 End with:
-Would you like to:
+If you'd like, I can help with:
 Get Flight Details | Customise Flights | Arrange Callback
 Use realistic INR pricing only. Never mention USD or $.`;
 
@@ -1294,7 +1309,7 @@ Highlights: [3-4 key amenities or nearby attractions]
 (repeat for all 3 hotels)
 
 End with:
-Would you like to:
+If you'd like, I can help with:
 Get Hotel Details | Customise Hotels | Arrange Callback
 Use realistic INR pricing only. Never mention USD or $.`;
 
@@ -1314,7 +1329,7 @@ ${hotelPref} Hotels | ${nights} Nights / ${String(parseInt(nights, 10) + 1)} Day
 Highlights: [5 specific sightseeing/activity highlights for ${dest}]
 
 End with:
-Would you like to:
+If you'd like, I can help with:
 1. Select an option  2. Get Day-wise Itinerary  3. Modify This Plan  4. Arrange Callback
 Use realistic INR pricing. Never mention USD or $.`;
 
@@ -1342,23 +1357,26 @@ Package 3: Luxury Experience
 Highlights: [5 specific highlights for ${dest}]
 
 End with:
-Would you like to:
+If you'd like, I can help with:
 Get Package Details | Customise Holiday | Arrange Callback
 Use realistic INR pricing only. Never mention USD or $.`;
     }
 
   } else if (stage === 'collect_lead') {
-    task = `Ask the customer for their Full Name, Phone Number, and Preferred Callback Time in one friendly message.
+    task = `Ask the customer for the remaining lead details in one warm, natural message.
+Required fields are only: Full Name, Phone Number, and Preferred Callback Time.
 Format example: "Rahul, +91 9876543210, Today at 5 PM"
 Do NOT ask for travel details, they are already collected.
 Already have: ${collected}.
-Tell them our travel expert will call at their preferred time.`;
+Tell them our travel expert will call at their preferred time.
+Do not sound like a form or checklist unless some details are still missing.`;
 
   } else if (stage === 'ask_callback') {
     task = `Ask ONLY for the customer's preferred callback time.
 DO NOT ask for name or phone - those are already collected.
 Already have: ${collected}.
-Tell them a travel expert will call them at their preferred time.`;
+Tell them a travel expert will call them at their preferred time.
+Keep it short and natural.`;
 
   } else if (stage === 'confirmed') {
     const name = slots?.name ? `, ${slots.name}` : '';
@@ -1407,17 +1425,20 @@ FORMATTING RULES (mandatory):
 - Friendly emojis are encouraged
 - INR only for all pricing - never USD or $
 - Keep reply concise and on-topic for the current stage
+- Sound like a real travel consultant, not a chatbot or menu system
+- Never say "I am an AI", "travel assistant bot", or anything mechanical unless the customer directly asks
+- Use the customer's latest message plus chat history before asking any follow-up question
 `.trim();
 }
 
 export function getGreetingIntroText(customerName?: string | null): string {
   const namePart = customerName ? `, ${customerName}` : '';
-  return `Hi${namePart}! I am *SINI* from Trav AI.`;
+  return `Hi${namePart}! I'm *SINI* from Traventions.`;
 }
 
 export function getGreetingMenuText(_customerName?: string | null): string {
   return (
-    'How may I assist you today?\n\n' +
+    'Tell me what kind of trip you have in mind, and I’ll help from there.\n\n' +
     '1. Plan a Holiday\n' +
     '2. Flights\n' +
     '3. Hotels'
