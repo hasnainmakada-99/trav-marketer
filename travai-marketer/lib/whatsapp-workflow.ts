@@ -288,6 +288,16 @@ const CALLBACK_PHRASES = [
   'i want to speak', 'want callback', 'want a callback', 'need callback',
 ];
 
+function normalizeTravellerValue(input: string): string {
+  return String(input || '')
+    .trim()
+    .replace(/\bwomens?\b/gi, 'women')
+    .replace(/\blad(?:y|ies)\b/gi, 'ladies')
+    .replace(/\bmens?\b/gi, 'men')
+    .replace(/\bguests?\b/gi, 'guests')
+    .replace(/\s+/g, ' ');
+}
+
 // Try to parse comma-separated inputs:
 // Travel: "2 Adults, July, Bangalore, 5 Nights"
 // Lead:   "Sini, +91 9876543210, sini@gmail.com"
@@ -298,7 +308,7 @@ function tryParseCommaFormat(raw: string, intent: WorkflowIntent, existingSlots:
   const slots: WorkflowSlotMap = {};
   const monthRx = /^(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*(\s+\d{4})?$/i;
   const nightsRx = /^(\d+)\s*nights?$/i;
-  const travellersRx = /^(\d+)\s*(adults?|children|kids?|pax|persons?)/i;
+  const travellersRx = /^(\d+)\s*(adults?|children|kids?|pax|persons?|people|guests?|lad(?:y|ies)|wom[ae]n|womens?|m[ae]n|couples?)/i;
   const dateRx = /\d{1,2}(?:st|nd|rd|th)?\s+\w+|\w+\s+\d{1,2}(?:st|nd|rd|th)?/i;
   const hotelRx = /\d\s*star\s*(hotel)?|luxury|premium/i;
   const emailRx = /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i;
@@ -323,7 +333,7 @@ function tryParseCommaFormat(raw: string, intent: WorkflowIntent, existingSlots:
       const m = lp.match(/^(\d+)/);
       if (m) slots.nights = m[1];
     } else if (travellersRx.test(lp)) {
-      travellersAccum.push(part);
+      travellersAccum.push(normalizeTravellerValue(part));
     } else if (hotelRx.test(lp)) {
       slots.hotel_preference = lp.replace(/\s*hotels?\s*/g, '').trim();
     } else if (!slots.travel_time && dateRx.test(part) && /\d/.test(part)) {
@@ -469,19 +479,19 @@ function parseGeneralSlots(
 
   // Travellers
   const travFull = raw.match(
-    /\b(\d+\s*adults?\s*(?:,?\s*(?:and\s+)?\d+\s*(?:children|kids?|child))?)\b/i
+    /\b(\d+\s*(?:adults?|children|kids?|child|pax|persons?|people|guests?|lad(?:y|ies)|wom[ae]n|womens?|m[ae]n)(?:\s*,?\s*(?:and\s+)?\d+\s*(?:children|kids?|child))?)\b/i
   );
   if (travFull) {
-    slots.travellers = travFull[1].trim();
+    slots.travellers = normalizeTravellerValue(travFull[1]);
   } else {
     const travellers = pick(
-      /\b(?:travellers|travelers|traveller count|pax|passengers)\s*[:\-]?\s*([a-zA-Z0-9 ,/+]{1,30})/i,
+      /\b(?:travellers|travelers|traveller count|pax|passengers|guests?)\s*[:\-]?\s*([a-zA-Z0-9 ,/+]{1,30})/i,
       raw
     );
-    if (travellers) slots.travellers = travellers;
+    if (travellers) slots.travellers = normalizeTravellerValue(travellers);
     else {
-      const pax = pick(/\b(\d+)\s*(?:pax|passengers?|adults?)\b/i, raw);
-      if (pax) slots.travellers = pax;
+      const pax = pick(/\b(\d+)\s*(?:pax|passengers?|adults?|people|guests?|lad(?:y|ies)|wom[ae]n|womens?|m[ae]n|couples?)\b/i, raw);
+      if (pax) slots.travellers = normalizeTravellerValue(pax);
     }
   }
 
