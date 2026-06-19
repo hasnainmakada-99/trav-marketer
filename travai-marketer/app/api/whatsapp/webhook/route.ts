@@ -8,7 +8,6 @@ import {
 } from '@/lib/whatsapp';
 import {
   sendYCloudTextMessage,
-  sendYCloudImageMessage,
   sendYCloudReplyButtonsMessage,
   showYCloudTypingIndicator,
 } from '@/lib/whatsapp-ycloud';
@@ -296,74 +295,61 @@ async function sendYCloudGreetingExperience(params: {
   const imageUrl = getGreetingImageUrl(params.requestUrl);
   const introText = getGreetingIntroText(params.customerName || null);
   const menuText = getGreetingMenuText(params.customerName || null);
-  let introMessageId: string | null = null;
-  let introMessageType: 'image' | 'text' = 'image';
+  const combinedText = `${introText}\n\n${menuText}`;
 
-  const imageResult = await sendYCloudImageMessage({
+  const interactiveWithImage = await sendYCloudReplyButtonsMessage({
     apiKey,
     fromPhoneE164: fromPhone,
     toPhone: params.phone,
-    imageUrl,
-    caption: introText,
-  });
-
-  if (imageResult.success) {
-    introMessageId = imageResult.messageId || null;
-  } else {
-    introMessageType = 'text';
-    const fallbackIntro = await sendYCloudTextMessage({
-      apiKey,
-      fromPhoneE164: fromPhone,
-      toPhone: params.phone,
-      message: introText,
-    });
-    if (!fallbackIntro.success) {
-      throw new Error(
-        fallbackIntro.error ||
-          imageResult.error ||
-          'Failed to send greeting intro via YCloud'
-      );
-    }
-    introMessageId = fallbackIntro.messageId || null;
-  }
-
-  const menuResult = await sendYCloudReplyButtonsMessage({
-    apiKey,
-    fromPhoneE164: fromPhone,
-    toPhone: params.phone,
-    bodyText: menuText,
+    bodyText: combinedText,
     buttons: [...GREETING_BUTTONS],
+    headerImageUrl: imageUrl,
   });
-  if (menuResult.success) {
+  if (interactiveWithImage.success) {
     return {
-      introMessageId,
-      introMessageType,
-      introText,
-      menuMessageId: menuResult.messageId || null,
-      menuText,
+      messageId: interactiveWithImage.messageId || null,
+      messageText: combinedText,
       usedInteractiveButtons: true,
+      usedHeaderImage: true,
     };
   }
 
-  const fallbackMenu = await sendYCloudTextMessage({
+  const interactiveWithoutImage = await sendYCloudReplyButtonsMessage({
     apiKey,
     fromPhoneE164: fromPhone,
     toPhone: params.phone,
-    message: menuText,
+    bodyText: combinedText,
+    buttons: [...GREETING_BUTTONS],
   });
-  if (!fallbackMenu.success) {
+  if (interactiveWithoutImage.success) {
+    return {
+      messageId: interactiveWithoutImage.messageId || null,
+      messageText: combinedText,
+      usedInteractiveButtons: true,
+      usedHeaderImage: false,
+    };
+  }
+
+  const fallbackText = await sendYCloudTextMessage({
+    apiKey,
+    fromPhoneE164: fromPhone,
+    toPhone: params.phone,
+    message: combinedText,
+  });
+  if (!fallbackText.success) {
     throw new Error(
-      fallbackMenu.error || menuResult.error || 'Failed to send greeting interactive card via YCloud'
+      fallbackText.error ||
+        interactiveWithoutImage.error ||
+        interactiveWithImage.error ||
+        'Failed to send greeting interactive card via YCloud'
     );
   }
 
   return {
-    introMessageId,
-    introMessageType,
-    introText,
-    menuMessageId: fallbackMenu.messageId || null,
-    menuText,
+    messageId: fallbackText.messageId || null,
+    messageText: combinedText,
     usedInteractiveButtons: false,
+    usedHeaderImage: false,
   };
 }
 
@@ -1003,8 +989,8 @@ async function generateAndSendResponse(
       | { businessName?: string; openaiSystemPrompt?: string }
       | undefined;
     if (isGreetingMessage(correctedText)) {
-      const greetingMenu = getGreetingMenuText(customer.name || null);
-      const priorGreeting = normalizeTextForDedupe(greetingMenu);
+      const greetingText = `${getGreetingIntroText(customer.name || null)}\n\n${getGreetingMenuText(customer.name || null)}`;
+      const priorGreeting = normalizeTextForDedupe(greetingText);
       if (
         recentAiText === priorGreeting &&
         Number.isFinite(recentAiTs) &&
@@ -1021,7 +1007,7 @@ async function generateAndSendResponse(
       }).catch(() => null);
 
       if (!greetingSendResult) {
-        const fallbackText = `${getGreetingIntroText(customer.name || null)}\n\n${greetingMenu}`;
+        const fallbackText = greetingText;
         const fallbackResult = await sendAutoReply({ phone, message: fallbackText }).catch(() => ({
           success: false,
           messageId: null,
@@ -1057,29 +1043,20 @@ async function generateAndSendResponse(
         customerId: customer.$id,
         phone: phone,
         role: 'assistant',
-        message: greetingSendResult.introText,
-        messageType: greetingSendResult.introMessageType,
-        sentBy: 'ai',
-        metaMessageId: greetingSendResult.introMessageId || null,
-        deliveryStatus: greetingSendResult.introMessageId ? 'sent' : 'failed',
-        createdAt: new Date().toISOString(),
-      });
-
-      await createDocument('conversations', {
-        teamId: resolvedTeamId,
-        customerId: customer.$id,
-        phone: phone,
-        role: 'assistant',
-        message: greetingSendResult.menuText,
+        message: greetingSendResult.messageText,
         messageType: greetingSendResult.usedInteractiveButtons ? 'interactive' : 'text',
         sentBy: 'ai',
-        metaMessageId: greetingSendResult.menuMessageId || null,
-        deliveryStatus: greetingSendResult.menuMessageId ? 'sent' : 'failed',
+        metaMessageId: greetingSendResult.messageId || null,
+        deliveryStatus: greetingSendResult.messageId ? 'sent' : 'failed',
         createdAt: new Date().toISOString(),
       });
       console.log(
         `[OK] Greeting sent to ${phone} via ycloud${
-          greetingSendResult.usedInteractiveButtons ? ' (interactive)' : ' (fallback text menu)'
+          greetingSendResult.usedInteractiveButtons
+            ? greetingSendResult.usedHeaderImage
+              ? ' (single interactive card with image)'
+              : ' (single interactive card without image)'
+            : ' (fallback text)'
         }`
       );
       await saveLead({
