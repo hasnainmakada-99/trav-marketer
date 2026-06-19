@@ -646,15 +646,21 @@ export function isQuestionLike(message: string): boolean {
 }
 
 function findLockedIntentFromHistory(historyMessages: string[]): WorkflowIntent | null {
+  let fallbackIntent: WorkflowIntent | null = null;
   for (let i = historyMessages.length - 1; i >= 0; i--) {
     const msg = historyMessages[i] || '';
     // A greeting marks the start of a new session â€” stop scanning here so old
     // session messages cannot bleed their intent into the current session.
     if (isGreetingLike(msg)) break;
     const intent = detectWorkflowIntent(msg);
-    if (intent !== 'unknown') return intent;
+    if (intent === 'unknown') continue;
+    if (intent === 'callback_request') {
+      fallbackIntent = fallbackIntent || intent;
+      continue;
+    }
+    return intent;
   }
-  return null;
+  return fallbackIntent;
 }
 
 // Returns the index in historyMessages from which to START parsing slots.
@@ -840,10 +846,10 @@ export function resolveWorkflowState(args: {
     const msgL = normalize(msg);
     if (/^[123]$/.test(msg) ||
         /\b(budget|premium|luxury|package [123]|option [123]|deal [123])\b/i.test(msg) ||
-        /\b(get package|get detail|package detail)\b/i.test(msg) ||
+        /\b(get package|get detail|package detail|get flight details?|flight details?|get hotel details?|hotel details?)\b/i.test(msg) ||
         /\b(itinerary|day wise|day-wise|day by day)\b/i.test(msg)) {
       slots.post_package_action = 'get_details';
-    } else if (/\b(customis|customiz|modify|edit plan|change plan)\b/i.test(msgL)) {
+    } else if (/\b(customis|customiz|modify|edit plan|change plan|customise flights?|customize flights?|customise hotels?|customize hotels?)\b/i.test(msgL)) {
       slots.post_package_action = 'customize';
     } else if (/\b(callback|call me|call back|arrange call)\b/i.test(msgL)) {
       slots.post_package_action = 'arrange_callback';
@@ -1412,7 +1418,7 @@ export function getGreetingMenuText(_customerName?: string | null): string {
 export function buildLeadNotes(intent: WorkflowIntent, slots: WorkflowSlotMap): string {
   const parts: string[] = [`Source: WhatsApp AI`, `Intent: ${intent.replace('_', ' ')}`];
   if (slots.destination) parts.push(`Destination: ${slots.destination}`);
-  if (slots.from_city && slots.to_city) parts.push(`Route: ${slots.from_city} â†’ ${slots.to_city}`);
+  if (slots.from_city && slots.to_city) parts.push(`Route: ${slots.from_city} -> ${slots.to_city}`);
   if (slots.travellers) parts.push(`Travellers: ${slots.travellers}`);
   if (slots.travel_time) parts.push(`Travel Date: ${slots.travel_time}`);
   if (slots.departure_city) parts.push(`Departure City: ${slots.departure_city}`);
