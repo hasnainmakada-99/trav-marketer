@@ -98,9 +98,9 @@ function isHardOffTopicInput(message: string, workflowIntent: WorkflowIntent): b
 function buildOffTopicReply(name?: string | null): string {
   const prefix = name ? `${name.split(' ')[0]}, ` : '';
   return (
-    `😊 ${prefix}I can help only with travel planning and bookings.\n\n` +
+    `${prefix}I can help only with travel planning and bookings.\n\n` +
     `Please choose one option to continue:\n\n` +
-    `1️⃣ Plan a Holiday\n2️⃣ Flights\n3️⃣ Hotels`
+    `1. Plan a Holiday\n2. Flights\n3. Hotels`
   );
 }
 

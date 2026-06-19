@@ -903,20 +903,20 @@ export function resolveWorkflowState(args: {
 // â”€â”€â”€ reply builders â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const DESTINATION_TAGLINES: Record<string, string> = {
-  thailand: 'perfect for beaches, nightlife & relaxation ðŸ˜Š',
-  bali: 'a magical island paradise ðŸŒ´',
-  kashmir: 'truly paradise on earth â„ï¸ðŸ”ï¸',
-  dubai: 'a world of luxury and adventure ðŸ™ï¸',
-  maldives: 'perfect for beaches and crystal waters ðŸ–ï¸',
-  singapore: 'a vibrant city of culture and food ðŸŒ†',
-  europe: 'a dream destination for history lovers ðŸ°',
-  kerala: 'God\'s own country ðŸŒ¿',
-  goa: 'India\'s beach paradise ðŸ–ï¸',
+  thailand: 'perfect for beaches, nightlife, and relaxation',
+  bali: 'a magical island paradise',
+  kashmir: 'truly paradise on earth',
+  dubai: 'a world of luxury and adventure',
+  maldives: 'perfect for beaches and crystal waters',
+  singapore: 'a vibrant city of culture and food',
+  europe: 'a dream destination for history lovers',
+  kerala: 'God\'s own country',
+  goa: 'India\'s beach paradise',
 };
 
 function getDestinationTagline(destination: string): string {
   const key = normalize(destination).split(' ')[0];
-  return DESTINATION_TAGLINES[key] || 'a wonderful destination ðŸ˜Š';
+  return DESTINATION_TAGLINES[key] || 'a wonderful destination';
 }
 
 export function buildWorkflowReply(state: WorkflowState): string | null {
@@ -927,8 +927,8 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
   // â”€â”€ ask_destination â”€â”€
   if (stage === 'ask_destination') {
     return (
-      'ðŸŒ Amazing!\n\n' +
-      'Which destination are you planning to visit? ðŸ˜Š\n\n' +
+      'Amazing!\n\n' +
+      'Which destination are you planning to visit?\n\n' +
       'Example: Dubai, Bali, Kashmir, Thailand'
     );
   }
@@ -938,10 +938,10 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
     const dest = slots.destination || 'your chosen destination';
     const tagline = getDestinationTagline(dest);
     return (
-      `âœ¨ Great choice! ${dest} is ${tagline}\n\n` +
-      'How would you like to plan your holiday? ðŸ˜Š\n\n' +
-      'ðŸŒŸ Exclusive Holiday Deals\n' +
-      'âœ¨ Personalized Holidays'
+      `Great choice! ${dest} is ${tagline}.\n\n` +
+      'How would you like to plan your holiday?\n\n' +
+      'Exclusive Holiday Deals\n' +
+      'Personalized Holidays'
     );
   }
 
@@ -951,53 +951,53 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
       if (slots.holiday_type === 'personalized') {
         const dest = slots.destination || 'your destination';
         return (
-          `âœ¨ Wonderful! Let's create your personalized ${dest} holiday ðŸ˜Š\n\n` +
+          `Wonderful! Let's create your personalized ${dest} holiday.\n\n` +
           'Please share your travel preferences:\n\n' +
-          (!slots.travellers ? 'ðŸ‘¥ Number of Travellers\n' : '') +
-          (!slots.travel_time ? 'ðŸ“… Travel Month or Dates\n' : '') +
-          (!slots.departure_city ? 'ðŸ™ Departure City\n' : '') +
-          (!slots.nights ? 'ðŸŒƒ Number of Nights\n' : '') +
-          (!slots.hotel_preference ? 'ðŸ¨ Hotel Preference (3 / 4 / 5 Star)\n' : '') +
+          (!slots.travellers ? 'Number of Travellers\n' : '') +
+          (!slots.travel_time ? 'Travel Month or Dates\n' : '') +
+          (!slots.departure_city ? 'Departure City\n' : '') +
+          (!slots.nights ? 'Number of Nights\n' : '') +
+          (!slots.hotel_preference ? 'Hotel Preference (3 / 4 / 5 Star)\n' : '') +
           '\nExample:\n2 Adults, 10th July, Delhi, 5 Nights, 4 Star Hotels'
         );
       }
       // exclusive
       return (
-        'âœ¨ Perfect! Please share:\n\n' +
-        (!slots.travellers ? 'ðŸ‘¥ Number of Travellers\n' : '') +
-        (!slots.travel_time ? 'ðŸ“… Travel Month or Dates\n' : '') +
-        (!slots.departure_city ? 'ðŸ™ Departure City\n' : '') +
-        (!slots.nights ? 'ðŸŒƒ Number of Nights\n' : '') +
+        'Perfect! Please share:\n\n' +
+        (!slots.travellers ? 'Number of Travellers\n' : '') +
+        (!slots.travel_time ? 'Travel Month or Dates\n' : '') +
+        (!slots.departure_city ? 'Departure City\n' : '') +
+        (!slots.nights ? 'Number of Nights\n' : '') +
         '\nExample:\n2 Adults, July, Bangalore, 5 Nights'
       );
     }
 
     if (intent === 'flights') {
       return (
-        'âœˆï¸ Sure! Please share:\n\n' +
-        (!slots.from_city ? 'ðŸ›« From City\n' : '') +
-        (!slots.to_city ? 'ðŸ›¬ To City\n' : '') +
-        (!slots.travel_time ? 'ðŸ“… Travel Date\n' : '') +
-        (!slots.travellers ? 'ðŸ‘¥ Number of Travellers\n' : '') +
+        'Sure! Please share:\n\n' +
+        (!slots.from_city ? 'From City\n' : '') +
+        (!slots.to_city ? 'To City\n' : '') +
+        (!slots.travel_time ? 'Travel Date\n' : '') +
+        (!slots.travellers ? 'Number of Travellers\n' : '') +
         '\nExample:\nDelhi to Mumbai, 25th June, 2 Adults'
       );
     }
 
     if (intent === 'hotels') {
       return (
-        'ðŸ¨ Amazing! Please share:\n\n' +
-        (!slots.destination ? 'ðŸ“ Destination\n' : '') +
-        (!slots.travellers ? 'ðŸ‘¥ Number of Travellers\n' : '') +
-        (!slots.travel_time ? 'ðŸ“… Travel Month or Dates\n' : '') +
-        (!slots.nights ? 'ðŸŒƒ Number of Nights\n' : '') +
+        'Amazing! Please share:\n\n' +
+        (!slots.destination ? 'Destination\n' : '') +
+        (!slots.travellers ? 'Number of Travellers\n' : '') +
+        (!slots.travel_time ? 'Travel Month or Dates\n' : '') +
+        (!slots.nights ? 'Number of Nights\n' : '') +
         '\nExample:\nDubai, 2 Adults, July, 4 Nights'
       );
     }
 
     // Other intents (should not reach here under current logic, but safe fallback)
     return (
-      'âœ¨ Sure! Please share the following details:\n\n' +
-      'ðŸ‘¤ Full Name\nðŸ“ž Contact Number\nðŸ•’ Preferred Callback Time\n\n' +
+      'Sure! Please share the following details:\n\n' +
+      'Full Name\nContact Number\nPreferred Callback Time\n\n' +
       'Example: Sini, +91 9876543210, Tomorrow at 5 PM'
     );
   }
@@ -1050,8 +1050,8 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
   if (stage === 'ask_callback') {
     const name = slots.name ? `, ${slots.name}` : '';
     return (
-      `âœ¨ Thank you${name}! Your details have been received ðŸ˜Š\n\n` +
-      'ðŸ“ž When would you like us to call you?\n\n' +
+      `Thank you${name}! Your details have been received.\n\n` +
+      'When would you like us to call you?\n\n' +
       'Example: Today at 5 PM  /  Tomorrow Morning'
     );
   }
