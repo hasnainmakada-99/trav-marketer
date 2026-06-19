@@ -1,11 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getCurrentUser } from '@/lib/appwrite-client';
 import { CRM_STATUS_META, CRM_STATUS_ORDER, type CrmLeadStatus } from '@/lib/crm';
 
 const TEAM_ID = process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
+const DASHBOARD_POLL_MS = 30_000;
 
 interface Stats {
   totalLeads: number;
@@ -46,10 +47,20 @@ function ago(ts?: string) {
 export default function DashboardPage() {
   const router = useRouter();
   const [user, setUser] = useState<{ name?: string; email?: string } | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState<Stats | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const loadStats = useCallback(async () => {
+  const loadStats = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent ?? false;
+    if (!silent) {
+      setRefreshing(true);
+    }
+    if (!stats) {
+      setStatsLoading(true);
+    }
     try {
       const response = await fetch(`/api/dashboard/stats?teamId=${TEAM_ID}`, { cache: 'no-store' });
       if (response.ok) {
@@ -57,8 +68,13 @@ export default function DashboardPage() {
       }
     } catch {
       // keep existing dashboard state if refresh fails
+    } finally {
+      setStatsLoading(false);
+      if (!silent) {
+        setRefreshing(false);
+      }
     }
-  }, []);
+  }, [stats]);
 
   useEffect(() => {
     const init = async () => {
@@ -69,15 +85,32 @@ export default function DashboardPage() {
           return;
         }
         setUser(currentUser as { name?: string; email?: string });
-        await loadStats();
+        void loadStats();
       } catch {
         router.push('/login');
       } finally {
-        setLoading(false);
+        setAuthLoading(false);
       }
     };
-    init();
+    void init();
   }, [router, loadStats]);
+
+  useEffect(() => {
+    const startPolling = () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = setInterval(() => {
+        if (document.visibilityState === 'hidden') return;
+        void loadStats({ silent: true });
+      }, DASHBOARD_POLL_MS);
+    };
+
+    startPolling();
+    document.addEventListener('visibilitychange', startPolling);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      document.removeEventListener('visibilitychange', startPolling);
+    };
+  }, [loadStats]);
 
   const greeting = useMemo(() => {
     const hour = new Date().getHours();
@@ -89,28 +122,28 @@ export default function DashboardPage() {
   const statCards = [
     {
       label: 'Total Leads',
-      value: stats?.totalLeads ?? '-',
+      value: stats?.totalLeads ?? (statsLoading ? '...' : 0),
       sub: 'All live CRM leads',
       href: '/dashboard/leads',
       panel: 'from-sky-500 to-cyan-500',
     },
     {
       label: 'Active Chats',
-      value: stats?.activeConversations ?? '-',
+      value: stats?.activeConversations ?? (statsLoading ? '...' : 0),
       sub: 'Customer messages in the last 24h',
       href: '/dashboard/whatsapp',
       panel: 'from-emerald-500 to-teal-500',
     },
     {
       label: 'Campaigns Sent',
-      value: stats?.campaignsSent ?? '-',
+      value: stats?.campaignsSent ?? (statsLoading ? '...' : 0),
       sub: 'Broadcasts already delivered',
       href: '/dashboard/campaigns',
       panel: 'from-amber-500 to-orange-500',
     },
     {
       label: 'Reviews Replied',
-      value: stats?.reviewsReplied ?? '-',
+      value: stats?.reviewsReplied ?? (statsLoading ? '...' : 0),
       sub: 'Google reviews with AI reply',
       href: '/dashboard/gbp',
       panel: 'from-violet-500 to-fuchsia-500',
@@ -148,7 +181,7 @@ export default function DashboardPage() {
     ? CRM_STATUS_ORDER.reduce((sum, status) => sum + (stats.leadsByStatus?.[status] || 0), 0)
     : 0;
 
-  if (loading) {
+  if (authLoading) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center px-4">
         <div className="text-center">
@@ -180,10 +213,10 @@ export default function DashboardPage() {
               Open GBP workspace
             </button>
             <button
-              onClick={loadStats}
+              onClick={() => void loadStats()}
               className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/20"
             >
-              Refresh dashboard
+              {refreshing ? 'Refreshing...' : 'Refresh dashboard'}
             </button>
           </div>
         </div>
@@ -191,12 +224,16 @@ export default function DashboardPage() {
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
           <div className="rounded-[28px] border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/60">
             <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Live sync</p>
-            <p className="mt-3 text-3xl font-semibold text-slate-950">{stats?.activeConversations ?? 0}</p>
+            <p className="mt-3 text-3xl font-semibold text-slate-950">
+              {stats?.activeConversations ?? (statsLoading ? '...' : 0)}
+            </p>
             <p className="mt-1 text-sm text-slate-500">Active WhatsApp chats that may need a fast reply.</p>
           </div>
           <div className="rounded-[28px] border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/60">
             <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">GBP focus</p>
-            <p className="mt-3 text-3xl font-semibold text-slate-950">{stats?.reviewsReplied ?? 0}</p>
+            <p className="mt-3 text-3xl font-semibold text-slate-950">
+              {stats?.reviewsReplied ?? (statsLoading ? '...' : 0)}
+            </p>
             <p className="mt-1 text-sm text-slate-500">Reviews already answered with AI support and synced to Google.</p>
           </div>
         </div>

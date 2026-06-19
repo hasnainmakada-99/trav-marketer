@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
 import { listDocuments } from '@/lib/appwrite';
-import { syncLeadStatusesFromConversations } from '@/lib/crm-sync';
 import {
   CRM_STATUS_ORDER,
   buildPhoneVariants,
@@ -19,17 +18,9 @@ export async function GET(request: NextRequest) {
     const teamId = searchParams.get('teamId') || TEAM_ID;
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-    await syncLeadStatusesFromConversations(teamId).catch(() => null);
-
-    const [leadsAll, activeConvos, campaignsSent, reviewsReplied, recentConvos, recentLeads, customers] =
+    const [leadsAll, campaignsSent, reviewsReplied, recentConvos, customers] =
       await Promise.allSettled([
         listDocuments('leads', [Query.equal('teamId', teamId), Query.limit(500)]),
-        listDocuments('conversations', [
-          Query.equal('teamId', teamId),
-          Query.equal('sentBy', 'customer'),
-          Query.greaterThan('$createdAt', since24h),
-          Query.limit(1),
-        ]),
         listDocuments('campaigns', [
           Query.equal('teamId', teamId),
           Query.equal('status', 'sent'),
@@ -43,12 +34,7 @@ export async function GET(request: NextRequest) {
         listDocuments('conversations', [
           Query.equal('teamId', teamId),
           Query.orderDesc('$createdAt'),
-          Query.limit(5),
-        ]),
-        listDocuments('leads', [
-          Query.equal('teamId', teamId),
-          Query.orderDesc('$createdAt'),
-          Query.limit(5),
+          Query.limit(300),
         ]),
         listDocuments('customers', [Query.equal('teamId', teamId), Query.limit(500)]),
       ]);
@@ -101,7 +87,7 @@ export async function GET(request: NextRequest) {
     }));
     const leadsByStatus = buildStatusCounts(normalizedLeads);
 
-    const recentLeadDocs = normalizedLeads
+    const recentLeadDocs = [...normalizedLeads]
       .sort(
         (a, b) =>
           new Date(b.updatedAt || b.createdAt || b.$createdAt || 0).getTime() -
@@ -118,13 +104,46 @@ export async function GET(request: NextRequest) {
           'Unknown',
       }));
 
-    const recentConversationDocs = ((get(recentConvos).documents || []) as Array<{
+    const conversationFeed = (get(recentConvos).documents || []) as Array<{
       $id: string;
       phone?: string;
       message?: string;
+      role?: 'user' | 'assistant';
+      sentBy?: 'customer' | 'ai' | 'staff';
       createdAt?: string;
       $createdAt?: string;
-    }>).map((conversation) => ({
+    }>;
+
+    const latestConversationByPhone = new Map<
+      string,
+      {
+        phone?: string;
+        role?: 'user' | 'assistant';
+        sentBy?: 'customer' | 'ai' | 'staff';
+        createdAt?: string;
+        $createdAt?: string;
+      }
+    >();
+
+    for (const conversation of conversationFeed) {
+      const normalizedPhone = normalizePhoneForMatch(conversation.phone);
+      if (!normalizedPhone || latestConversationByPhone.has(normalizedPhone)) {
+        continue;
+      }
+      latestConversationByPhone.set(normalizedPhone, conversation);
+    }
+
+    const activeConversationCount = Array.from(latestConversationByPhone.values()).filter(
+      (conversation) => {
+        const timestamp = conversation.createdAt || conversation.$createdAt || '';
+        if (!timestamp || timestamp < since24h) {
+          return false;
+        }
+        return conversation.role === 'user' || conversation.sentBy === 'customer';
+      }
+    ).length;
+
+    const recentConversationDocs = conversationFeed.slice(0, 5).map((conversation) => ({
       ...conversation,
       name: getDisplayName({
         customerName: customerByPhone.get(buildPhoneVariants(conversation.phone)[0] || '') || null,
@@ -134,14 +153,14 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       totalLeads: normalizedLeads.length,
-      activeConversations: get(activeConvos).total ?? 0,
+      activeConversations: activeConversationCount,
       campaignsSent: get(campaignsSent).total ?? 0,
       reviewsReplied: get(reviewsReplied).total ?? 0,
       leadsByStatus,
       statusOrder: CRM_STATUS_ORDER,
       recentConversations: recentConversationDocs,
       recentLeads: recentLeadDocs,
-    });
+    }, { headers: { 'Cache-Control': 'private, max-age=10, stale-while-revalidate=20' } });
   } catch (err) {
     console.error('[Dashboard Stats] Error:', err);
     return NextResponse.json({ error: 'Failed to load stats' }, { status: 500 });

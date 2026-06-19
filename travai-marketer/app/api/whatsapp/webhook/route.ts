@@ -8,6 +8,7 @@ import {
 } from '@/lib/whatsapp';
 import {
   sendYCloudTextMessage,
+  sendYCloudImageMessage,
   sendYCloudReplyButtonsMessage,
   showYCloudTypingIndicator,
 } from '@/lib/whatsapp-ycloud';
@@ -31,6 +32,7 @@ import {
   sanitizeWebsiteUrlForBot,
 } from '@/lib/whatsapp-bot-routing';
 import {
+  getGreetingIntroText,
   getGreetingMenuText,
   PRIMARY_QUICK_MENU_OPTIONS,
   resolveWorkflowState,
@@ -65,7 +67,6 @@ const GREETING_BUTTONS = [
   { id: 'svc_2', title: PRIMARY_QUICK_MENU_OPTIONS[1] },
   { id: 'svc_3', title: PRIMARY_QUICK_MENU_OPTIONS[2] },
 ] as const;
-const GREETING_MENU_TEXT = getGreetingMenuText();
 const TRAVEL_SALES_INTENTS: WorkflowIntent[] = ['plan_holiday', 'flights', 'hotels'];
 const TRAVEL_KEYWORDS_REGEX =
   /\b(travel|trip|tour|holiday|holidays|package|packages|itinerary|destination|visa|forex|insurance|airport transfer|transfer|hotel|hotels|stay|resort|flight|flights|ticket|fare|booking|callback)\b/i;
@@ -284,6 +285,7 @@ async function sendViaYCloud(params: {
 async function sendYCloudGreetingExperience(params: {
   phone: string;
   requestUrl: string;
+  customerName?: string | null;
 }) {
   const apiKey = (process.env.YCLOUD_API_KEY || '').trim();
   const fromPhone = (process.env.YCLOUD_WHATSAPP_FROM || '').trim();
@@ -292,20 +294,76 @@ async function sendYCloudGreetingExperience(params: {
   }
 
   const imageUrl = getGreetingImageUrl(params.requestUrl);
+  const introText = getGreetingIntroText(params.customerName || null);
+  const menuText = getGreetingMenuText(params.customerName || null);
+  let introMessageId: string | null = null;
+  let introMessageType: 'image' | 'text' = 'image';
+
+  const imageResult = await sendYCloudImageMessage({
+    apiKey,
+    fromPhoneE164: fromPhone,
+    toPhone: params.phone,
+    imageUrl,
+    caption: introText,
+  });
+
+  if (imageResult.success) {
+    introMessageId = imageResult.messageId || null;
+  } else {
+    introMessageType = 'text';
+    const fallbackIntro = await sendYCloudTextMessage({
+      apiKey,
+      fromPhoneE164: fromPhone,
+      toPhone: params.phone,
+      message: introText,
+    });
+    if (!fallbackIntro.success) {
+      throw new Error(
+        fallbackIntro.error ||
+          imageResult.error ||
+          'Failed to send greeting intro via YCloud'
+      );
+    }
+    introMessageId = fallbackIntro.messageId || null;
+  }
+
   const menuResult = await sendYCloudReplyButtonsMessage({
     apiKey,
     fromPhoneE164: fromPhone,
     toPhone: params.phone,
-    bodyText: GREETING_MENU_TEXT,
+    bodyText: menuText,
     buttons: [...GREETING_BUTTONS],
-    headerImageUrl: imageUrl,
   });
-  if (!menuResult.success) {
-    throw new Error(menuResult.error || 'Failed to send greeting interactive card via YCloud');
+  if (menuResult.success) {
+    return {
+      introMessageId,
+      introMessageType,
+      introText,
+      menuMessageId: menuResult.messageId || null,
+      menuText,
+      usedInteractiveButtons: true,
+    };
+  }
+
+  const fallbackMenu = await sendYCloudTextMessage({
+    apiKey,
+    fromPhoneE164: fromPhone,
+    toPhone: params.phone,
+    message: menuText,
+  });
+  if (!fallbackMenu.success) {
+    throw new Error(
+      fallbackMenu.error || menuResult.error || 'Failed to send greeting interactive card via YCloud'
+    );
   }
 
   return {
-    menuMessageId: menuResult.messageId || null,
+    introMessageId,
+    introMessageType,
+    introText,
+    menuMessageId: fallbackMenu.messageId || null,
+    menuText,
+    usedInteractiveButtons: false,
   };
 }
 
@@ -956,23 +1014,74 @@ async function generateAndSendResponse(
         return;
       }
 
-      const greetingSendResult = await sendAutoReply({ phone, message: greetingMenu }).catch(() => ({ success: false, messageId: null, mode: 'unknown' }));
+      const greetingSendResult = await sendYCloudGreetingExperience({
+        phone,
+        requestUrl,
+        customerName: customer.name || null,
+      }).catch(() => null);
+
+      if (!greetingSendResult) {
+        const fallbackText = `${getGreetingIntroText(customer.name || null)}\n\n${greetingMenu}`;
+        const fallbackResult = await sendAutoReply({ phone, message: fallbackText }).catch(() => ({
+          success: false,
+          messageId: null,
+          mode: 'unknown',
+        }));
+
+        await createDocument('conversations', {
+          teamId: resolvedTeamId,
+          customerId: customer.$id,
+          phone: phone,
+          role: 'assistant',
+          message: fallbackText,
+          messageType: 'text',
+          sentBy: 'ai',
+          metaMessageId: (fallbackResult as { messageId?: string | null }).messageId || null,
+          deliveryStatus: fallbackResult.success ? 'sent' : 'failed',
+          createdAt: new Date().toISOString(),
+        });
+
+        await saveLead({
+          teamId: resolvedTeamId,
+          phone,
+          customer,
+          intent: 'greeting',
+          status: existingLead?.$id ? coerceLeadStatus(existingLead.status) : 'new_lead',
+          notes: existingLead?.notes || 'WhatsApp greeting received',
+        }).catch(() => {});
+        return;
+      }
 
       await createDocument('conversations', {
         teamId: resolvedTeamId,
         customerId: customer.$id,
         phone: phone,
         role: 'assistant',
-        message: greetingMenu,
-        messageType: 'text',
+        message: greetingSendResult.introText,
+        messageType: greetingSendResult.introMessageType,
         sentBy: 'ai',
-        metaMessageId: (greetingSendResult as { messageId?: string | null }).messageId || null,
-        deliveryStatus: greetingSendResult.success ? 'sent' : 'failed',
+        metaMessageId: greetingSendResult.introMessageId || null,
+        deliveryStatus: greetingSendResult.introMessageId ? 'sent' : 'failed',
         createdAt: new Date().toISOString(),
       });
-      if (greetingSendResult.success) {
-        console.log(`[OK] Greeting sent to ${phone} via ycloud`);
-      }
+
+      await createDocument('conversations', {
+        teamId: resolvedTeamId,
+        customerId: customer.$id,
+        phone: phone,
+        role: 'assistant',
+        message: greetingSendResult.menuText,
+        messageType: greetingSendResult.usedInteractiveButtons ? 'interactive' : 'text',
+        sentBy: 'ai',
+        metaMessageId: greetingSendResult.menuMessageId || null,
+        deliveryStatus: greetingSendResult.menuMessageId ? 'sent' : 'failed',
+        createdAt: new Date().toISOString(),
+      });
+      console.log(
+        `[OK] Greeting sent to ${phone} via ycloud${
+          greetingSendResult.usedInteractiveButtons ? ' (interactive)' : ' (fallback text menu)'
+        }`
+      );
       await saveLead({
         teamId: resolvedTeamId,
         phone,

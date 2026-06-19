@@ -181,6 +181,7 @@ export async function GET(request: NextRequest) {
         lastTimestamp: string;
         lastType: 'incoming' | 'outgoing';
         unreadCount: number;
+        awaitingReply: boolean;
         crmStatus: CrmLeadStatus;
         name: string;
         email: string | null;
@@ -206,16 +207,19 @@ export async function GET(request: NextRequest) {
           lastMessage: formatPreview(message.message, message.messageType),
           lastTimestamp: ts,
           lastType: isIncoming ? 'incoming' : 'outgoing',
-          unreadCount: isIncoming && message.deliveryStatus !== 'read' ? 1 : 0,
+          unreadCount: isIncoming ? 1 : 0,
+          awaitingReply: isIncoming,
         });
-      } else if (isIncoming && message.deliveryStatus !== 'read') {
+      } else if (existing.awaitingReply && isIncoming) {
         existing.unreadCount += 1;
+      } else if (!isIncoming) {
+        existing.awaitingReply = false;
       }
     }
 
-    const conversations = Array.from(byPhone.values()).sort(
-      (a, b) => new Date(b.lastTimestamp).getTime() - new Date(a.lastTimestamp).getTime()
-    );
+    const conversations = Array.from(byPhone.values())
+      .map(({ awaitingReply, ...conversation }) => conversation)
+      .sort((a, b) => new Date(b.lastTimestamp).getTime() - new Date(a.lastTimestamp).getTime());
 
     return NextResponse.json(
       {

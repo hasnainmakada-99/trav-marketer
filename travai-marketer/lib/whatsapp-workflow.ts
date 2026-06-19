@@ -1,4 +1,4 @@
-export type WorkflowIntent =
+﻿export type WorkflowIntent =
   | 'plan_holiday'
   | 'flights'
   | 'hotels'
@@ -18,7 +18,7 @@ export type WorkflowStage =
   | 'show_packages'          // deterministic (exclusive) or AI (personalized)
   | 'collect_lead'           // ask name + phone
   | 'ask_callback'           // ask preferred callback time
-  | 'confirmed'              // all done — save lead to CRM
+  | 'confirmed'              // all done â€” save lead to CRM
   | 'unknown';
 
 export const PRIMARY_QUICK_MENU_OPTIONS = [
@@ -60,7 +60,7 @@ export type WorkflowState = {
   leadShouldBeSaved: boolean;
 };
 
-// ─── helpers ────────────────────────────────────────────────────────────────
+// â”€â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function normalize(input: string) {
   return String(input || '').toLowerCase().trim().replace(/\s+/g, ' ');
@@ -84,7 +84,7 @@ function pick(regex: RegExp, text: string): string | null {
   return m[1].trim();
 }
 
-// ─── fuzzy / typo matching ───────────────────────────────────────────────────
+// â”€â”€â”€ fuzzy / typo matching â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // Levenshtein edit distance between two strings (optimised 1-row version)
 function levenshtein(a: string, b: string): number {
@@ -182,7 +182,7 @@ function autoCorrect(text: string): string {
 }
 
 function isGreetingLike(msg: string): boolean {
-  // Allow punctuation/emoji variants like "Hello!", "Hi 😊", "Good morning!!"
+  // Allow punctuation/emoji variants like "Hello!", "Hi ðŸ˜Š", "Good morning!!"
   // but do not treat longer intent-bearing sentences as pure greetings.
   const stripped = String(msg || '')
     .toLowerCase()
@@ -219,7 +219,7 @@ function detectPostPackageAction(raw: string): string | null {
     fuzzyAny(text, ['itinerary']) ||
     hasAny(text, ['day wise', 'day-wise', 'daywise', 'get day'])
   ) return 'get_itinerary';
-  if (hasAny(text, ['select an option', 'select option', '1️⃣', '2️⃣', '3️⃣'])) return 'get_details';
+  if (hasAny(text, ['select an option', 'select option', '1ï¸âƒ£', '2ï¸âƒ£', '3ï¸âƒ£'])) return 'get_details';
   if (
     fuzzyAny(text, ['modify', 'customize', 'customise']) ||
     hasAny(text, ['edit plan', 'change plan'])
@@ -326,7 +326,7 @@ function tryParseCommaFormat(raw: string, intent: WorkflowIntent, existingSlots:
     } else if (!slots.travel_time && dateRx.test(part) && /\d/.test(part)) {
       slots.travel_time = part;
     } else if (/^\d+$/.test(part.trim()) && !travellersAccum.length && !slots.travellers) {
-      // Standalone digit (e.g. "2") — treat as traveller count
+      // Standalone digit (e.g. "2") â€” treat as traveller count
       travellersAccum.push(part.trim());
     } else {
       unclassified.push(part);
@@ -345,10 +345,10 @@ function tryParseCommaFormat(raw: string, intent: WorkflowIntent, existingSlots:
     if (namePart) slots.name = namePart;
   }
 
-  // Remaining unclassified strings may be city names — apply blocklist
+  // Remaining unclassified strings may be city names â€” apply blocklist
   const safeCityPart = (candidate: string) => {
     const key = normalize(candidate).trim();
-    // Exclude parts that contain a month name — those are travel dates, not cities
+    // Exclude parts that contain a month name â€” those are travel dates, not cities
     if (containsMonthRx.test(candidate)) return false;
     if (/\d/.test(candidate)) return false;
     return /^[a-zA-Z\s.'-]{2,30}$/.test(candidate) && !NON_CITY_WORDS.has(key);
@@ -394,7 +394,7 @@ function parseGeneralSlots(
   const ppa = detectPostPackageAction(raw);
   if (ppa) slots.post_package_action = ppa;
 
-  // from → to for flights
+  // from â†’ to for flights
   const fromTo = raw.match(/\bfrom\s+([a-zA-Z .'-]+?)\s+to\s+([a-zA-Z .'-]+?)(?:\s|,|$)/i);
   if (fromTo?.[1] && fromTo?.[2]) {
     slots.from_city = fromTo[1].trim();
@@ -443,14 +443,14 @@ function parseGeneralSlots(
     }
   }
 
-  // Month/date extraction — keyword-prefixed
+  // Month/date extraction â€” keyword-prefixed
   const travelTime = pick(
     /\b(?:travel month|travel date|travel dates|date|on|in)\s*[:\-]?\s*([a-zA-Z0-9 ,/-]{3,40})/i,
     raw
   );
   if (travelTime) slots.travel_time = travelTime;
 
-  // Month/date extraction — standalone (e.g. "july", "10th July")
+  // Month/date extraction â€” standalone (e.g. "july", "10th July")
   if (!slots.travel_time) {
     const monthMatch = raw.match(
       /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)(?:\s+\d{4})?\b/i
@@ -490,7 +490,7 @@ function parseGeneralSlots(
   if (!slots.departure_city && slots.from_city) {
     slots.departure_city = slots.from_city;
   }
-  // "from [city]" pattern — catches "from Ahmedabad", "from Delhi" in holiday/hotel context
+  // "from [city]" pattern â€” catches "from Ahmedabad", "from Delhi" in holiday/hotel context
   if (!slots.departure_city && (intent === 'plan_holiday' || intent === 'hotels')) {
     const fromM = raw.match(/\bfrom\s+([a-zA-Z][a-zA-Z .'-]{1,28})(?=[\s,]|$)/i);
     if (fromM) {
@@ -512,7 +512,7 @@ function parseGeneralSlots(
   if (checkOut) slots.checkout = checkOut;
 
   const budget = pick(
-    /\b(?:budget|approx budget)\s*[:\-]?\s*(?:₹|inr)?\s*([0-9., ]+\s*[kKmM]?)\b/i,
+    /\b(?:budget|approx budget)\s*[:\-]?\s*(?:â‚¹|inr)?\s*([0-9., ]+\s*[kKmM]?)\b/i,
     raw
   );
   if (budget) slots.budget_inr = budget.toUpperCase().replace(/\s+/g, ' ');
@@ -547,7 +547,7 @@ function mergeSlots(base: WorkflowSlotMap, next: WorkflowSlotMap): WorkflowSlotM
   return merged;
 }
 
-// ─── stage resolution ────────────────────────────────────────────────────────
+// â”€â”€â”€ stage resolution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowStage {
   if (intent === 'unknown') return 'unknown';
@@ -559,7 +559,7 @@ function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowS
   }
 
   // If user explicitly requests a callback at ANY stage, skip travel collection
-  // and go straight to collecting contact info → callback time.
+  // and go straight to collecting contact info â†’ callback time.
   if (slots.post_package_action === 'arrange_callback') {
     const hasRequiredLead = Boolean(slots.name && slots.phone && slots.email);
     if (!hasRequiredLead) return 'collect_lead';
@@ -621,7 +621,7 @@ function resolveStage(intent: WorkflowIntent, slots: WorkflowSlotMap): WorkflowS
   return slots.callback_time ? 'confirmed' : 'ask_callback';
 }
 
-// ─── public API ─────────────────────────────────────────────────────────────
+// â”€â”€â”€ public API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function shouldResetState(message: string): boolean {
   const text = normalize(message);
@@ -645,7 +645,7 @@ export function isQuestionLike(message: string): boolean {
 function findLockedIntentFromHistory(historyMessages: string[]): WorkflowIntent | null {
   for (let i = historyMessages.length - 1; i >= 0; i--) {
     const msg = historyMessages[i] || '';
-    // A greeting marks the start of a new session — stop scanning here so old
+    // A greeting marks the start of a new session â€” stop scanning here so old
     // session messages cannot bleed their intent into the current session.
     if (isGreetingLike(msg)) break;
     const intent = detectWorkflowIntent(msg);
@@ -668,7 +668,7 @@ function findSlotStartIndex(historyMessages: string[], intent: WorkflowIntent): 
   }
 
   // Step 2: within session, find last explicit service selection for this intent.
-  // E.g. if user did Hotels → then switched to "Plan a Holiday", we start
+  // E.g. if user did Hotels â†’ then switched to "Plan a Holiday", we start
   // accumulating slots from the "Plan a Holiday" message, ignoring the Hotels part.
   for (let i = historyMessages.length - 1; i >= sessionStart; i--) {
     const msg = historyMessages[i];
@@ -755,13 +755,13 @@ export function resolveWorkflowState(args: {
 
   // Lead slots (name, phone, email, callback_time) require special scoping.
   // They must NOT be pulled from session history when the user has just triggered
-  // lead collection (by tapping Arrange Callback / Get Details) — old-session contact
+  // lead collection (by tapping Arrange Callback / Get Details) â€” old-session contact
   // info would otherwise skip the collect_lead stage entirely.
   // Strategy:
   //   1. Parse only travel/service slots from full session history.
   //   2. Find the last message in session history that set post_package_action.
   //   3. Only if that anchor exists (we're CONTINUING lead collection, not starting it),
-  //      pull lead slots from messages strictly AFTER the anchor — and only if no
+  //      pull lead slots from messages strictly AFTER the anchor â€” and only if no
   //      service-selection reset happened after it.
   //   4. Always parse all slots from the current message.
   const LEAD_SLOT_KEYS = ['name', 'phone', 'email', 'callback_time'] as const;
@@ -827,7 +827,7 @@ export function resolveWorkflowState(args: {
     slots.holiday_type = 'personalized';
   }
 
-  // Stage-aware overrides — applied BEFORE final stage resolution.
+  // Stage-aware overrides â€” applied BEFORE final stage resolution.
   const preStage = resolveStage(intent, slots);
 
   // show_packages: detect bare number/keyword selections as post_package_action
@@ -870,7 +870,7 @@ export function resolveWorkflowState(args: {
   const complete = stage === 'confirmed';
   const leadShouldBeSaved = complete;
 
-  // missingSlots kept for backward compat — list what's still needed
+  // missingSlots kept for backward compat â€” list what's still needed
   const missingSlots: string[] = [];
   if (intent === 'plan_holiday') {
     if (!slots.destination) missingSlots.push('destination');
@@ -900,23 +900,23 @@ export function resolveWorkflowState(args: {
   return { intent, stage, source, slots, missingSlots, complete, leadShouldBeSaved };
 }
 
-// ─── reply builders ──────────────────────────────────────────────────────────
+// â”€â”€â”€ reply builders â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const DESTINATION_TAGLINES: Record<string, string> = {
-  thailand: 'perfect for beaches, nightlife & relaxation 😊',
-  bali: 'a magical island paradise 🌴',
-  kashmir: 'truly paradise on earth ❄️🏔️',
-  dubai: 'a world of luxury and adventure 🏙️',
-  maldives: 'perfect for beaches and crystal waters 🏖️',
-  singapore: 'a vibrant city of culture and food 🌆',
-  europe: 'a dream destination for history lovers 🏰',
-  kerala: 'God\'s own country 🌿',
-  goa: 'India\'s beach paradise 🏖️',
+  thailand: 'perfect for beaches, nightlife & relaxation ðŸ˜Š',
+  bali: 'a magical island paradise ðŸŒ´',
+  kashmir: 'truly paradise on earth â„ï¸ðŸ”ï¸',
+  dubai: 'a world of luxury and adventure ðŸ™ï¸',
+  maldives: 'perfect for beaches and crystal waters ðŸ–ï¸',
+  singapore: 'a vibrant city of culture and food ðŸŒ†',
+  europe: 'a dream destination for history lovers ðŸ°',
+  kerala: 'God\'s own country ðŸŒ¿',
+  goa: 'India\'s beach paradise ðŸ–ï¸',
 };
 
 function getDestinationTagline(destination: string): string {
   const key = normalize(destination).split(' ')[0];
-  return DESTINATION_TAGLINES[key] || 'a wonderful destination 😊';
+  return DESTINATION_TAGLINES[key] || 'a wonderful destination ðŸ˜Š';
 }
 
 export function buildWorkflowReply(state: WorkflowState): string | null {
@@ -924,113 +924,139 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
 
   const { stage, slots, intent } = state;
 
-  // ── ask_destination ──
+  // â”€â”€ ask_destination â”€â”€
   if (stage === 'ask_destination') {
     return (
-      '🌍 Amazing!\n\n' +
-      'Which destination are you planning to visit? 😊\n\n' +
+      'ðŸŒ Amazing!\n\n' +
+      'Which destination are you planning to visit? ðŸ˜Š\n\n' +
       'Example: Dubai, Bali, Kashmir, Thailand'
     );
   }
 
-  // ── ask_holiday_type ──
+  // â”€â”€ ask_holiday_type â”€â”€
   if (stage === 'ask_holiday_type') {
     const dest = slots.destination || 'your chosen destination';
     const tagline = getDestinationTagline(dest);
     return (
-      `✨ Great choice! ${dest} is ${tagline}\n\n` +
-      'How would you like to plan your holiday? 😊\n\n' +
-      '🌟 Exclusive Holiday Deals\n' +
-      '✨ Personalized Holidays'
+      `âœ¨ Great choice! ${dest} is ${tagline}\n\n` +
+      'How would you like to plan your holiday? ðŸ˜Š\n\n' +
+      'ðŸŒŸ Exclusive Holiday Deals\n' +
+      'âœ¨ Personalized Holidays'
     );
   }
 
-  // ── ask_travel_details ──
+  // â”€â”€ ask_travel_details â”€â”€
   if (stage === 'ask_travel_details') {
     if (intent === 'plan_holiday') {
       if (slots.holiday_type === 'personalized') {
         const dest = slots.destination || 'your destination';
         return (
-          `✨ Wonderful! Let's create your personalized ${dest} holiday 😊\n\n` +
+          `âœ¨ Wonderful! Let's create your personalized ${dest} holiday ðŸ˜Š\n\n` +
           'Please share your travel preferences:\n\n' +
-          (!slots.travellers ? '👥 Number of Travellers\n' : '') +
-          (!slots.travel_time ? '📅 Travel Month or Dates\n' : '') +
-          (!slots.departure_city ? '🏙 Departure City\n' : '') +
-          (!slots.nights ? '🌃 Number of Nights\n' : '') +
-          (!slots.hotel_preference ? '🏨 Hotel Preference (3 / 4 / 5 Star)\n' : '') +
+          (!slots.travellers ? 'ðŸ‘¥ Number of Travellers\n' : '') +
+          (!slots.travel_time ? 'ðŸ“… Travel Month or Dates\n' : '') +
+          (!slots.departure_city ? 'ðŸ™ Departure City\n' : '') +
+          (!slots.nights ? 'ðŸŒƒ Number of Nights\n' : '') +
+          (!slots.hotel_preference ? 'ðŸ¨ Hotel Preference (3 / 4 / 5 Star)\n' : '') +
           '\nExample:\n2 Adults, 10th July, Delhi, 5 Nights, 4 Star Hotels'
         );
       }
       // exclusive
       return (
-        '✨ Perfect! Please share:\n\n' +
-        (!slots.travellers ? '👥 Number of Travellers\n' : '') +
-        (!slots.travel_time ? '📅 Travel Month or Dates\n' : '') +
-        (!slots.departure_city ? '🏙 Departure City\n' : '') +
-        (!slots.nights ? '🌃 Number of Nights\n' : '') +
+        'âœ¨ Perfect! Please share:\n\n' +
+        (!slots.travellers ? 'ðŸ‘¥ Number of Travellers\n' : '') +
+        (!slots.travel_time ? 'ðŸ“… Travel Month or Dates\n' : '') +
+        (!slots.departure_city ? 'ðŸ™ Departure City\n' : '') +
+        (!slots.nights ? 'ðŸŒƒ Number of Nights\n' : '') +
         '\nExample:\n2 Adults, July, Bangalore, 5 Nights'
       );
     }
 
     if (intent === 'flights') {
       return (
-        '✈️ Sure! Please share:\n\n' +
-        (!slots.from_city ? '🛫 From City\n' : '') +
-        (!slots.to_city ? '🛬 To City\n' : '') +
-        (!slots.travel_time ? '📅 Travel Date\n' : '') +
-        (!slots.travellers ? '👥 Number of Travellers\n' : '') +
+        'âœˆï¸ Sure! Please share:\n\n' +
+        (!slots.from_city ? 'ðŸ›« From City\n' : '') +
+        (!slots.to_city ? 'ðŸ›¬ To City\n' : '') +
+        (!slots.travel_time ? 'ðŸ“… Travel Date\n' : '') +
+        (!slots.travellers ? 'ðŸ‘¥ Number of Travellers\n' : '') +
         '\nExample:\nDelhi to Mumbai, 25th June, 2 Adults'
       );
     }
 
     if (intent === 'hotels') {
       return (
-        '🏨 Amazing! Please share:\n\n' +
-        (!slots.destination ? '📍 Destination\n' : '') +
-        (!slots.travellers ? '👥 Number of Travellers\n' : '') +
-        (!slots.travel_time ? '📅 Travel Month or Dates\n' : '') +
-        (!slots.nights ? '🌃 Number of Nights\n' : '') +
+        'ðŸ¨ Amazing! Please share:\n\n' +
+        (!slots.destination ? 'ðŸ“ Destination\n' : '') +
+        (!slots.travellers ? 'ðŸ‘¥ Number of Travellers\n' : '') +
+        (!slots.travel_time ? 'ðŸ“… Travel Month or Dates\n' : '') +
+        (!slots.nights ? 'ðŸŒƒ Number of Nights\n' : '') +
         '\nExample:\nDubai, 2 Adults, July, 4 Nights'
       );
     }
 
     // Other intents (should not reach here under current logic, but safe fallback)
     return (
-      '✨ Sure! Please share the following details:\n\n' +
-      '👤 Full Name\n📞 Contact Number\n🕒 Preferred Callback Time\n\n' +
+      'âœ¨ Sure! Please share the following details:\n\n' +
+      'ðŸ‘¤ Full Name\nðŸ“ž Contact Number\nðŸ•’ Preferred Callback Time\n\n' +
       'Example: Sini, +91 9876543210, Tomorrow at 5 PM'
     );
   }
 
-  // ── show_packages — AI generates all package/flight/hotel options ──
+  // â”€â”€ show_packages â€” AI generates all package/flight/hotel options â”€â”€
   if (stage === 'show_packages') {
     return null;
   }
 
-  // ── collect_lead ──
+  // collect_lead
   if (stage === 'collect_lead') {
+    const missingLeadLines = [
+      !slots.name ? '- Full Name' : '',
+      !slots.phone ? '- Contact Number' : '',
+      !slots.email ? '- Email Address' : '',
+      !slots.callback_time ? '- Preferred Callback Time' : '',
+    ].filter(Boolean);
+
+    const capturedLeadLines = [
+      slots.name ? `Done: Name - ${slots.name}` : '',
+      slots.phone ? `Done: Contact Number - ${slots.phone}` : '',
+      slots.email ? `Done: Email Address - ${slots.email}` : '',
+      slots.callback_time ? `Done: Preferred Callback Time - ${slots.callback_time}` : '',
+    ].filter(Boolean);
+
+    const exampleParts = [
+      !slots.name ? 'Rahul' : '',
+      !slots.phone ? '+91 9876543210' : '',
+      !slots.email ? 'rahul@email.com' : '',
+      !slots.callback_time ? 'Today at 5 PM' : '',
+    ].filter(Boolean);
+
+    const capturedBlock = capturedLeadLines.length
+      ? `${capturedLeadLines.join('\n')}\n\n`
+      : '';
+    const exampleBlock = exampleParts.length
+      ? `Example: ${exampleParts.join(', ')}\n\n`
+      : '';
+
     return (
-      '😊 To arrange your callback, please share:\n\n' +
-      '👤 Full Name\n' +
-      '📞 Contact Number\n' +
-      '✉️ Email Address\n' +
-      '🕒 Preferred Callback Time\n\n' +
-      'Example: Rahul, +91 9876543210, rahul@email.com, Today at 5 PM\n\n' +
-      'Our travel expert will call you at your preferred time! ✨'
+      'To arrange your callback, please share the remaining details:\n\n' +
+      capturedBlock +
+      `${missingLeadLines.join('\n')}\n\n` +
+      exampleBlock +
+      'Our travel expert will call you at your preferred time.'
     );
   }
 
-  // ── ask_callback ──
+  // ask_callback
   if (stage === 'ask_callback') {
     const name = slots.name ? `, ${slots.name}` : '';
     return (
-      `✨ Thank you${name}! Your details have been received 😊\n\n` +
-      '📞 When would you like us to call you?\n\n' +
+      `âœ¨ Thank you${name}! Your details have been received ðŸ˜Š\n\n` +
+      'ðŸ“ž When would you like us to call you?\n\n' +
       'Example: Today at 5 PM  /  Tomorrow Morning'
     );
   }
 
-  // ── confirmed — AI handles both initial confirmation and YES/NO follow-up ──
+  // â”€â”€ confirmed â€” AI handles both initial confirmation and YES/NO follow-up â”€â”€
   if (stage === 'confirmed') {
     return null;
   }
@@ -1038,7 +1064,7 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
   return null;
 }
 
-// ─── intent detection ─────────────────────────────────────────────────────────
+// â”€â”€â”€ intent detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export function detectWorkflowIntent(message: string, classifiedIntent?: string): WorkflowIntent {
   const raw = autoCorrect(message);           // fix typos before detection
@@ -1053,13 +1079,13 @@ export function detectWorkflowIntent(message: string, classifiedIntent?: string)
   const hasFlightKeyword =
     /(^|\s)(svc_2|flight|flights|fligth|fligths|air ticket|airticket|airfare)(\s|$)/.test(joined);
 
-  // plan_holiday — fuzzy-match "holiday", "package", "tour", "leisure"
+  // plan_holiday â€” fuzzy-match "holiday", "package", "tour", "leisure"
   if (
     isDigitSelect('1') ||
     /(^|\s)(svc_1|plan holiday|plan a holiday|holiday package|holiday|leisure|tour package)(\s|$)/.test(joined) ||
     fuzzyAny(text, ['holiday', 'package', 'tour', 'leisure'])
   ) {
-    // Explicit digit-1, svc_1, or the phrase "plan a holiday" always wins — even if the
+    // Explicit digit-1, svc_1, or the phrase "plan a holiday" always wins â€” even if the
     // message also contains "flights"/"hotels" (e.g. the user echoing the quick-reply menu).
     const explicitPlanHoliday =
       isDigitSelect('1') ||
@@ -1069,7 +1095,7 @@ export function detectWorkflowIntent(message: string, classifiedIntent?: string)
     if (explicitPlanHoliday || (!flightLike && !hotelLike)) return 'plan_holiday';
   }
 
-  // flights — strict keyword matching only (avoid false positives like "nights")
+  // flights â€” strict keyword matching only (avoid false positives like "nights")
   if (
     isDigitSelect('2') ||
     hasFlightKeyword
@@ -1082,7 +1108,7 @@ export function detectWorkflowIntent(message: string, classifiedIntent?: string)
     return 'hotels';
   }
 
-  // Multi-slot travel data → plan_holiday
+  // Multi-slot travel data â†’ plan_holiday
   if (
     /(destination|travel month|travel date|travel dates|budget|package)/.test(joined) &&
     /(travellers|travelers|adults?|pax|nights?)/.test(joined)
@@ -1100,7 +1126,7 @@ export function detectWorkflowIntent(message: string, classifiedIntent?: string)
   if (/(mice|corporate event|meetings incentives conferences exhibitions)/.test(joined)) return 'mice';
   if (/(booking status|status|pnr|reference|booking id)/.test(joined)) return 'booking_status';
 
-  // ── NEW: standalone callback request ──
+  // NEW: standalone callback request
   // Match explicit phrases like "arrange callback", "call me", "callback please" etc.
   // Only if no other service intent has been triggered.
   if (
@@ -1113,7 +1139,7 @@ export function detectWorkflowIntent(message: string, classifiedIntent?: string)
   return 'unknown';
 }
 
-// ─── system prompt helpers ───────────────────────────────────────────────────
+// System prompt helpers
 
 export function buildConversationMemoryBlock(args: {
   state: WorkflowState;
@@ -1131,12 +1157,12 @@ export function buildConversationMemoryBlock(args: {
       : 'none';
 
   return [
-    '─── CONVERSATION MEMORY (AUTHORITATIVE — follow exactly) ───',
+    'CONVERSATION MEMORY (AUTHORITATIVE - follow exactly)',
     `Intent  : ${args.state.intent}`,
     `Stage   : ${args.state.stage}`,
     `Collected slots: ${slotText}`,
-    `Missing : ${args.state.missingSlots.length ? args.state.missingSlots.join(', ') : 'none — all collected'}`,
-    'Recent user messages (oldest → newest):',
+    `Missing : ${args.state.missingSlots.length ? args.state.missingSlots.join(', ') : 'none - all collected'}`,
+    'Recent user messages (oldest -> newest):',
     recentText,
     'RULE: Never re-ask for already captured slots. Never contradict captured data.',
   ].join('\n');
@@ -1155,19 +1181,19 @@ export function getWorkflowSystemPromptBlock(
     .map(([k, v]) => `${k}: ${v}`)
     .join(', ') || 'nothing yet';
 
-  // ── per-stage task instructions ─────────────────────────────────────────────
+  // â”€â”€ per-stage task instructions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let task = '';
 
   if (intent === 'unknown' || stage === 'unknown') {
     task = `The customer's intent is not yet identified. Respond warmly and naturally.
 Guidelines:
-- Greeting (Hi, Hello, etc.) → warmly greet and show: "How may I assist you today? 😊\n\n1️⃣ Plan a Holiday\n2️⃣ Flights\n3️⃣ Hotels"
-- Travel-related question → briefly answer, then show the main menu
-- Off-topic question (weather, jokes, math, etc.) → say "That's a bit outside my expertise! I'm here to help plan your trip 😊" and show the menu
-- Confused or unclear message → empathize and show the menu
-- User says they want to speak to a human → say "Sure! You can reach our team at info@traventions.com or WhatsApp us at +91 XXXXX. Meanwhile, I can help you explore options 😊"
-- Profanity or frustration → stay calm, empathize: "I understand your concern. Let me connect you with our team who can help you better."
-- Random characters/test messages → respond friendly: "Hello! 😊 I'm Sini, your travel assistant. How can I help you today?"
+- Greeting (Hi, Hello, etc.) -> warmly greet and show: "How may I assist you today?\n\n1. Plan a Holiday\n2. Flights\n3. Hotels"
+- Travel-related question -> briefly answer, then show the main menu
+- Off-topic question (weather, jokes, math, etc.) -> say "That's a bit outside my expertise. I'm here to help plan your trip." and show the menu
+- Confused or unclear message -> empathize and show the menu
+- User says they want to speak to a human -> say "Sure. You can reach our team at info@traventions.com or WhatsApp us at +91 XXXXX. Meanwhile, I can help you explore options."
+- Profanity or frustration -> stay calm, empathize: "I understand your concern. Let me connect you with our team who can help you better."
+- Random characters/test messages -> respond friendly: "Hello. I'm Sini, your travel assistant. How can I help you today?"
 Always end with the main menu if intent is unclear.`;
 
   } else if (intent === 'callback_request') {
@@ -1181,12 +1207,12 @@ Always end with the main menu if intent is unclear.`;
 
   } else if (stage === 'ask_destination') {
     task = `Ask the customer which destination they want to visit.
-Ask for the destination ONLY — nothing else yet.`;
+Ask for the destination ONLY - nothing else yet.`;
 
   } else if (stage === 'ask_holiday_type') {
     task = `Ask the customer to choose between:
-🌟 Exclusive Holiday Deals
-✨ Personalized Holidays
+ðŸŒŸ Exclusive Holiday Deals
+âœ¨ Personalized Holidays
 Do NOT ask about travel details yet. Only ask for the holiday type.`;
 
   } else if (stage === 'ask_travel_details') {
@@ -1209,10 +1235,10 @@ Do NOT ask about travel details yet. Only ask for the holiday type.`;
       if (!slots?.travel_time) missing.push('Travel Month or Dates');
       if (!slots?.nights)      missing.push('Number of Nights');
     }
-    task = `Ask for ONLY these missing travel details: ${missing.length ? missing.join(', ') : 'none — all collected'}.
-ALREADY COLLECTED — DO NOT ASK AGAIN: ${collected}.
-If the customer asks a travel question (visa, weather, currency, etc.) → briefly answer it, THEN re-ask the missing details in the same reply.
-If the customer seems confused or off-topic → gently redirect and re-ask the missing details.`;
+    task = `Ask for ONLY these missing travel details: ${missing.length ? missing.join(', ') : 'none - all collected'}.
+ALREADY COLLECTED - DO NOT ASK AGAIN: ${collected}.
+If the customer asks a travel question (visa, weather, currency, etc.) -> briefly answer it, THEN re-ask the missing details in the same reply.
+If the customer seems confused or off-topic -> gently redirect and re-ask the missing details.`;
 
   } else if (stage === 'show_packages') {
     if (intent === 'flights') {
@@ -1220,20 +1246,20 @@ If the customer seems confused or off-topic → gently redirect and re-ask the m
       const toCity = slots?.to_city || 'the destination';
       const travelTime = slots?.travel_time || 'the travel date';
       const travellers = slots?.travellers || 'the given travellers';
-      task = `FLIGHT OPTIONS GENERATION — REQUIRED:
+      task = `FLIGHT OPTIONS GENERATION - REQUIRED:
 Show 2 flight options from ${fromCity} to ${toCity} on ${travelTime} for ${travellers}.
 Format EXACTLY as:
-✈️ Option 1: Direct Flight
-🛫 [Airline name] | ⏱ [realistic duration] | 💰 ₹[realistic INR price] PP (approx)
-✨ Highlights: [departure time range, arrival time, airline]
+Option 1: Direct Flight
+[Airline name] | [realistic duration] | INR [realistic price] PP (approx)
+Highlights: [departure time range, arrival time, airline]
 
-🔄 Option 2: 1-Stop Flight
-🛫 [Airline name] via [hub city] | ⏱ [total duration] | 💰 ₹[lower INR price] PP (approx)
-✨ Highlights: cheaper option, [layover duration] layover at [hub]
+Option 2: 1-Stop Flight
+[Airline name] via [hub city] | [total duration] | INR [lower price] PP (approx)
+Highlights: cheaper option, [layover duration] layover at [hub]
 
 End with:
 Would you like to:
-✈️ Get Flight Details  ✏️ Customise Flights  📞 Arrange Callback
+Get Flight Details | Customise Flights | Arrange Callback
 Use realistic INR pricing only. Never mention USD or $.`;
 
     } else if (intent === 'hotels') {
@@ -1242,18 +1268,18 @@ Use realistic INR pricing only. Never mention USD or $.`;
       const travelTime = slots?.travel_time || '';
       const nights = slots?.nights || '';
       const hotelPref = slots?.hotel_preference || '';
-      task = `HOTEL OPTIONS GENERATION — REQUIRED:
+      task = `HOTEL OPTIONS GENERATION - REQUIRED:
 Show 3 hotel options in ${dest}${travellers ? ` for ${travellers}` : ''}${travelTime ? `, ${travelTime}` : ''}${nights ? `, ${nights} nights` : ''}${hotelPref ? ` (${hotelPref} preferred)` : ''}.
 Format EXACTLY as:
-🏨 [Hotel Name] | ⭐ [Star Rating] | 💰 ₹[realistic price per night] per night
-📍 Location: [area / neighbourhood]
-✨ Highlights: [3-4 key amenities or nearby attractions]
+[Hotel Name] | [Star Rating] | INR [realistic price per night] per night
+Location: [area / neighbourhood]
+Highlights: [3-4 key amenities or nearby attractions]
 
 (repeat for all 3 hotels)
 
 End with:
 Would you like to:
-🏨 Get Hotel Details  ✏️ Customise Hotels  📞 Arrange Callback
+Get Hotel Details | Customise Hotels | Arrange Callback
 Use realistic INR pricing only. Never mention USD or $.`;
 
     } else if (slots?.holiday_type === 'personalized') {
@@ -1263,17 +1289,17 @@ Use realistic INR pricing only. Never mention USD or $.`;
       const travellers = slots?.travellers || '';
       const travelTime = slots?.travel_time || '';
       const departureCity = slots?.departure_city || '';
-      task = `PERSONALIZED PACKAGE GENERATION — REQUIRED:
+      task = `PERSONALIZED PACKAGE GENERATION - REQUIRED:
 The customer wants a personalized holiday to ${dest} for ${travellers || 'the given travellers'}, ${travelTime || 'on the given dates'}, departing ${departureCity || 'from their city'}, ${nights} nights, ${hotelPref} hotels.
 Generate exactly 5 package options named: Classic Explorer, Scenic & Relaxation, Premium Experience, Budget Friendly, Luxury Touch.
 Format each as:
-🌟 Option [N]: [Name]
-🏨 ${hotelPref} Hotels | 🌃 ${nights} Nights / ${String(parseInt(nights, 10) + 1)} Days | 💰 ₹[realistic INR price] PP
-✨ Highlights: [5 specific sightseeing/activity highlights for ${dest}]
+Option [N]: [Name]
+${hotelPref} Hotels | ${nights} Nights / ${String(parseInt(nights, 10) + 1)} Days | INR [realistic price] PP
+Highlights: [5 specific sightseeing/activity highlights for ${dest}]
 
 End with:
-✨ Would you like to:
-1️⃣ Select an option  📄 Get Day-wise Itinerary  ✏️ Modify This Plan  📞 Arrange Callback
+Would you like to:
+1. Select an option  2. Get Day-wise Itinerary  3. Modify This Plan  4. Arrange Callback
 Use realistic INR pricing. Never mention USD or $.`;
 
     } else {
@@ -1284,29 +1310,29 @@ Use realistic INR pricing. Never mention USD or $.`;
       const travellers = slots?.travellers || '';
       const travelTime = slots?.travel_time || '';
       const departureCity = slots?.departure_city || '';
-      task = `EXCLUSIVE PACKAGE GENERATION — REQUIRED:
+      task = `EXCLUSIVE PACKAGE GENERATION - REQUIRED:
 Show 3 exclusive holiday packages for ${dest}${travellers ? ` for ${travellers}` : ''}${travelTime ? `, ${travelTime}` : ''}${departureCity ? `, departing from ${departureCity}` : ''}, ${nights} nights.
 Format EXACTLY as:
-🌟 Package 1: Budget Deal
-🏨 3 Star Hotels | 🌃 ${nights} Nights / ${days} Days | 💰 ₹[realistic INR price] PP
-✨ Highlights: [5 specific sightseeing/activity highlights for ${dest}]
+Package 1: Budget Deal
+3 Star Hotels | ${nights} Nights / ${days} Days | INR [realistic price] PP
+Highlights: [5 specific sightseeing/activity highlights for ${dest}]
 
-✨ Package 2: Premium Deal
-🏨 4 Star Hotels | 🌃 ${nights} Nights / ${days} Days | 💰 ₹[realistic INR price] PP
-✨ Highlights: [5 specific highlights for ${dest}]
+Package 2: Premium Deal
+4 Star Hotels | ${nights} Nights / ${days} Days | INR [realistic price] PP
+Highlights: [5 specific highlights for ${dest}]
 
-🌟 Package 3: Luxury Experience
-🏨 5 Star Hotels | 🌃 ${nights} Nights / ${days} Days | 💰 ₹[realistic INR price] PP
-✨ Highlights: [5 specific highlights for ${dest}]
+Package 3: Luxury Experience
+5 Star Hotels | ${nights} Nights / ${days} Days | INR [realistic price] PP
+Highlights: [5 specific highlights for ${dest}]
 
 End with:
 Would you like to:
-📄 Get Package Details  ✏️ Customise Holiday  📞 Arrange Callback
+Get Package Details | Customise Holiday | Arrange Callback
 Use realistic INR pricing only. Never mention USD or $.`;
     }
 
   } else if (stage === 'collect_lead') {
-    task = `Ask the customer for their Full Name, Phone Number, Email Address, and Preferred Callback Time — all four in one friendly message.
+    task = `Ask the customer for their Full Name, Phone Number, Email Address, and Preferred Callback Time - all four in one friendly message.
 Format example: "Rahul, +91 9876543210, rahul@email.com, Today at 5 PM"
 Do NOT ask for travel details, they are already collected.
 Already have: ${collected}.
@@ -1314,7 +1340,7 @@ Tell them our travel expert will call at their preferred time.`;
 
   } else if (stage === 'ask_callback') {
     task = `Ask ONLY for the customer's preferred callback time.
-DO NOT ask for name or phone — those are already collected.
+DO NOT ask for name or phone - those are already collected.
 Already have: ${collected}.
 Tell them a travel expert will call them at their preferred time.`;
 
@@ -1328,21 +1354,21 @@ Tell them a travel expert will call them at their preferred time.`;
         : 'assist you with complete package details';
     task = `Look at the conversation history:
 A) If the last assistant message does NOT already contain "callback has been scheduled":
-   → Send EXACTLY this confirmation message (replace placeholders):
-   "✨ Perfect${name}! Your callback has been scheduled successfully 😊
+   -> Send EXACTLY this confirmation message (replace placeholders):
+   "Perfect${name}! Your callback has been scheduled successfully.
 
-📞 Our travel expert will contact you *${callbackTime}* and ${ctx}.
+Our travel expert will contact you *${callbackTime}* and ${ctx}.
 
-Is there anything else I may assist you with today? 😊"
+Is there anything else I may assist you with today?"
 
 B) If the last assistant message ALREADY contains "callback has been scheduled":
-   → The customer is replying to "Is there anything else?". Handle as follows:
-   - If YES or a new travel question → reply: "How may I assist you today? 😊\n\n1️⃣ Plan a Holiday\n2️⃣ Flights\n3️⃣ Hotels"
-   - If NO / Thank you / ending → reply with EXACTLY:
-"Thank you for your time 😊
+   -> The customer is replying to "Is there anything else?". Handle as follows:
+   - If YES or a new travel question -> reply: "How may I assist you today?\n\n1. Plan a Holiday\n2. Flights\n3. Hotels"
+   - If NO / Thank you / ending -> reply with EXACTLY:
+"Thank you for your time.
 We truly appreciate your support.
 
-⭐ Kindly rate your experience with us:
+Kindly rate your experience with us:
 https://www.google.com/search?q=Traventions+India+Pvt+Ltd+Reviews"
 Do NOT repeat the callback confirmation. Do NOT ask for details already collected.`;
   }
@@ -1353,7 +1379,7 @@ Do NOT repeat the callback confirmation. Do NOT ask for details already collecte
     : '';
 
   return `
-TRAVEL SALES WORKFLOW — FOLLOW STRICTLY:
+TRAVEL SALES WORKFLOW - FOLLOW STRICTLY:
 - Customer intent: ${intentLabel}
 - Current stage: ${stageLabel}
 - Collected so far: ${collected}
@@ -1361,29 +1387,32 @@ TRAVEL SALES WORKFLOW — FOLLOW STRICTLY:
 ${draftBlock}
 FORMATTING RULES (mandatory):
 - WhatsApp formatting only: *bold*, _italic_, numbered lists, bullet * lists
-- NEVER use markdown links [text](url) — write plain URLs only
+- NEVER use markdown links [text](url) - write plain URLs only
 - Friendly emojis are encouraged
-- INR only for all pricing — never USD or $
+- INR only for all pricing - never USD or $
 - Keep reply concise and on-topic for the current stage
 `.trim();
 }
 
-export function getGreetingMenuText(customerName?: string | null): string {
+export function getGreetingIntroText(customerName?: string | null): string {
   const namePart = customerName ? `, ${customerName}` : '';
+  return `Hi${namePart}! I am *SINI* from Trav AI.`;
+}
+
+export function getGreetingMenuText(_customerName?: string | null): string {
   return (
-    `Hello${namePart}! 😊\n\n` +
     'How may I assist you today?\n\n' +
-    '1️⃣ Plan a Holiday\n' +
-    '2️⃣ Flights\n' +
-    '3️⃣ Hotels'
+    '1. Plan a Holiday\n' +
+    '2. Flights\n' +
+    '3. Hotels'
   );
 }
 
-// buildLeadNotes — creates a summary string for CRM notes field
+// buildLeadNotes â€” creates a summary string for CRM notes field
 export function buildLeadNotes(intent: WorkflowIntent, slots: WorkflowSlotMap): string {
   const parts: string[] = [`Source: WhatsApp AI`, `Intent: ${intent.replace('_', ' ')}`];
   if (slots.destination) parts.push(`Destination: ${slots.destination}`);
-  if (slots.from_city && slots.to_city) parts.push(`Route: ${slots.from_city} → ${slots.to_city}`);
+  if (slots.from_city && slots.to_city) parts.push(`Route: ${slots.from_city} â†’ ${slots.to_city}`);
   if (slots.travellers) parts.push(`Travellers: ${slots.travellers}`);
   if (slots.travel_time) parts.push(`Travel Date: ${slots.travel_time}`);
   if (slots.departure_city) parts.push(`Departure City: ${slots.departure_city}`);
@@ -1399,3 +1428,4 @@ export function buildLeadNotes(intent: WorkflowIntent, slots: WorkflowSlotMap): 
 export function getWorkflowStarterReply(intent: WorkflowIntent): string | null {
   return buildWorkflowReply({ intent, stage: 'ask_travel_details', source: 'detected_now', slots: {}, missingSlots: [], complete: false, leadShouldBeSaved: false });
 }
+
