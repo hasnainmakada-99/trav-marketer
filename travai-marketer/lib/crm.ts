@@ -133,13 +133,46 @@ export function getStatusLabel(status: string | null | undefined): string {
   return CRM_STATUS_META[coerceLeadStatus(status)].label;
 }
 
+export function sanitizeLeadName(
+  name: string | null | undefined,
+  phone?: string | null | undefined
+): string | null {
+  const trimmed = String(name || '').trim();
+  if (!trimmed) return null;
+
+  const normalizedNameDigits = normalizePhoneForMatch(trimmed);
+  const normalizedPhone = normalizePhoneForMatch(phone);
+
+  if (normalizedNameDigits && normalizedNameDigits === normalizedPhone) {
+    return null;
+  }
+
+  // Treat numeric-only or mostly numeric placeholders as missing names.
+  if (!/[a-zA-Z]/.test(trimmed)) {
+    return null;
+  }
+
+  return trimmed;
+}
+
+export function getPreferredLeadName(params: {
+  customerName?: string | null;
+  leadName?: string | null;
+  phone?: string | null;
+}): string | null {
+  return (
+    sanitizeLeadName(params.customerName, params.phone) ||
+    sanitizeLeadName(params.leadName, params.phone) ||
+    null
+  );
+}
+
 export function getDisplayName(params: {
   customerName?: string | null;
   leadName?: string | null;
   phone?: string | null;
 }): string {
-  const bestName = params.customerName?.trim() || params.leadName?.trim();
-  return bestName || params.phone || 'Unknown';
+  return getPreferredLeadName(params) || params.phone || 'Unknown';
 }
 
 export function deriveLeadStatus(params: {

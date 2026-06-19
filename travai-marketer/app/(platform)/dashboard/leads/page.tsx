@@ -28,6 +28,12 @@ interface Lead {
   $createdAt?: string;
 }
 
+function getLeadDisplayName(lead: Lead) {
+  if (lead.name?.trim()) return lead.name.trim();
+  if (lead.source === 'walk_in') return 'Walk-in lead';
+  return 'WhatsApp lead';
+}
+
 function ago(iso?: string) {
   if (!iso) return '—';
   const ms = Date.now() - new Date(iso).getTime();
@@ -39,14 +45,15 @@ function ago(iso?: string) {
 }
 
 function initials(name?: string | null, phone?: string) {
-  if (name) {
-    return name
+  const safeName = String(name || '').trim();
+  if (safeName) {
+    return safeName
       .split(' ')
       .slice(0, 2)
       .map((part) => part[0]?.toUpperCase() || '')
       .join('');
   }
-  return (phone || '?').slice(-2);
+  return phone ? 'WA' : '?';
 }
 
 function StatusBadge({ status }: { status: CrmLeadStatus }) {
@@ -125,7 +132,6 @@ export default function LeadsPage() {
       if (!silent) setLoading(true);
       try {
         const params = new URLSearchParams({ limit: '200', teamId: TEAM_ID });
-        if (filter !== 'all') params.set('status', filter);
         const response = await fetch(`/api/leads?${params.toString()}`);
         const data = await response.json();
         if (!response.ok) {
@@ -142,7 +148,7 @@ export default function LeadsPage() {
         if (!silent) setLoading(false);
       }
     },
-    [filter]
+    []
   );
 
   useEffect(() => {
@@ -261,7 +267,7 @@ export default function LeadsPage() {
       const message = [
         '*TRAVENTIONS INVOICE*',
         '--------------------',
-        `Customer: ${invoiceLead.name || invoiceLead.phone}`,
+        `Customer: ${getLeadDisplayName(invoiceLead)}`,
         `Date: ${invoiceForm.date}`,
         `Service: ${invoiceForm.service}`,
         `Amount: INR ${Number(invoiceForm.amount).toLocaleString('en-IN')}`,
@@ -433,7 +439,7 @@ export default function LeadsPage() {
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <h3 className="truncate text-xl font-semibold text-slate-950">
-                            {lead.name || 'Unknown traveller'}
+                            {getLeadDisplayName(lead)}
                           </h3>
                           <StatusBadge status={lead.status} />
                         </div>

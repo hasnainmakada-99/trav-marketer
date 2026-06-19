@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
 import { listDocuments, createDocument } from '@/lib/appwrite';
-import { CRM_STATUS_ORDER, buildPhoneVariants, coerceLeadStatus, normalizePhoneForMatch } from '@/lib/crm';
+import {
+  CRM_STATUS_ORDER,
+  buildPhoneVariants,
+  coerceLeadStatus,
+  getPreferredLeadName,
+  normalizePhoneForMatch,
+} from '@/lib/crm';
 
 const TEAM_ID = process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
 
@@ -108,11 +114,14 @@ export async function GET(request: NextRequest) {
     const leads = Array.from(dedupedLeads.values()).map(l => ({
       ...l,
       status: coerceLeadStatus(l.status as string | null),
-      name:
-        (l.name as string | null) ||
-        nameByPhone.get((l.phone as string) || '') ||
-        nameByPhone.get(buildPhoneVariants(l.phone as string)[0] || '') ||
-        null,
+      name: getPreferredLeadName({
+        leadName: l.name as string | null,
+        customerName:
+          nameByPhone.get((l.phone as string) || '') ||
+          nameByPhone.get(buildPhoneVariants(l.phone as string)[0] || '') ||
+          null,
+        phone: l.phone as string | null,
+      }),
     }));
 
     return NextResponse.json(
