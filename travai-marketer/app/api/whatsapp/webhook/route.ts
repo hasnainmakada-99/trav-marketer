@@ -44,6 +44,7 @@ import {
   isCallbackConfirmationMessage,
   isConversationClosureReply,
   isQuestionLike,
+  isTravelOrPlatformQueryLike,
   type WorkflowIntent,
   type WorkflowStage,
 } from '@/lib/whatsapp-workflow';
@@ -1182,6 +1183,13 @@ async function generateAndSendResponse(
         isAffirmativeContinuationReply(correctedText)
       );
 
+    const shouldUseAiForMidFlowQuery =
+      workflowState.stage !== 'confirmed' &&
+      (
+        isQuestionLike(correctedText) ||
+        isTravelOrPlatformQueryLike(correctedText)
+      );
+
     const deterministicReply =
       workflowState.stage === 'confirmed' || callbackConfirmationFollowUp
         ? buildConfirmedWorkflowReply({
@@ -1189,7 +1197,7 @@ async function generateAndSendResponse(
             userMessage: correctedText,
             lastAssistantMessage: recentAiDoc?.message || null,
           })
-        : isQuestionLike(correctedText)
+        : shouldUseAiForMidFlowQuery
           ? null
           : buildWorkflowReply(workflowState);
 
@@ -1281,10 +1289,11 @@ You ALWAYS respond — no matter what the customer sends (short, long, confusing
       databasePolicyBlock,
       `HANDLING UNEXPECTED INPUTS (mandatory):
 - Emoji-only or very short messages (ok, yes, no, 👍, 🙏) → interpret in context of current stage; if ambiguous, re-ask the stage question warmly.
-- Questions mid-flow (Is Dubai visa-free? What currency does Bali use?) → briefly answer in 1-2 sentences, then re-ask the stage question.
+- Questions mid-flow (Is Dubai visa-free? What currency does Bali use? What services do you offer? Where is your office?) → briefly answer in 1-3 sentences, then continue the current stage naturally.
 - Hindi or Hinglish → respond in the same language if possible, continue the flow.
 - Angry or frustrated customer → empathize first ("I completely understand your concern 😊"), then offer to help.
 - "Speak to human" / "agent" / "staff" → "Sure! Our team can be reached at info@traventions.com. I can also continue helping you right now 😊"
+- Business/platform-related questions (services, office, website, payments, support, CRM, GBP, campaigns, dashboard) → answer them helpfully and naturally, then continue the current travel flow if something is still pending.
 - Completely off-topic (weather, sports, jokes, coding, etc.) → politely refuse and steer back to travel only.
 - Random characters or test messages → "Hello! 😊 I'm Sini from Traventions. How can I help you plan your next trip?"
 - User wants to change their mind (different destination, different dates) → accept gracefully and update the plan.
@@ -1300,6 +1309,7 @@ GLOBAL RULES:
 - Reply like a real travel consultant on WhatsApp, not like a scripted bot.
 - Never say "as an AI", "I am a bot", "travel assistant bot", or anything mechanical.
 - If the customer sends a follow-up like "cheapest", "best", "luxury", "family option", "customise this", or "arrange callback", continue from the existing chat context instead of restarting the flow.
+- If the customer asks a travel-related or Traventions/platform-related question at any stage, answer it first and then resume the flow from the exact point where it paused.
 - Prefer natural sentences over rigid forms or checklists.
 - Ask only one compact follow-up when something is missing.
 - If the needed context is already present in chat history, answer directly instead of showing the menu again.`,

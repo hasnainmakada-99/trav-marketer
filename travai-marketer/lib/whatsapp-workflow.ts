@@ -655,6 +655,28 @@ export function isQuestionLike(message: string): boolean {
   return false;
 }
 
+export function isTravelOrPlatformQueryLike(message: string): boolean {
+  const t = normalize(message);
+  if (!t) return false;
+  if (isQuestionLike(message)) return true;
+
+  const businessQuery =
+    /\b(about traventions|about sini|your services|services you offer|what do you offer|do you offer|can you help with|can you do|do you do|share your website|website|office location|office address|contact number|contact details|business hours|working hours|timings|refund policy|cancellation policy|payment options|emi|support team|human agent|speak to team|platform|dashboard|crm|google business profile|gbp|campaigns?)\b/.test(t);
+  if (businessQuery) return true;
+
+  const travelInfoQuery =
+    /\b(visa|passport|transit|currency|forex|exchange rate|baggage|luggage|check in|check-in|weather|temperature|best time|best season|documents required|travel insurance|airport transfer|pickup|drop|fare rules|refundable|non refundable|price details|cost details|hotel details|flight details|package details|itinerary|inclusions|exclusions|meal plan|star hotel|room type|sightseeing)\b/.test(t);
+  if (!travelInfoQuery) return false;
+
+  // Avoid treating plain slot-only payloads as queries.
+  if (/^\d+\s*(adults?|children|kids?|nights?|days?)\b/.test(t)) return false;
+  if (/^[a-z\s]+,\s*\d+\s*(adults?|children|kids?),\s*[a-z0-9\s-]+,\s*\d+\s*nights?$/i.test(String(message || '').trim())) {
+    return false;
+  }
+
+  return true;
+}
+
 function findLockedIntentFromHistory(historyMessages: string[]): WorkflowIntent | null {
   let fallbackIntent: WorkflowIntent | null = null;
   for (let i = historyMessages.length - 1; i >= 0; i--) {
@@ -1392,22 +1414,26 @@ Do not sound like a scripted bot.`;
 
   } else if (intent === 'callback_request') {
     if (stage === 'collect_lead') {
-      task = `The customer has requested a callback. Ask for their Full Name and Phone Number before asking callback time. Do NOT ask about travel details.`;
+      task = `The customer has requested a callback. Ask for their Full Name and Phone Number before asking callback time. Do NOT ask about travel details.
+If they ask any travel-related or Traventions/platform/business question, answer it briefly first, then return to the missing lead details.`;
     } else if (stage === 'ask_callback') {
-      task = `Ask for the preferred callback time only. Already have name and phone.`;
+      task = `Ask for the preferred callback time only. Already have name and phone.
+If they ask any travel-related or Traventions/platform/business question, answer it briefly first, then ask for callback time again.`;
     } else if (stage === 'confirmed') {
       task = `Confirm that the callback has been scheduled, as described for the 'confirmed' stage below.`;
     }
 
   } else if (stage === 'ask_destination') {
     task = `Ask the customer which destination they want to visit.
-Ask for the destination ONLY - nothing else yet.`;
+Ask for the destination ONLY - nothing else yet.
+If they ask any travel-related or Traventions/platform/business question, answer it briefly first, then return to asking the destination.`;
 
   } else if (stage === 'ask_holiday_type') {
     task = `Ask the customer to choose between:
 1. Exclusive Holiday Deals
 2. Personalized Holidays
-Do NOT ask about travel details yet. Only ask for the holiday type in a natural way.`;
+Do NOT ask about travel details yet. Only ask for the holiday type in a natural way.
+If they ask any travel-related or Traventions/platform/business question, answer it briefly first, then return to asking the holiday type.`;
 
   } else if (stage === 'ask_travel_details') {
     const missing: string[] = [];
@@ -1431,7 +1457,7 @@ Do NOT ask about travel details yet. Only ask for the holiday type in a natural 
     }
     task = `Ask for ONLY these missing travel details: ${missing.length ? missing.join(', ') : 'none - all collected'}.
 ALREADY COLLECTED - DO NOT ASK AGAIN: ${collected}.
-If the customer asks a travel question (visa, weather, currency, etc.) -> briefly answer it, THEN re-ask the missing details in the same reply.
+If the customer asks a travel-related or Traventions/platform/business question (visa, weather, currency, website, office, services, support, etc.) -> briefly answer it, THEN re-ask the missing details in the same reply.
 If the customer seems confused or off-topic -> gently redirect and re-ask the missing details.
 Keep it conversational, like a real travel consultant typing on WhatsApp.`;
 
@@ -1533,14 +1559,16 @@ Format example: "Rahul, +91 9876543210, Today at 5 PM"
 Do NOT ask for travel details, they are already collected.
 Already have: ${collected}.
 Tell them our travel expert will call at their preferred time.
-Do not sound like a form or checklist unless some details are still missing.`;
+Do not sound like a form or checklist unless some details are still missing.
+If they ask any travel-related or Traventions/platform/business question, answer it briefly first, then return to the missing lead details.`;
 
   } else if (stage === 'ask_callback') {
     task = `Ask ONLY for the customer's preferred callback time.
 DO NOT ask for name or phone - those are already collected.
 Already have: ${collected}.
 Tell them a travel expert will call them at their preferred time.
-Keep it short and natural.`;
+Keep it short and natural.
+If they ask any travel-related or Traventions/platform/business question, answer it briefly first, then ask for callback time again.`;
 
   } else if (stage === 'confirmed') {
     const name = slots?.name ? `, ${slots.name}` : '';
