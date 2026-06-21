@@ -937,8 +937,8 @@ async function generateAndSendResponse(
     const typingKeepAlive = await startYCloudTypingKeepAlive(inboundMessageId);
     try {
 
-      // Fetch up to 40 messages so the workflow engine never loses the intent-lock
-      // signal even in long conversations. OpenAI only receives the last 20.
+      // Fetch up to 40 messages so both the workflow engine and OpenAI can see
+      // the actual recent transcript instead of a very short clipped window.
       const convos = await listDocuments('conversations', [
         Query.equal('teamId', resolvedTeamId),
         Query.equal('customerId', customer.$id),
@@ -966,7 +966,7 @@ async function generateAndSendResponse(
     }
 
     // Truncated history sent to OpenAI — last 20 messages keeps token budget sane
-    const history = fullHistory.slice(-20);
+    const history = fullHistory;
 
     const recentAi = await listDocuments('conversations', [
       Query.equal('teamId', resolvedTeamId),
@@ -1248,6 +1248,7 @@ async function generateAndSendResponse(
     );
     const memoryBlock = buildConversationMemoryBlock({
       state: workflowState,
+      recentMessages: fullHistory,
       recentUserMessages: historyUserMessages.slice(-12),
     });
 

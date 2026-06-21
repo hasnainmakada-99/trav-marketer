@@ -128,10 +128,13 @@ export default function LeadsPage() {
   }, [router]);
 
   const fetchLeads = useCallback(
-    async (silent = false) => {
+    async (silent = false, options?: { refreshStatuses?: boolean }) => {
       if (!silent) setLoading(true);
       try {
         const params = new URLSearchParams({ limit: '200', teamId: TEAM_ID });
+        if (options?.refreshStatuses) {
+          params.set('refreshStatuses', '1');
+        }
         const response = await fetch(`/api/leads?${params.toString()}`);
         const data = await response.json();
         if (!response.ok) {
@@ -153,7 +156,7 @@ export default function LeadsPage() {
 
   useEffect(() => {
     queueMicrotask(() => {
-      void fetchLeads();
+      void fetchLeads(false, { refreshStatuses: true });
     });
     const start = () => {
       if (pollRef.current) clearInterval(pollRef.current);
@@ -195,7 +198,7 @@ export default function LeadsPage() {
       const response = await fetch('/api/leads/backfill', { method: 'POST' });
       const data = await response.json();
       setSyncResult({ created: data.created || 0, updated: data.updated || 0, firstError: data.firstError });
-      await fetchLeads();
+      await fetchLeads(false, { refreshStatuses: false });
     } catch (error) {
       setSyncResult({ created: 0, updated: 0, firstError: error instanceof Error ? error.message : 'Network error' });
     } finally {
@@ -340,7 +343,7 @@ export default function LeadsPage() {
                 Add walk-in lead
               </button>
               <button
-                onClick={() => fetchLeads()}
+                onClick={() => fetchLeads(false, { refreshStatuses: true })}
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
               >
                 Refresh

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
 import { listDocuments, createDocument } from '@/lib/appwrite';
+import { syncLeadStatusesFromConversations } from '@/lib/crm-sync';
 import {
   CRM_STATUS_ORDER,
   buildPhoneVariants,
@@ -51,8 +52,18 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const status = searchParams.get('status') || 'all';
     const teamId = searchParams.get('teamId') || TEAM_ID;
+    const refreshStatuses = searchParams.get('refreshStatuses') === '1';
     const limit = Math.min(Number(searchParams.get('limit') || '100'), 200);
     const offset = Number(searchParams.get('offset') || '0');
+
+    if (refreshStatuses) {
+      await syncLeadStatusesFromConversations(teamId).catch((error) => {
+        console.warn(
+          '[GET /api/leads] Status refresh skipped:',
+          error instanceof Error ? error.message : error
+        );
+      });
+    }
 
     const queries = [
       Query.equal('teamId', teamId),

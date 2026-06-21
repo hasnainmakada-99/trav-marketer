@@ -724,6 +724,49 @@ function isPrimaryServiceSelection(message: string): boolean {
   return false;
 }
 
+function isTravelSalesIntent(intent: WorkflowIntent): boolean {
+  return intent === 'plan_holiday' || intent === 'flights' || intent === 'hotels';
+}
+
+function looksLikeShowPackagesRefinement(
+  message: string,
+  intent: WorkflowIntent,
+  parsedSlots: WorkflowSlotMap
+): boolean {
+  const text = normalize(message);
+  if (!text || !isTravelSalesIntent(intent)) return false;
+
+  if (
+    parsedSlots.destination ||
+    parsedSlots.from_city ||
+    parsedSlots.to_city ||
+    parsedSlots.travel_time ||
+    parsedSlots.travellers ||
+    parsedSlots.departure_city ||
+    parsedSlots.nights ||
+    parsedSlots.checkin ||
+    parsedSlots.checkout ||
+    parsedSlots.budget_inr ||
+    parsedSlots.hotel_preference
+  ) {
+    return true;
+  }
+
+  if (/\b(show me|send me|suggest|recommend|looking for|i want|need|prefer|instead|rather|more|best|cheapest|affordable|budget friendly|budget-friendly)\b/.test(text)) {
+    return true;
+  }
+
+  if (intent === 'hotels') {
+    return /\b(3 star|4 star|5 star|hotel|hotels|resort|stay|pool|breakfast|beachfront|family|honeymoon|near|location|budget|luxury|premium)\b/.test(text);
+  }
+
+  if (intent === 'flights') {
+    return /\b(flight|flights|direct|nonstop|non-stop|one stop|morning|evening|refundable|business class|premium economy|window|aisle|budget|cheapest)\b/.test(text);
+  }
+
+  return /\b(package|packages|family|honeymoon|adventure|relaxation|luxury|budget|premium|personalized|personalised|custom)\b/.test(text);
+}
+
 export function resolveWorkflowState(args: {
   userMessage: string;
   classifiedIntent?: string;
@@ -813,7 +856,8 @@ export function resolveWorkflowState(args: {
     }
   }
 
-  slots = mergeSlots(slots, parseGeneralSlots(args.userMessage, intent, slots));
+  const currentMessageSlots = parseGeneralSlots(args.userMessage, intent, slots);
+  slots = mergeSlots(slots, currentMessageSlots);
   // AI-extracted slot hints are a fallback layer: they only fill still-missing fields
   // and never override slots already captured by deterministic parsing.
   if (args.aiSlots) {
@@ -824,7 +868,7 @@ export function resolveWorkflowState(args: {
   // If the current message sets post_package_action AND no lead has been
   // explicitly provided AFTER the last post_package_action in session history,
   // clear any accidentally accumulated lead slots so the bot always asks fresh.
-  const currentMsgPpa = parseGeneralSlots(args.userMessage, intent, {}).post_package_action;
+  const currentMsgPpa = currentMessageSlots.post_package_action;
   if (currentMsgPpa) {
     const msgsAfterLastPpa = lastPpaIdx !== -1
       ? sessionMessages.slice(lastPpaIdx + 1)
@@ -841,6 +885,35 @@ export function resolveWorkflowState(args: {
     }
   }
 
+  const currentLooksLikeRefinement = looksLikeShowPackagesRefinement(
+    args.userMessage,
+    intent,
+    currentMessageSlots
+  );
+  const currentHasLeadData = Boolean(
+    currentMessageSlots.name ||
+    currentMessageSlots.phone ||
+    currentMessageSlots.email ||
+    currentMessageSlots.callback_time
+  );
+  const currentRequestsCallback =
+    currentMessageSlots.post_package_action === 'arrange_callback' || msgIntent === 'callback_request';
+
+  // If the user shifts back into travel refinement mode, clear any stale
+  // callback/lead-collection state carried from earlier turns in the same session.
+  if (
+    isTravelSalesIntent(intent) &&
+    currentLooksLikeRefinement &&
+    !currentHasLeadData &&
+    !currentRequestsCallback
+  ) {
+    delete slots.post_package_action;
+    delete slots.name;
+    delete slots.phone;
+    delete slots.email;
+    delete slots.callback_time;
+  }
+
   // If "customize" is selected as post_package_action, switch to personalized
   if (slots.post_package_action === 'customize') {
     slots.holiday_type = 'personalized';
@@ -854,14 +927,17 @@ export function resolveWorkflowState(args: {
   if (preStage === 'show_packages' && !slots.post_package_action) {
     const msg = args.userMessage.trim();
     const msgL = normalize(msg);
-    if (/^[123]$/.test(msg) ||
-        /\b(budget|premium|luxury|package [123]|option [123]|deal [123])\b/i.test(msg) ||
-        /\b(get package|get detail|package detail|get flight details?|flight details?|get hotel details?|hotel details?)\b/i.test(msg) ||
-        /\b(itinerary|day wise|day-wise|day by day)\b/i.test(msg)) {
+    const looksLikeRefinement = looksLikeShowPackagesRefinement(msg, intent, currentMessageSlots);
+    if (!looksLikeRefinement && (
+        /^[123]$/.test(msg) ||
+        /^(budget|premium|luxury|package [123]|option [123]|deal [123])$/i.test(msgL) ||
+        /^(get package|get detail|get details|package detail|flight details?|get flight details?|hotel details?|get hotel details?)$/i.test(msgL) ||
+        /^(itinerary|day wise|day-wise|day by day)$/i.test(msgL)
+      )) {
       slots.post_package_action = 'get_details';
     } else if (/\b(customis|customiz|modify|edit plan|change plan|customise flights?|customize flights?|customise hotels?|customize hotels?)\b/i.test(msgL)) {
       slots.post_package_action = 'customize';
-    } else if (/\b(callback|call me|call back|arrange call)\b/i.test(msgL)) {
+    } else if (/^(callback|call me|call back|arrange call|arrange callback)$/i.test(msgL)) {
       slots.post_package_action = 'arrange_callback';
     }
   }
@@ -1174,8 +1250,15 @@ export function detectWorkflowIntent(message: string, classifiedIntent?: string)
 export function buildConversationMemoryBlock(args: {
   state: WorkflowState;
   recentUserMessages?: string[];
+  recentMessages?: Array<{
+    role?: 'user' | 'assistant' | 'system';
+    content?: string;
+  }>;
 }): string {
   const recent = (args.recentUserMessages || []).filter(Boolean).slice(-12);
+  const transcript = (args.recentMessages || [])
+    .filter((item) => item?.content)
+    .slice(-16);
   const slotPairs = Object.entries(args.state.slots || {}).filter(([, v]) => Boolean(v));
   const slotText =
     slotPairs.length > 0
@@ -1185,6 +1268,12 @@ export function buildConversationMemoryBlock(args: {
     recent.length > 0
       ? recent.map((v, i) => `${i + 1}. "${v}"`).join('\n')
       : 'none';
+  const transcriptText =
+    transcript.length > 0
+      ? transcript
+          .map((item, i) => `${i + 1}. ${(item.role || 'assistant').toUpperCase()}: "${item.content}"`)
+          .join('\n')
+      : 'none';
 
   return [
     'CONVERSATION MEMORY (AUTHORITATIVE - follow exactly)',
@@ -1192,6 +1281,8 @@ export function buildConversationMemoryBlock(args: {
     `Stage   : ${args.state.stage}`,
     `Collected slots: ${slotText}`,
     `Missing : ${args.state.missingSlots.length ? args.state.missingSlots.join(', ') : 'none - all collected'}`,
+    'Recent full chat turns (oldest -> newest):',
+    transcriptText,
     'Recent user messages (oldest -> newest):',
     recentText,
     'RULE: Never re-ask for already captured slots. Never contradict captured data.',
