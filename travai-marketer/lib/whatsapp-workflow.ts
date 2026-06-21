@@ -1170,6 +1170,79 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
   return null;
 }
 
+function normalizeAssistantMessageForStateCheck(message: string | null | undefined): string {
+  return String(message || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isCallbackConfirmationMessage(message: string | null | undefined): boolean {
+  const text = normalizeAssistantMessageForStateCheck(message);
+  return text.includes('callback has been scheduled successfully');
+}
+
+function isConversationClosureReply(message: string | null | undefined): boolean {
+  const text = normalizeSelectionText(message || '');
+  if (!text) return false;
+  return /^(no|nope|nah|not now|nothing else|thats all|that s all|all good|done|bye|ok thanks|okay thanks|thanks|thank you|no thanks|no thank you)$/.test(text);
+}
+
+function isAffirmativeContinuationReply(message: string | null | undefined): boolean {
+  const text = normalizeSelectionText(message || '');
+  if (!text) return false;
+  return /^(yes|yeah|yep|sure|ok|okay|please do|go ahead|continue|help me|tell me more)$/.test(text);
+}
+
+export function buildConfirmedWorkflowReply(args: {
+  state: WorkflowState;
+  userMessage: string;
+  lastAssistantMessage?: string | null;
+}): string {
+  const { state, userMessage, lastAssistantMessage } = args;
+  const slots = state.slots || {};
+  const name = slots.name ? `, ${slots.name}` : '';
+  const callbackTime = slots.callback_time || 'at the earliest';
+  const ctx = state.intent === 'flights'
+    ? 'assist you with the best flight options'
+    : state.intent === 'hotels'
+      ? 'assist you with the best hotel options'
+      : 'assist you with complete package details';
+
+  if (!isCallbackConfirmationMessage(lastAssistantMessage)) {
+    return (
+      `Perfect${name}! Your callback has been scheduled successfully.\n\n` +
+      `Our travel expert will contact you *${callbackTime}* and ${ctx}.\n\n` +
+      'Is there anything else I may assist you with today?'
+    );
+  }
+
+  if (isConversationClosureReply(userMessage)) {
+    return (
+      'Thank you for your time.\n' +
+      'We truly appreciate your support.\n\n' +
+      'Kindly rate your experience with us:\n' +
+      'https://www.google.com/search?q=Traventions+India+Pvt+Ltd+Reviews'
+    );
+  }
+
+  if (isAffirmativeContinuationReply(userMessage)) {
+    return (
+      'How may I assist you today?\n\n' +
+      '1. Plan a Holiday\n' +
+      '2. Flights\n' +
+      '3. Hotels'
+    );
+  }
+
+  return (
+    'How may I assist you today?\n\n' +
+    '1. Plan a Holiday\n' +
+    '2. Flights\n' +
+    '3. Hotels'
+  );
+}
+
 // â”€â”€â”€ intent detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export function detectWorkflowIntent(message: string, classifiedIntent?: string): WorkflowIntent {

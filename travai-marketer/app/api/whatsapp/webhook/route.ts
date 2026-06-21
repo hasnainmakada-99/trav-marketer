@@ -39,6 +39,7 @@ import {
   getWorkflowSystemPromptBlock,
   buildConversationMemoryBlock,
   buildLeadNotes,
+  buildConfirmedWorkflowReply,
   isQuestionLike,
   type WorkflowIntent,
   type WorkflowStage,
@@ -1171,9 +1172,16 @@ async function generateAndSendResponse(
     // AI is only used for creative stages (show_packages, confirmed, unknown) where
     // buildWorkflowReply returns null. This prevents AI from being anchored to bad
     // patterns in conversation history and ignoring the system prompt task.
-    const deterministicReply = isQuestionLike(correctedText)
-      ? null
-      : buildWorkflowReply(workflowState);
+    const deterministicReply =
+      workflowState.stage === 'confirmed'
+        ? buildConfirmedWorkflowReply({
+            state: workflowState,
+            userMessage: correctedText,
+            lastAssistantMessage: recentAiDoc?.message || null,
+          })
+        : isQuestionLike(correctedText)
+          ? null
+          : buildWorkflowReply(workflowState);
 
     if (deterministicReply !== null) {
       const waReply = normalizeToWhatsAppMarkdown(deterministicReply);
