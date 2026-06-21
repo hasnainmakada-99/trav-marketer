@@ -40,6 +40,9 @@ import {
   buildConversationMemoryBlock,
   buildLeadNotes,
   buildConfirmedWorkflowReply,
+  isAffirmativeContinuationReply,
+  isCallbackConfirmationMessage,
+  isConversationClosureReply,
   isQuestionLike,
   type WorkflowIntent,
   type WorkflowStage,
@@ -1172,8 +1175,15 @@ async function generateAndSendResponse(
     // AI is only used for creative stages (show_packages, confirmed, unknown) where
     // buildWorkflowReply returns null. This prevents AI from being anchored to bad
     // patterns in conversation history and ignoring the system prompt task.
+    const callbackConfirmationFollowUp =
+      isCallbackConfirmationMessage(recentAiDoc?.message || null) &&
+      (
+        isConversationClosureReply(correctedText) ||
+        isAffirmativeContinuationReply(correctedText)
+      );
+
     const deterministicReply =
-      workflowState.stage === 'confirmed'
+      workflowState.stage === 'confirmed' || callbackConfirmationFollowUp
         ? buildConfirmedWorkflowReply({
             state: workflowState,
             userMessage: correctedText,

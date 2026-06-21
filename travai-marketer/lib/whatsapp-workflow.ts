@@ -1177,18 +1177,18 @@ function normalizeAssistantMessageForStateCheck(message: string | null | undefin
     .trim();
 }
 
-function isCallbackConfirmationMessage(message: string | null | undefined): boolean {
+export function isCallbackConfirmationMessage(message: string | null | undefined): boolean {
   const text = normalizeAssistantMessageForStateCheck(message);
   return text.includes('callback has been scheduled successfully');
 }
 
-function isConversationClosureReply(message: string | null | undefined): boolean {
+export function isConversationClosureReply(message: string | null | undefined): boolean {
   const text = normalizeSelectionText(message || '');
   if (!text) return false;
   return /^(no|nope|nah|not now|nothing else|thats all|that s all|all good|done|bye|ok thanks|okay thanks|thanks|thank you|no thanks|no thank you)$/.test(text);
 }
 
-function isAffirmativeContinuationReply(message: string | null | undefined): boolean {
+export function isAffirmativeContinuationReply(message: string | null | undefined): boolean {
   const text = normalizeSelectionText(message || '');
   if (!text) return false;
   return /^(yes|yeah|yep|sure|ok|okay|please do|go ahead|continue|help me|tell me more)$/.test(text);
