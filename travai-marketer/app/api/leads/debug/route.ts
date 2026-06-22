@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getDatabaseClient, APPWRITE_DATABASE_ID } from '@/lib/appwrite';
+import { getActiveDataBackend } from '@/lib/data-backend';
 import { Query } from 'node-appwrite';
 
 /**
@@ -7,6 +8,14 @@ import { Query } from 'node-appwrite';
  * Returns raw diagnostic info from Appwrite to surface why leads are not showing.
  */
 export async function GET() {
+  if (getActiveDataBackend() === 'pocketbase') {
+    return NextResponse.json({
+      disabled: true,
+      backend: 'pocketbase',
+      message: 'Appwrite leads debug is disabled because production uses PocketBase.',
+    });
+  }
+
   const db = getDatabaseClient();
   const result: Record<string, unknown> = {
     databaseId: APPWRITE_DATABASE_ID,

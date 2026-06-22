@@ -28,7 +28,7 @@ const TEAM_ID = process.env.TEAM_ID || process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID |
 const YCLOUD_API_KEY = (process.env.YCLOUD_API_KEY || '').trim();
 const YCLOUD_FROM = (process.env.YCLOUD_WHATSAPP_FROM || '').trim();
 
-if (!APPWRITE_PROJECT_ID || !APPWRITE_API_KEY) {
+if (APP_DATA_BACKEND !== 'pocketbase' && (!APPWRITE_PROJECT_ID || !APPWRITE_API_KEY)) {
   console.error('[Scheduler] Missing Appwrite credentials. Check .env');
   process.exit(1);
 }
