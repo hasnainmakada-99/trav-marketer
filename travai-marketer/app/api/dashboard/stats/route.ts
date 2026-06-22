@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
 import { listDocuments } from '@/lib/appwrite';
 import { queryLocalDocuments } from '@/lib/local-crm-cache';
+import { getContactDisplayLabel } from '@/lib/contact-identity';
 import { humanizeMessagePreview } from '@/lib/message-preview';
 import {
   CRM_STATUS_ORDER,
   buildPhoneVariants,
   buildStatusCounts,
   coerceLeadStatus,
-  getDisplayName,
   normalizePhoneForMatch,
 } from '@/lib/crm';
 
@@ -117,11 +117,12 @@ export async function GET(request: NextRequest) {
       .map((lead) => ({
         ...lead,
         status: coerceLeadStatus(lead.status),
-        name:
-          lead.name ||
-          customerByPhone.get(buildPhoneVariants(lead.phone)[0] || '') ||
-          lead.phone ||
-          'Unknown',
+        name: getContactDisplayLabel({
+          customerName: customerByPhone.get(buildPhoneVariants(lead.phone)[0] || '') || null,
+          leadName: lead.name || null,
+          phone: lead.phone || null,
+          source: (lead as { source?: string | null }).source || 'whatsapp',
+        }),
       }));
 
     const conversationFeed = (get(recentConvos).documents || []) as Array<{
@@ -171,9 +172,10 @@ export async function GET(request: NextRequest) {
             ? 'incoming'
             : 'outgoing',
       }),
-      name: getDisplayName({
+      name: getContactDisplayLabel({
         customerName: customerByPhone.get(buildPhoneVariants(conversation.phone)[0] || '') || null,
         phone: conversation.phone || null,
+        source: 'whatsapp',
       }),
     }));
 

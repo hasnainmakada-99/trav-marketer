@@ -68,14 +68,17 @@ const EXCLUDED_COLLECTIONS = new Set([
   'customers',
   'campaign_logs',
   'staff',
-]);
-
-const PRIORITY_COLLECTIONS = [
-  'business_configs',
+  'leads',
   'campaigns',
   'gbp_posts',
   'gbp_reviews',
-  'leads',
+  'bookings',
+  'booking_requests',
+  'business_configs',
+]);
+
+const PRIORITY_COLLECTIONS = [
+  'website_knowledge',
   'trips',
   'itineraries',
   'itinerary_days',
@@ -573,6 +576,63 @@ export async function loadTravelKnowledge(
   }
 
   const keywords = extractKeywords(userMessage);
+
+  if (getActiveDataBackend() === 'pocketbase') {
+    const importedKnowledge = await fetchCollectionDocs('pocketbase', 'website_knowledge', teamId);
+    if (importedKnowledge.length > 0) {
+      const scoredKnowledge = importedKnowledge
+        .map((doc) => {
+          const sourceUrl = stringifyValue(doc.sourceUrl) || WEBSITE_BASE_URL;
+          const title = stringifyValue(doc.pageTitle) || 'Traventions knowledge';
+          const excerpt = stringifyValue(doc.excerpt);
+          const content = stringifyValue(doc.content);
+          const text = `[website_knowledge] title: ${title} | url: ${sourceUrl} | excerpt: ${excerpt} | content: ${content}`.slice(
+            0,
+            2000
+          );
+          return {
+            text,
+            score: scoreByKeywords(`${title} ${excerpt} ${content} ${sourceUrl}`, keywords),
+            hasPackageSignal: PACKAGE_TERMS_REGEX.test(`${title} ${excerpt} ${content}`),
+            sourceUrl,
+            title,
+            excerpt,
+          };
+        })
+        .filter((item) => item.score > 0 || item.hasPackageSignal)
+        .sort((a, b) => {
+          if (b.hasPackageSignal !== a.hasPackageSignal) {
+            return b.hasPackageSignal ? 1 : -1;
+          }
+          return b.score - a.score;
+        });
+
+      if (scoredKnowledge.length > 0) {
+        const top = scoredKnowledge.slice(0, 10);
+        const best = top[0];
+        const result: TravelKnowledge = {
+          databaseSnippets: top.map((item) => item.text),
+          hasPackageData: top.some((item) => item.hasPackageSignal),
+          bestWebsiteUrl: best?.sourceUrl || WEBSITE_BASE_URL,
+          bestWebsiteTitle: best?.title || 'Traventions',
+          websiteSnippets: top
+            .slice(0, 5)
+            .map((item) => `${item.title} - ${item.sourceUrl} - ${item.excerpt.slice(0, 180)}`),
+          diagnostics: {
+            collectionsScanned: ['pocketbase.website_knowledge'],
+            collectionDocCounts: { 'pocketbase.website_knowledge': importedKnowledge.length },
+            crawledPages: 0,
+          },
+        };
+
+        const nextCache = cachedMap || new Map<string, TravelKnowledge>();
+        nextCache.set(cacheKey, result);
+        knowledgeQueryCache = toCache(nextCache, 6 * 60 * 60 * 1000);
+        return result;
+      }
+    }
+  }
+
   const collections = await resolveKnowledgeCollections();
   const collectionDocCounts: Record<string, number> = {};
   const scoredDb: ScoredText[] = [];

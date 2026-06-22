@@ -119,7 +119,7 @@ function initials(name?: string | null, phone?: string) {
       .map((part) => part[0]?.toUpperCase() || '')
       .join('');
   }
-  return (phone || '?').slice(-2);
+  return 'WA';
 }
 
 function preview(msg: string, type?: string) {
@@ -532,7 +532,7 @@ function InboxTab({
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <h2 className="truncate text-xl font-semibold text-slate-950">
-                          {threadInfo?.name || selectedConversation?.name || selectedPhone}
+                          {threadInfo?.name || selectedConversation?.name || 'WhatsApp contact'}
                         </h2>
                         <StatusBadge status={threadInfo?.crmStatus || selectedConversation?.crmStatus || 'normal_conversation'} />
                       </div>

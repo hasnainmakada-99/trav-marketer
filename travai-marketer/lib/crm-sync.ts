@@ -1,13 +1,14 @@
 import { Query } from 'node-appwrite';
 import { createDocument, listDocuments, updateDocument } from '@/lib/appwrite';
 import { buildBestLeadPreview } from '@/lib/message-preview';
+import { extractCustomerNameFromMessages } from '@/lib/contact-identity';
 import {
   CRM_STATUS_ORDER,
   buildPhoneVariants,
   buildStatusCounts,
   coerceLeadStatus,
   deriveLeadStatus,
-  getDisplayName,
+  getPreferredLeadName,
   mergeLeadStatus,
   normalizePhoneForMatch,
   type CrmLeadStatus,
@@ -201,9 +202,19 @@ export async function syncLeadStatusesFromConversations(teamId: string): Promise
     const customer = customerByPhone.get(normalizedPhone);
     const phone = existingLead?.phone || customer?.phone || history[0]?.phone || normalizedPhone;
     const inferredStatus = inferLeadStatusFromHistory(history, existingLead?.status);
-    const name = getDisplayName({
-      customerName: customer?.name || null,
-      leadName: existingLead?.name || null,
+    const inferredName = extractCustomerNameFromMessages(
+      history
+        .filter((item) => item.role === 'user' || item.sentBy === 'customer')
+        .sort(
+          (a, b) =>
+            new Date(b.createdAt || b.$createdAt || 0).getTime() -
+            new Date(a.createdAt || a.$createdAt || 0).getTime()
+        ),
+      phone
+    );
+    const name = getPreferredLeadName({
+      customerName: customer?.name || inferredName || null,
+      leadName: existingLead?.name || inferredName || null,
       phone,
     });
     const email = customer?.email || existingLead?.email || null;
@@ -212,6 +223,13 @@ export async function syncLeadStatusesFromConversations(teamId: string): Promise
     const now = new Date().toISOString();
 
     inferredItems.push({ status: inferredStatus });
+
+    if (customer?.$id && inferredName && !customer.name) {
+      await updateDocument('customers', customer.$id, {
+        name: inferredName,
+        updatedAt: now,
+      }).catch(() => null);
+    }
 
     if (existingLead?.$id) {
       const nextStatus = mergeLeadStatus(existingLead.status, inferredStatus);

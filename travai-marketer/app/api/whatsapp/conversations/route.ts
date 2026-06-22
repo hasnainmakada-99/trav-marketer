@@ -2,12 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
 import { listDocuments } from '@/lib/appwrite';
 import { queryLocalDocuments } from '@/lib/local-crm-cache';
+import { getContactDisplayLabel } from '@/lib/contact-identity';
 import { humanizeLeadNotes, humanizeMessagePreview } from '@/lib/message-preview';
 import {
   buildPhoneVariants,
   buildStatusCounts,
   coerceLeadStatus,
-  getDisplayName,
   normalizePhoneForMatch,
   type CrmLeadStatus,
 } from '@/lib/crm';
@@ -42,6 +42,7 @@ interface LeadDoc {
   email?: string | null;
   status?: string | null;
   notes?: string | null;
+  source?: string | null;
   teamId?: string;
 }
 
@@ -92,10 +93,11 @@ function resolveContact(phone: string, maps: ReturnType<typeof buildContactMaps>
   return {
     customer,
     lead,
-    displayName: getDisplayName({
+    displayName: getContactDisplayLabel({
       customerName: customer?.name || null,
       leadName: lead?.name || null,
       phone,
+      source: lead?.source || 'whatsapp',
     }),
     email: customer?.email || lead?.email || null,
     status: coerceLeadStatus(lead?.status),

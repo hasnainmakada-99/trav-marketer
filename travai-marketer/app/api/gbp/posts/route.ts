@@ -47,6 +47,28 @@ type PostMediaPayload = {
   thumbnailUrl?: string;
 };
 
+function sanitizeCallToAction(
+  value: GbpCallToAction | null | undefined
+): GbpCallToAction | undefined {
+  if (!value?.actionType || value.actionType === ('NONE' as never)) {
+    return undefined;
+  }
+
+  if (value.actionType === 'CALL') {
+    return { actionType: 'CALL' };
+  }
+
+  const url = String(value.url || '').trim();
+  if (!url) {
+    return undefined;
+  }
+
+  return {
+    actionType: value.actionType,
+    url,
+  };
+}
+
 function safeJsonParse<T>(value?: string | null): T | null {
   if (!value) {
     return null;
@@ -328,10 +350,7 @@ Description: ${String((business as unknown as Record<string, unknown>).businessD
         );
       }
 
-      const resolvedCta: GbpCallToAction | undefined =
-        callToAction && callToAction.actionType && callToAction.actionType !== 'NONE'
-          ? (callToAction as GbpCallToAction)
-          : undefined;
+      const resolvedCta = sanitizeCallToAction(callToAction as GbpCallToAction | undefined);
 
       const postLang = typeof languageCode === 'string' ? languageCode : 'en';
       const postContent = String(finalContent || '');
@@ -384,7 +403,9 @@ Description: ${String((business as unknown as Record<string, unknown>).businessD
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       mediaJson: JSON.stringify(normalizedMedia.slice(0, 6)),
-      callToActionJson: callToAction ? JSON.stringify(callToAction) : '',
+      callToActionJson: sanitizeCallToAction(callToAction as GbpCallToAction | undefined)
+        ? JSON.stringify(sanitizeCallToAction(callToAction as GbpCallToAction | undefined))
+        : '',
       languageCode: typeof languageCode === 'string' ? languageCode : 'en',
       googleState,
       googleSearchUrl,
@@ -484,10 +505,11 @@ export async function PATCH(request: NextRequest) {
       Array.isArray(media)
         ? (media as PostMediaPayload[])
         : safeJsonParse<PostMediaPayload[]>(existingPost.mediaJson) || [];
-    const resolvedCallToAction =
-      callToAction ||
-      safeJsonParse<GbpCallToAction>(existingPost.callToActionJson) ||
-      undefined;
+    const resolvedCallToAction = sanitizeCallToAction(
+      (callToAction as GbpCallToAction | undefined) ||
+        safeJsonParse<GbpCallToAction>(existingPost.callToActionJson) ||
+        undefined
+    );
     const resolvedLanguageCode =
       typeof languageCode === 'string'
         ? languageCode
@@ -520,10 +542,7 @@ export async function PATCH(request: NextRequest) {
         return NextResponse.json({ error: 'Post content is empty' }, { status: 400 });
       }
 
-      const resolvedCta: GbpCallToAction | undefined =
-        resolvedCallToAction?.actionType && resolvedCallToAction.actionType !== 'NONE'
-          ? resolvedCallToAction
-          : undefined;
+      const resolvedCta = sanitizeCallToAction(resolvedCallToAction);
 
       let createdPost: GoogleLocalPost;
       try {

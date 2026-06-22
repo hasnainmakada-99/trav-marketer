@@ -31,6 +31,12 @@ interface Stats {
   }>;
 }
 
+interface KnowledgeStatus {
+  totalRecords: number;
+  activeRecords: number;
+  lastSyncedAt: string | null;
+}
+
 function ago(ts?: string) {
   if (!ts) return '';
   const diff = Date.now() - new Date(ts).getTime();
@@ -49,6 +55,9 @@ export default function DashboardPage() {
   const [statsLoading, setStatsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [knowledgeStatus, setKnowledgeStatus] = useState<KnowledgeStatus | null>(null);
+  const [knowledgeLoading, setKnowledgeLoading] = useState(false);
+  const [knowledgeSyncing, setKnowledgeSyncing] = useState(false);
   const loadStats = useCallback(async (options?: { silent?: boolean; forceFresh?: boolean }) => {
     const silent = options?.silent ?? false;
     const forceFresh = options?.forceFresh ?? false;
@@ -77,6 +86,36 @@ export default function DashboardPage() {
     }
   }, [stats]);
 
+  const loadKnowledgeStatus = useCallback(async () => {
+    setKnowledgeLoading(true);
+    try {
+      const response = await fetch(`/api/knowledge/train?teamId=${encodeURIComponent(TEAM_ID)}`, {
+        cache: 'no-store',
+      });
+      if (response.ok) {
+        setKnowledgeStatus(await response.json());
+      }
+    } finally {
+      setKnowledgeLoading(false);
+    }
+  }, []);
+
+  const syncKnowledge = useCallback(async () => {
+    setKnowledgeSyncing(true);
+    try {
+      const response = await fetch('/api/knowledge/train', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ teamId: TEAM_ID }),
+      });
+      if (response.ok) {
+        setKnowledgeStatus(await response.json());
+      }
+    } finally {
+      setKnowledgeSyncing(false);
+    }
+  }, []);
+
   useEffect(() => {
     const init = async () => {
       try {
@@ -87,6 +126,7 @@ export default function DashboardPage() {
         }
         setUser(currentUser as { name?: string; email?: string });
         void loadStats();
+        void loadKnowledgeStatus();
       } catch {
         router.push('/login');
       } finally {
@@ -94,7 +134,7 @@ export default function DashboardPage() {
       }
     };
     void init();
-  }, [router, loadStats]);
+  }, [router, loadKnowledgeStatus, loadStats]);
 
   useEffect(() => {
     return () => {
@@ -203,6 +243,12 @@ export default function DashboardPage() {
               Open GBP workspace
             </button>
             <button
+              onClick={() => void syncKnowledge()}
+              className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
+            >
+              {knowledgeSyncing ? 'Training AI...' : 'Train AI knowledge'}
+            </button>
+            <button
               onClick={() => void loadStats({ forceFresh: true })}
               className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/20"
             >
@@ -225,6 +271,18 @@ export default function DashboardPage() {
               {stats?.reviewsReplied ?? (statsLoading ? '...' : 0)}
             </p>
             <p className="mt-1 text-sm text-slate-500">Reviews already answered with AI support and synced to Google.</p>
+          </div>
+          <div className="rounded-[28px] border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/60 sm:col-span-2 xl:col-span-1">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">AI knowledge</p>
+            <p className="mt-3 text-3xl font-semibold text-slate-950">
+              {knowledgeStatus?.activeRecords ?? (knowledgeLoading ? '...' : 0)}
+            </p>
+            <p className="mt-1 text-sm text-slate-500">
+              Travel website and package records ready for WhatsApp answers.
+            </p>
+            <p className="mt-3 text-xs text-slate-400">
+              Last sync {knowledgeStatus?.lastSyncedAt ? ago(knowledgeStatus.lastSyncedAt) : 'not yet'}
+            </p>
           </div>
         </div>
       </div>
@@ -341,7 +399,9 @@ export default function DashboardPage() {
                   <div key={conversation.$id} className="rounded-2xl border border-white bg-white px-4 py-3">
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="truncate font-semibold text-slate-900">{conversation.name || conversation.phone}</p>
+                        <p className="truncate font-semibold text-slate-900">
+                          {conversation.name || 'WhatsApp contact'}
+                        </p>
                         <p className="truncate text-xs text-slate-400">{conversation.phone}</p>
                       </div>
                       <span className="text-xs text-slate-400">{ago(conversation.$createdAt || conversation.createdAt)}</span>
@@ -363,7 +423,9 @@ export default function DashboardPage() {
                   <div key={lead.$id} className="rounded-2xl border border-white bg-white px-4 py-3">
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="truncate font-semibold text-slate-900">{lead.name || lead.phone}</p>
+                        <p className="truncate font-semibold text-slate-900">
+                          {lead.name || 'WhatsApp contact'}
+                        </p>
                         <p className="truncate text-xs text-slate-400">{lead.phone}</p>
                       </div>
                       {lead.status && (

@@ -86,7 +86,6 @@ export interface GoogleLocalPost {
   callToAction?: {
     actionType?: string;
     url?: string;
-    phoneNumber?: string;
   };
 }
 
@@ -358,7 +357,6 @@ export async function listGoogleLocations(
 export interface GbpCallToAction {
   actionType: 'BOOK' | 'ORDER' | 'SHOP' | 'LEARN_MORE' | 'SIGN_UP' | 'CALL';
   url?: string;
-  phoneNumber?: string;
 }
 
 export async function createGoogleLocalPost(

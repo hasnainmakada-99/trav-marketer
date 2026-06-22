@@ -22,7 +22,6 @@ interface GbpPostMedia {
 interface GbpCallToAction {
   actionType: 'BOOK' | 'ORDER' | 'SHOP' | 'LEARN_MORE' | 'SIGN_UP' | 'CALL';
   url?: string;
-  phoneNumber?: string;
 }
 
 interface GbpPost {
@@ -195,7 +194,6 @@ function GbpPageInner() {
     publishNow: false,
     callToAction: 'NONE',
     callToActionUrl: '',
-    callToActionPhone: '',
   });
 
   const flash = useCallback((msg: string, ok = true) => {
@@ -212,7 +210,6 @@ function GbpPageInner() {
       publishNow: false,
       callToAction: 'NONE',
       callToActionUrl: '',
-      callToActionPhone: '',
     });
     setSelectedMedia([]);
   }, []);
@@ -512,9 +509,7 @@ function GbpPageInner() {
         postForm.callToAction !== 'NONE'
           ? {
               actionType: postForm.callToAction,
-              ...(postForm.callToAction === 'CALL'
-                ? { phoneNumber: postForm.callToActionPhone }
-                : { url: postForm.callToActionUrl }),
+              ...(postForm.callToAction === 'CALL' ? {} : { url: postForm.callToActionUrl }),
             }
           : undefined;
 
@@ -1234,7 +1229,6 @@ function GbpPageInner() {
                             ...current,
                             callToAction: event.target.value,
                             callToActionUrl: '',
-                            callToActionPhone: '',
                           }))
                         }
                         className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
@@ -1271,15 +1265,11 @@ function GbpPageInner() {
                   {postForm.callToAction === 'CALL' && (
                     <div className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/50">
                       <label className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                        Phone Number
+                        Call Action
                       </label>
-                      <input
-                        type="tel"
-                        value={postForm.callToActionPhone}
-                        onChange={(event) => setPostForm((current) => ({ ...current, callToActionPhone: event.target.value }))}
-                        placeholder="+91 98765 43210"
-                        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
-                      />
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                        Google uses the phone saved on the business profile for CALL posts, so no extra number needs to be sent here.
+                      </div>
                     </div>
                   )}
                 </div>

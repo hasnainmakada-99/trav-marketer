@@ -24,6 +24,7 @@ import {
   isConversionIntent,
   mergeLeadStatus,
 } from '@/lib/crm';
+import { extractCustomerNameCandidate } from '@/lib/contact-identity';
 import { sendCallbackEmails } from '@/lib/email';
 import {
   enforceSafeUrlsInReply,
@@ -639,7 +640,12 @@ export async function POST(request: NextRequest) {
     // Process incoming messages
     if (messages && messages.length > 0) {
       for (const msg of messages) {
-        await processIncomingMessage(msg, phoneNumberId || '', request.url);
+        await processIncomingMessage(
+          msg,
+          phoneNumberId || '',
+          request.url,
+          webhook.contact?.profile?.name || null
+        );
       }
     }
 
@@ -666,7 +672,8 @@ export async function POST(request: NextRequest) {
 async function processIncomingMessage(
   message: Parameters<typeof extractMessage>[0],
   webhookPhoneNumberId: string,
-  requestUrl: string
+  requestUrl: string,
+  contactName?: string | null
 ) {
   try {
     const incoming = extractMessage(message);
@@ -761,7 +768,13 @@ async function processIncomingMessage(
     console.log(`[Incoming] Incoming ${type} message from ${phone}:`, text || messageId);
 
     // Find or create customer record
-    let customer = await findOrCreateCustomer(phone, teamId);
+    const seededName =
+      extractCustomerNameCandidate(contactName || null, phone) ||
+      extractCustomerNameCandidate(text || null, phone) ||
+      null;
+    let customer = await findOrCreateCustomerWithSeed(phone, teamId, {
+      name: seededName,
+    });
 
     // Save the conversation message
     if (!existingInbound) {
@@ -927,6 +940,14 @@ async function processMessageStatus(
  * Find or create a customer record
  */
 async function findOrCreateCustomer(phone: string, teamId: string) {
+  return findOrCreateCustomerWithSeed(phone, teamId, {});
+}
+
+async function findOrCreateCustomerWithSeed(
+  phone: string,
+  teamId: string,
+  seed: { name?: string | null }
+) {
   try {
     const variants = buildPhoneVariants(phone);
     const result = await readCachedDocuments('customers', [
@@ -936,13 +957,24 @@ async function findOrCreateCustomer(phone: string, teamId: string) {
     ]);
 
     if (result.documents.length > 0) {
-      return result.documents[0];
+      const existing = result.documents[0] as { $id: string; name?: string | null };
+      if (seed.name && !existing.name) {
+        const updated = await updateDocument('customers', existing.$id, {
+          name: seed.name,
+          updatedAt: new Date().toISOString(),
+        }).catch(() => null);
+        if (updated) {
+          return updated;
+        }
+      }
+      return existing;
     }
 
     // Create new customer
     return await createDocument('customers', {
       teamId,
       phone: phone,
+      name: seed.name || null,
       source: 'whatsapp',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),

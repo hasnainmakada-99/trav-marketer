@@ -29,11 +29,21 @@ interface Lead {
 function getLeadDisplayName(lead: Lead) {
   if (lead.name?.trim()) return lead.name.trim();
   if (lead.source === 'walk_in') return 'Walk-in lead';
-  return 'WhatsApp lead';
+  return 'WhatsApp contact';
 }
 
 function ago(iso?: string) {
   if (!iso) return '—';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 60_000) return 'just now';
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ago`;
+  if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h ago`;
+  if (ms < 7 * 86_400_000) return `${Math.floor(ms / 86_400_000)}d ago`;
+  return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+}
+
+function formatAgoLabel(iso?: string) {
+  if (!iso) return '-';
   const ms = Date.now() - new Date(iso).getTime();
   if (ms < 60_000) return 'just now';
   if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ago`;
@@ -295,9 +305,17 @@ export default function LeadsPage() {
                 WhatsApp leads now move through New Lead, Normal Conversation, Connected, Converted,
                 and Closed. Callback requests, contact identity, and manual sales actions all stay in sync.
               </p>
-              <p className="mt-2 text-xs text-slate-400">
+              <p className="mt-2 hidden text-xs text-slate-400">
                 {total} leads · last refresh{' '}
                 {lastRefresh ? lastRefresh.toLocaleTimeString('en-IN', { timeStyle: 'short' }) : '—'}
+              </p>
+              <p className="mt-2 hidden text-xs text-slate-400">
+                {total} leads · last refresh{' '}
+                {lastRefresh ? lastRefresh.toLocaleTimeString('en-IN', { timeStyle: 'short' }) : '-'}
+              </p>
+              <p className="mt-2 text-xs text-slate-400">
+                {total} leads - last refresh{' '}
+                {lastRefresh ? lastRefresh.toLocaleTimeString('en-IN', { timeStyle: 'short' }) : '-'}
               </p>
             </div>
 
@@ -443,7 +461,7 @@ export default function LeadsPage() {
                         {lead.email && <p className="mt-1 text-sm text-slate-500">{lead.email}</p>}
                       </div>
                       <div className="text-left text-xs text-slate-400 sm:text-right">
-                        <p>Last touch {ago(lead.lastContactedAt || lead.createdAt || lead.$createdAt)}</p>
+                        <p>Last touch {formatAgoLabel(lead.lastContactedAt || lead.createdAt || lead.$createdAt)}</p>
                         <p className="mt-1">Source: {lead.source || 'whatsapp'}</p>
                       </div>
                     </div>
