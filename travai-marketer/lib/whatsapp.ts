@@ -230,9 +230,11 @@ interface IncomingMessage {
     list_reply?: { id?: string; title?: string; description?: string };
   };
   image?: { id?: string; caption?: string; mime_type?: string };
-  document?: { id?: string; filename?: string; mime_type?: string };
+  document?: { id?: string; filename?: string; caption?: string; mime_type?: string };
   audio?: { id?: string };
-  video?: { id?: string };
+  video?: { id?: string; caption?: string; mime_type?: string };
+  sticker?: { id?: string };
+  location?: { latitude?: number; longitude?: number; name?: string; address?: string };
 }
 
 interface IncomingStatus {
@@ -270,9 +272,11 @@ interface WebhookPayload {
       list_reply?: { id?: string; title?: string; description?: string };
     };
     image?: { id?: string; mime_type?: string; caption?: string };
-    document?: { id?: string; filename?: string; mime_type?: string };
+    document?: { id?: string; filename?: string; caption?: string; mime_type?: string };
     audio?: { id?: string };
-    video?: { id?: string };
+    video?: { id?: string; caption?: string; mime_type?: string };
+    sticker?: { id?: string };
+    location?: { latitude?: number; longitude?: number; name?: string; address?: string };
     createTime?: string;
     sendTime?: string;
   };
@@ -300,14 +304,20 @@ function toUnixSeconds(value?: string): string {
 }
 
 function inferYCloudMessageType(message: Record<string, unknown>): string {
-  if (typeof message.type === 'string' && message.type.trim()) {
-    return message.type;
+  const explicitType = typeof message.type === 'string' ? message.type.trim() : '';
+  if (explicitType && explicitType.toLowerCase() !== 'unsupported') {
+    return explicitType;
   }
   if (message.text) return 'text';
+  if (message.button) return 'button';
+  if (message.interactive) return 'interactive';
   if (message.image) return 'image';
   if (message.document) return 'document';
   if (message.audio) return 'audio';
   if (message.video) return 'video';
+  if (message.sticker) return 'sticker';
+  if (message.location) return 'location';
+  if (explicitType) return explicitType;
   return 'text';
 }
 
@@ -438,6 +448,7 @@ export function extractMessage(message: IncomingMessage) {
   if (message.type === 'image') {
     return {
       ...base,
+      text: message.image?.caption || '',
       mediaId: message.image?.id,
       caption: message.image?.caption,
       mimeType: message.image?.mime_type,
@@ -447,8 +458,10 @@ export function extractMessage(message: IncomingMessage) {
   if (message.type === 'document') {
     return {
       ...base,
+      text: message.document?.caption || '',
       mediaId: message.document?.id,
       fileName: message.document?.filename,
+      caption: message.document?.caption,
       mimeType: message.document?.mime_type,
     };
   }
@@ -456,8 +469,10 @@ export function extractMessage(message: IncomingMessage) {
   if (message.type === 'audio' || message.type === 'video') {
     return {
       ...base,
+      text: message.type === 'video' ? message.video?.caption || '' : '',
       mediaId:
         message.type === 'audio' ? message.audio?.id : message.video?.id,
+      caption: message.type === 'video' ? message.video?.caption : undefined,
     };
   }
 

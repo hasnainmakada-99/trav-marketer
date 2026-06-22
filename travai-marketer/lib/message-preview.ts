@@ -27,6 +27,12 @@ export function humanizeMessagePreview(
   const messageType = String(options?.messageType || '').trim().toLowerCase();
   const direction = options?.direction || null;
 
+  if (messageType === 'unsupported') {
+    return direction === 'outgoing'
+      ? 'Unsupported WhatsApp event'
+      : 'Unsupported WhatsApp message';
+  }
+
   if (text && !isUnsupportedMessage(text)) {
     if (isWhatsAppMessageId(text)) {
       return direction === 'outgoing' ? 'WhatsApp message sent' : 'WhatsApp message received';
@@ -90,6 +96,55 @@ export function buildBestConversationPreview(
       direction,
     });
     if (preview) {
+      return preview.slice(0, 300);
+    }
+  }
+
+  return null;
+}
+
+export function buildBestLeadPreview(
+  conversations: Array<{
+    message?: string | null;
+    messageType?: string | null;
+    role?: 'user' | 'assistant' | null;
+    sentBy?: 'customer' | 'ai' | 'staff' | null;
+  }>
+) {
+  const incoming = conversations.filter(
+    (conversation) => conversation.role === 'user' || conversation.sentBy === 'customer'
+  );
+
+  for (const conversation of incoming) {
+    if (hasUsefulConversationText(conversation.message)) {
+      return normalizeWhitespace(String(conversation.message || '')).slice(0, 300);
+    }
+  }
+
+  for (const conversation of incoming) {
+    const preview = humanizeMessagePreview(conversation.message, {
+      messageType: conversation.messageType,
+      direction: 'incoming',
+    });
+    if (preview && !/^message received$/i.test(preview) && !/^whatsapp message received$/i.test(preview)) {
+      return preview.slice(0, 300);
+    }
+  }
+
+  for (const conversation of conversations) {
+    if (hasUsefulConversationText(conversation.message)) {
+      return normalizeWhitespace(String(conversation.message || '')).slice(0, 300);
+    }
+  }
+
+  for (const conversation of conversations) {
+    const direction =
+      conversation.role === 'user' || conversation.sentBy === 'customer' ? 'incoming' : 'outgoing';
+    const preview = humanizeMessagePreview(conversation.message, {
+      messageType: conversation.messageType,
+      direction,
+    });
+    if (preview && !/^message sent$/i.test(preview) && !/^whatsapp message sent$/i.test(preview)) {
       return preview.slice(0, 300);
     }
   }

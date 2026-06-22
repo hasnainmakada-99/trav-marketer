@@ -1,6 +1,6 @@
 import { Query } from 'node-appwrite';
 import { createDocument, listDocuments, updateDocument } from '@/lib/appwrite';
-import { buildBestConversationPreview } from '@/lib/message-preview';
+import { buildBestLeadPreview } from '@/lib/message-preview';
 import {
   CRM_STATUS_ORDER,
   buildPhoneVariants,
@@ -139,7 +139,7 @@ function latestRelevantNote(conversations: ConversationDoc[]) {
       new Date(b.createdAt || b.$createdAt || 0).getTime() -
       new Date(a.createdAt || a.$createdAt || 0).getTime()
   );
-  return buildBestConversationPreview(ordered);
+  return buildBestLeadPreview(ordered);
 }
 
 function latestConversationTimestamp(conversations: ConversationDoc[]) {

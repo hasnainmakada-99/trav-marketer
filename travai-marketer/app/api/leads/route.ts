@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
 import { listDocuments, createDocument } from '@/lib/appwrite';
 import { queryLocalDocuments } from '@/lib/local-crm-cache';
-import { humanizeLeadNotes } from '@/lib/message-preview';
-import { buildBestConversationPreview } from '@/lib/message-preview';
+import { buildBestLeadPreview, humanizeLeadNotes } from '@/lib/message-preview';
 import { syncLeadStatusesFromConversations } from '@/lib/crm-sync';
 import {
   CRM_STATUS_ORDER,
@@ -220,7 +219,7 @@ export async function GET(request: NextRequest) {
     const enrichedLeads = leads.map((lead) => {
       const normalized = normalizePhoneForMatch(lead.phone as string | null | undefined);
       const preview = normalized
-        ? buildBestConversationPreview(conversationsByPhone.get(normalized) || [])
+        ? buildBestLeadPreview(conversationsByPhone.get(normalized) || [])
         : null;
       return {
         ...lead,
