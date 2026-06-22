@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ID } from 'node-appwrite';
+import { getActiveStorageBackend } from '@/lib/data-backend';
 import {
   getPublicFileViewUrl,
   getStorageClient,
   STORAGE_BUCKETS,
 } from '@/lib/appwrite';
+import { uploadPocketBaseMediaFiles } from '@/lib/pocketbase-server';
 
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 
@@ -23,9 +25,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No files uploaded' }, { status: 400 });
     }
 
-    const storage = getStorageClient();
-    const uploaded = [];
-
     for (const file of files) {
       if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
         return NextResponse.json(
@@ -40,6 +39,17 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
+    }
+
+    if (getActiveStorageBackend() === 'pocketbase') {
+      const uploaded = await uploadPocketBaseMediaFiles(teamId, files);
+      return NextResponse.json({ files: uploaded }, { status: 201 });
+    }
+
+    const storage = getStorageClient();
+    const uploaded = [];
+
+    for (const file of files) {
 
       const fileId = ID.unique();
       await storage.createFile(

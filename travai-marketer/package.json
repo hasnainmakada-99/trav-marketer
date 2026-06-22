@@ -10,7 +10,10 @@
     "list-projects": "node scripts/list-projects.js",
     "verify-config": "node scripts/verify-config.js",
     "setup-db": "node scripts/setup-database.js",
-    "setup-db:prod": "cross-env NODE_ENV=production node scripts/setup-database.js"
+    "setup-db:prod": "cross-env NODE_ENV=production node scripts/setup-database.js",
+    "setup-pocketbase": "node scripts/setup-pocketbase.mjs",
+    "migrate-pocketbase:cache": "node scripts/migrate-local-cache-to-pocketbase.mjs",
+    "migrate-pocketbase:appwrite": "node scripts/migrate-appwrite-to-pocketbase.mjs"
   },
   "dependencies": {
     "appwrite": "^13.0.0",
@@ -20,6 +23,7 @@
     "node-appwrite": "^13.0.0",
     "nodemailer": "^8.0.10",
     "openai": "^4.52.0",
+    "pocketbase": "^0.27.0",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },

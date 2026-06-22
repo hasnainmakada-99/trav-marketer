@@ -7,12 +7,24 @@
 
 import { Client, Databases, Users, Avatars, Storage } from 'node-appwrite';
 import {
+  getActiveDataBackend,
+  shouldMirrorWritesToPocketBase,
+} from '@/lib/data-backend';
+import {
   getLocalDocument,
   isAppwriteReadLimitError,
   queryLocalDocuments,
   removeLocalDocument,
   upsertLocalDocument,
 } from '@/lib/local-crm-cache';
+import {
+  createPocketBaseDocument,
+  deletePocketBaseDocument,
+  getPocketBaseDocument,
+  isPocketBaseConfigured,
+  listPocketBaseDocuments,
+  updatePocketBaseDocument,
+} from '@/lib/pocketbase-server';
 
 let client: Client | null = null;
 let databases: Databases | null = null;
@@ -95,6 +107,12 @@ export async function createDocument(
   data: Record<string, any>,
   documentId?: string
 ) {
+  if (getActiveDataBackend() === 'pocketbase') {
+    const created = await createPocketBaseDocument(collectionId, data, documentId);
+    await upsertLocalDocument(collectionId, created as Record<string, any>).catch(() => null);
+    return created;
+  }
+
   const db = getDatabaseClient();
   const id = documentId || `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
@@ -104,6 +122,9 @@ export async function createDocument(
     id,
     data
   );
+  if (shouldMirrorWritesToPocketBase() && isPocketBaseConfigured()) {
+    await createPocketBaseDocument(collectionId, data, created.$id).catch(() => null);
+  }
   await upsertLocalDocument(collectionId, created as Record<string, any>).catch(() => null);
   return created;
 }
@@ -115,6 +136,12 @@ export async function getDocument(
   collectionId: string,
   documentId: string
 ) {
+  if (getActiveDataBackend() === 'pocketbase') {
+    const document = await getPocketBaseDocument(collectionId, documentId);
+    await upsertLocalDocument(collectionId, document as Record<string, any>).catch(() => null);
+    return document;
+  }
+
   const db = getDatabaseClient();
   try {
     const document = await db.getDocument(
@@ -142,6 +169,16 @@ export async function listDocuments(
   collectionId: string,
   queries: string[] = []
 ) {
+  if (getActiveDataBackend() === 'pocketbase') {
+    const result = await listPocketBaseDocuments(collectionId, queries);
+    await Promise.all(
+      ((result.documents || []) as Array<Record<string, any>>).map((document) =>
+        upsertLocalDocument(collectionId, document).catch(() => null)
+      )
+    );
+    return result;
+  }
+
   const db = getDatabaseClient();
   try {
     const result = await db.listDocuments(
@@ -171,6 +208,12 @@ export async function updateDocument(
   documentId: string,
   data: Record<string, any>
 ) {
+  if (getActiveDataBackend() === 'pocketbase') {
+    const updated = await updatePocketBaseDocument(collectionId, documentId, data);
+    await upsertLocalDocument(collectionId, updated as Record<string, any>).catch(() => null);
+    return updated;
+  }
+
   const db = getDatabaseClient();
   const updated = await db.updateDocument(
     APPWRITE_DATABASE_ID,
@@ -178,6 +221,11 @@ export async function updateDocument(
     documentId,
     data
   );
+  if (shouldMirrorWritesToPocketBase() && isPocketBaseConfigured()) {
+    await updatePocketBaseDocument(collectionId, documentId, data).catch(async () => {
+      await createPocketBaseDocument(collectionId, data, documentId).catch(() => null);
+    });
+  }
   await upsertLocalDocument(collectionId, updated as Record<string, any>).catch(() => null);
   return updated;
 }
@@ -189,12 +237,21 @@ export async function deleteDocument(
   collectionId: string,
   documentId: string
 ) {
+  if (getActiveDataBackend() === 'pocketbase') {
+    const deleted = await deletePocketBaseDocument(collectionId, documentId);
+    await removeLocalDocument(collectionId, documentId).catch(() => null);
+    return deleted;
+  }
+
   const db = getDatabaseClient();
   const deleted = await db.deleteDocument(
     APPWRITE_DATABASE_ID,
     collectionId,
     documentId
   );
+  if (shouldMirrorWritesToPocketBase() && isPocketBaseConfigured()) {
+    await deletePocketBaseDocument(collectionId, documentId).catch(() => null);
+  }
   await removeLocalDocument(collectionId, documentId).catch(() => null);
   return deleted;
 }

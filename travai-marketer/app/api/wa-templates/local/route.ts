@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { IndexType, Query } from 'node-appwrite';
+import { getActiveDataBackend } from '@/lib/data-backend';
 import {
   APPWRITE_DATABASE_ID,
   createDocument,
@@ -54,6 +55,11 @@ function parseButtons(raw: unknown): string[] {
 }
 
 async function ensureCollection() {
+  if (getActiveDataBackend() === 'pocketbase') {
+    ready = true;
+    return;
+  }
+
   if (ready) return;
   if (initPromise) {
     await initPromise;

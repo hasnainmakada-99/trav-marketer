@@ -1,0 +1,261 @@
+{
+  "collections": [
+    {
+      "name": "business_configs",
+      "type": "base",
+      "fields": [
+        { "name": "teamId", "type": "text", "required": true, "max": 256 },
+        { "name": "businessName", "type": "text", "required": false, "max": 256 },
+        { "name": "businessDescription", "type": "text", "required": false, "max": 4096 },
+        { "name": "whatsappToken", "type": "text", "required": false, "max": 2048 },
+        { "name": "whatsappPhoneNumberId", "type": "text", "required": false, "max": 256 },
+        { "name": "whatsappVerifyToken", "type": "text", "required": false, "max": 512 },
+        { "name": "openaiSystemPrompt", "type": "text", "required": false, "max": 12000 },
+        { "name": "googleAccessToken", "type": "text", "required": false, "max": 2048 },
+        { "name": "googleRefreshToken", "type": "text", "required": false, "max": 2048 },
+        { "name": "googleLocationId", "type": "text", "required": false, "max": 512 },
+        { "name": "googleLocationsJson", "type": "text", "required": false, "max": 120000 },
+        { "name": "createdAt", "type": "date", "required": false },
+        { "name": "updatedAt", "type": "date", "required": false }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_business_configs_teamId ON business_configs (teamId)"
+      ]
+    },
+    {
+      "name": "customers",
+      "type": "base",
+      "fields": [
+        { "name": "teamId", "type": "text", "required": true, "max": 256 },
+        { "name": "phone", "type": "text", "required": true, "max": 32 },
+        { "name": "name", "type": "text", "required": false, "max": 256 },
+        { "name": "email", "type": "email", "required": false },
+        { "name": "source", "type": "text", "required": false, "max": 64 },
+        { "name": "tags", "type": "json", "required": false },
+        { "name": "totalSpent", "type": "number", "required": false },
+        { "name": "lastPurchaseDate", "type": "date", "required": false },
+        { "name": "notes", "type": "text", "required": false, "max": 12000 },
+        { "name": "createdAt", "type": "date", "required": false },
+        { "name": "updatedAt", "type": "date", "required": false }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_customers_team_phone ON customers (teamId, phone)",
+        "CREATE INDEX idx_customers_team_createdAt ON customers (teamId, createdAt)"
+      ]
+    },
+    {
+      "name": "conversations",
+      "type": "base",
+      "fields": [
+        { "name": "teamId", "type": "text", "required": true, "max": 256 },
+        { "name": "customerId", "type": "text", "required": false, "max": 32 },
+        { "name": "phone", "type": "text", "required": true, "max": 32 },
+        { "name": "role", "type": "text", "required": false, "max": 64 },
+        { "name": "message", "type": "text", "required": false, "max": 20000 },
+        { "name": "messageType", "type": "text", "required": false, "max": 64 },
+        { "name": "sentBy", "type": "text", "required": false, "max": 64 },
+        { "name": "metaMessageId", "type": "text", "required": false, "max": 512 },
+        { "name": "deliveryStatus", "type": "text", "required": false, "max": 64 },
+        { "name": "createdAt", "type": "date", "required": false }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_conversations_team_phone ON conversations (teamId, phone)",
+        "CREATE INDEX idx_conversations_team_customer ON conversations (teamId, customerId)",
+        "CREATE INDEX idx_conversations_team_createdAt ON conversations (teamId, createdAt)"
+      ]
+    },
+    {
+      "name": "leads",
+      "type": "base",
+      "fields": [
+        { "name": "teamId", "type": "text", "required": true, "max": 256 },
+        { "name": "phone", "type": "text", "required": true, "max": 32 },
+        { "name": "name", "type": "text", "required": false, "max": 256 },
+        { "name": "email", "type": "email", "required": false },
+        { "name": "source", "type": "text", "required": false, "max": 64 },
+        { "name": "status", "type": "text", "required": false, "max": 64 },
+        { "name": "assignedTo", "type": "text", "required": false, "max": 256 },
+        { "name": "value", "type": "number", "required": false },
+        { "name": "notes", "type": "text", "required": false, "max": 20000 },
+        { "name": "lastContactedAt", "type": "date", "required": false },
+        { "name": "createdAt", "type": "date", "required": false },
+        { "name": "updatedAt", "type": "date", "required": false }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_leads_team_status ON leads (teamId, status)",
+        "CREATE INDEX idx_leads_team_phone ON leads (teamId, phone)",
+        "CREATE INDEX idx_leads_team_createdAt ON leads (teamId, createdAt)",
+        "CREATE INDEX idx_leads_assignedTo ON leads (assignedTo)"
+      ]
+    },
+    {
+      "name": "campaigns",
+      "type": "base",
+      "fields": [
+        { "name": "teamId", "type": "text", "required": true, "max": 256 },
+        { "name": "title", "type": "text", "required": true, "max": 256 },
+        { "name": "type", "type": "text", "required": false, "max": 64 },
+        { "name": "templateName", "type": "text", "required": false, "max": 256 },
+        { "name": "message", "type": "text", "required": false, "max": 20000 },
+        { "name": "segment", "type": "text", "required": false, "max": 128 },
+        { "name": "segmentValue", "type": "text", "required": false, "max": 512 },
+        { "name": "status", "type": "text", "required": false, "max": 64 },
+        { "name": "scheduledAt", "type": "date", "required": false },
+        { "name": "sentAt", "type": "date", "required": false },
+        { "name": "totalSent", "type": "number", "required": false },
+        { "name": "totalDelivered", "type": "number", "required": false },
+        { "name": "totalRead", "type": "number", "required": false },
+        { "name": "totalReplied", "type": "number", "required": false },
+        { "name": "createdBy", "type": "text", "required": false, "max": 256 },
+        { "name": "createdAt", "type": "date", "required": false },
+        { "name": "updatedAt", "type": "date", "required": false }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_campaigns_team_status ON campaigns (teamId, status)",
+        "CREATE INDEX idx_campaigns_team_scheduledAt ON campaigns (teamId, scheduledAt)",
+        "CREATE INDEX idx_campaigns_team_createdAt ON campaigns (teamId, createdAt)"
+      ]
+    },
+    {
+      "name": "campaign_logs",
+      "type": "base",
+      "fields": [
+        { "name": "teamId", "type": "text", "required": true, "max": 256 },
+        { "name": "campaignId", "type": "text", "required": false, "max": 32 },
+        { "name": "phone", "type": "text", "required": false, "max": 32 },
+        { "name": "customerId", "type": "text", "required": false, "max": 32 },
+        { "name": "status", "type": "text", "required": false, "max": 64 },
+        { "name": "metaMessageId", "type": "text", "required": false, "max": 512 },
+        { "name": "sentAt", "type": "date", "required": false },
+        { "name": "deliveredAt", "type": "date", "required": false },
+        { "name": "readAt", "type": "date", "required": false },
+        { "name": "error", "type": "text", "required": false, "max": 4000 }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_campaign_logs_team_campaign ON campaign_logs (teamId, campaignId)",
+        "CREATE INDEX idx_campaign_logs_team_phone ON campaign_logs (teamId, phone)",
+        "CREATE INDEX idx_campaign_logs_status ON campaign_logs (status)"
+      ]
+    },
+    {
+      "name": "gbp_posts",
+      "type": "base",
+      "fields": [
+        { "name": "teamId", "type": "text", "required": true, "max": 256 },
+        { "name": "title", "type": "text", "required": true, "max": 256 },
+        { "name": "content", "type": "text", "required": false, "max": 20000 },
+        { "name": "googlePostId", "type": "text", "required": false, "max": 512 },
+        { "name": "status", "type": "text", "required": false, "max": 64 },
+        { "name": "postedAt", "type": "date", "required": false },
+        { "name": "type", "type": "text", "required": false, "max": 128 },
+        { "name": "createdBy", "type": "text", "required": false, "max": 256 },
+        { "name": "createdAt", "type": "date", "required": false },
+        { "name": "updatedAt", "type": "date", "required": false },
+        { "name": "mediaJson", "type": "text", "required": false, "max": 120000 },
+        { "name": "callToActionJson", "type": "text", "required": false, "max": 12000 },
+        { "name": "languageCode", "type": "text", "required": false, "max": 32 },
+        { "name": "googleState", "type": "text", "required": false, "max": 64 },
+        { "name": "googleSearchUrl", "type": "url", "required": false },
+        { "name": "syncSource", "type": "text", "required": false, "max": 64 }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_gbp_posts_team_status ON gbp_posts (teamId, status)",
+        "CREATE INDEX idx_gbp_posts_team_createdAt ON gbp_posts (teamId, createdAt)"
+      ]
+    },
+    {
+      "name": "gbp_reviews",
+      "type": "base",
+      "fields": [
+        { "name": "teamId", "type": "text", "required": true, "max": 256 },
+        { "name": "googleReviewId", "type": "text", "required": true, "max": 512 },
+        { "name": "reviewer", "type": "text", "required": false, "max": 256 },
+        { "name": "rating", "type": "number", "required": false },
+        { "name": "reviewText", "type": "text", "required": false, "max": 20000 },
+        { "name": "reply", "type": "text", "required": false, "max": 20000 },
+        { "name": "replyStatus", "type": "text", "required": false, "max": 64 },
+        { "name": "repliedAt", "type": "date", "required": false },
+        { "name": "createdAt", "type": "date", "required": false },
+        { "name": "updatedAt", "type": "date", "required": false }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_gbp_reviews_team_replyStatus ON gbp_reviews (teamId, replyStatus)",
+        "CREATE INDEX idx_gbp_reviews_googleReviewId ON gbp_reviews (googleReviewId)"
+      ]
+    },
+    {
+      "name": "staff",
+      "type": "base",
+      "fields": [
+        { "name": "teamId", "type": "text", "required": true, "max": 256 },
+        { "name": "userId", "type": "text", "required": false, "max": 256 },
+        { "name": "name", "type": "text", "required": false, "max": 256 },
+        { "name": "email", "type": "email", "required": false },
+        { "name": "role", "type": "text", "required": false, "max": 64 },
+        { "name": "permissions", "type": "json", "required": false },
+        { "name": "status", "type": "text", "required": false, "max": 64 },
+        { "name": "lastLoginAt", "type": "date", "required": false },
+        { "name": "createdAt", "type": "date", "required": false }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_staff_team_role ON staff (teamId, role)",
+        "CREATE INDEX idx_staff_userId ON staff (userId)",
+        "CREATE INDEX idx_staff_email ON staff (email)"
+      ]
+    },
+    {
+      "name": "wa_local_templates",
+      "type": "base",
+      "fields": [
+        { "name": "teamId", "type": "text", "required": true, "max": 128 },
+        { "name": "name", "type": "text", "required": true, "max": 180 },
+        { "name": "body", "type": "text", "required": true, "max": 12000 },
+        { "name": "buttons", "type": "text", "required": false, "max": 4000 },
+        { "name": "isActive", "type": "bool", "required": false },
+        { "name": "createdAt", "type": "date", "required": false },
+        { "name": "updatedAt", "type": "date", "required": false }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_wa_local_templates_team_active_updated ON wa_local_templates (teamId, isActive, updatedAt)"
+      ]
+    },
+    {
+      "name": "gbp_media",
+      "type": "base",
+      "fields": [
+        { "name": "teamId", "type": "text", "required": true, "max": 256 },
+        { "name": "fileName", "type": "text", "required": false, "max": 512 },
+        { "name": "mimeType", "type": "text", "required": false, "max": 128 },
+        { "name": "size", "type": "number", "required": false },
+        { "name": "mediaFormat", "type": "text", "required": false, "max": 32 },
+        { "name": "asset", "type": "file", "required": true, "maxSelect": 1, "maxSize": 31457280, "mimeTypes": ["image/jpeg", "image/png", "image/webp", "image/gif", "video/mp4", "video/quicktime", "video/x-msvideo", "video/webm"] },
+        { "name": "createdAt", "type": "date", "required": false },
+        { "name": "updatedAt", "type": "date", "required": false }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_gbp_media_team_createdAt ON gbp_media (teamId, createdAt)"
+      ]
+    },
+    {
+      "name": "website_knowledge",
+      "type": "base",
+      "fields": [
+        { "name": "teamId", "type": "text", "required": true, "max": 256 },
+        { "name": "sourceUrl", "type": "url", "required": false },
+        { "name": "pageTitle", "type": "text", "required": false, "max": 512 },
+        { "name": "excerpt", "type": "text", "required": false, "max": 4000 },
+        { "name": "content", "type": "text", "required": false, "max": 120000 },
+        { "name": "tags", "type": "json", "required": false },
+        { "name": "contentHash", "type": "text", "required": false, "max": 128 },
+        { "name": "isActive", "type": "bool", "required": false },
+        { "name": "lastSyncedAt", "type": "date", "required": false },
+        { "name": "createdAt", "type": "date", "required": false },
+        { "name": "updatedAt", "type": "date", "required": false }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_website_knowledge_team_active ON website_knowledge (teamId, isActive)",
+        "CREATE INDEX idx_website_knowledge_hash ON website_knowledge (contentHash)"
+      ]
+    }
+  ]
+}
