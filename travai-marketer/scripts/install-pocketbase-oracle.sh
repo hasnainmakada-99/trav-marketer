@@ -51,6 +51,7 @@ grep -q '^POCKETBASE_SUPERUSER_PASSWORD=' "$APP_ENV_FILE" || echo "POCKETBASE_SU
 grep -q '^APP_DATA_BACKEND=' "$APP_ENV_FILE" || echo "APP_DATA_BACKEND=appwrite" >> "$APP_ENV_FILE"
 grep -q '^APP_STORAGE_BACKEND=' "$APP_ENV_FILE" || echo "APP_STORAGE_BACKEND=appwrite" >> "$APP_ENV_FILE"
 grep -q '^POCKETBASE_MIRROR_WRITES=' "$APP_ENV_FILE" || echo "POCKETBASE_MIRROR_WRITES=true" >> "$APP_ENV_FILE"
+grep -q '^POCKETBASE_PRIMARY_COLLECTIONS=' "$APP_ENV_FILE" || echo "POCKETBASE_PRIMARY_COLLECTIONS=leads,customers,conversations" >> "$APP_ENV_FILE"
 
 sudo tee /etc/systemd/system/travai-pocketbase.service >/dev/null <<EOF
 [Unit]
