@@ -2,6 +2,12 @@ function normalizeWhitespace(value: string) {
   return value.replace(/\s+/g, ' ').trim();
 }
 
+function extractBracketPlaceholderType(value: string | null | undefined) {
+  const text = normalizeWhitespace(String(value || ''));
+  const match = text.match(/^\[([a-z_]+)\]$/i);
+  return match?.[1]?.toLowerCase() || null;
+}
+
 export function isUnsupportedMessage(value: string | null | undefined) {
   return normalizeWhitespace(String(value || '')).toLowerCase() === '[unsupported]';
 }
@@ -24,7 +30,9 @@ export function humanizeMessagePreview(
   }
 ) {
   const text = normalizeWhitespace(String(value || ''));
-  const messageType = String(options?.messageType || '').trim().toLowerCase();
+  const explicitMessageType = String(options?.messageType || '').trim().toLowerCase();
+  const placeholderType = extractBracketPlaceholderType(text);
+  const messageType = placeholderType || explicitMessageType;
   const direction = options?.direction || null;
 
   if (messageType === 'unsupported') {
@@ -32,6 +40,17 @@ export function humanizeMessagePreview(
       ? 'Unsupported WhatsApp event'
       : 'Unsupported WhatsApp message';
   }
+
+  if (messageType === 'revoke') {
+    return 'Deleted WhatsApp message';
+  }
+
+  if (messageType === 'image') return 'Photo attachment';
+  if (messageType === 'audio' || messageType === 'voice') return 'Voice note';
+  if (messageType === 'video') return 'Video attachment';
+  if (messageType === 'document') return 'Document attachment';
+  if (messageType === 'sticker') return 'Sticker message';
+  if (messageType === 'location') return 'Location shared';
 
   if (text && !isUnsupportedMessage(text)) {
     if (isWhatsAppMessageId(text)) {
@@ -59,6 +78,7 @@ export function hasUsefulConversationText(value: string | null | undefined) {
   if (!text) return false;
   if (isUnsupportedMessage(text)) return false;
   if (isWhatsAppMessageId(text)) return false;
+  if (extractBracketPlaceholderType(text)) return false;
   if (isAiReplyPlaceholder(text)) return false;
   if (/^Greeting sent$/i.test(text)) return false;
   return true;
