@@ -1,5 +1,6 @@
 import { Query } from 'node-appwrite';
 import { createDocument, listDocuments, updateDocument } from '@/lib/appwrite';
+import { buildBestConversationPreview } from '@/lib/message-preview';
 import {
   CRM_STATUS_ORDER,
   buildPhoneVariants,
@@ -138,13 +139,7 @@ function latestRelevantNote(conversations: ConversationDoc[]) {
       new Date(b.createdAt || b.$createdAt || 0).getTime() -
       new Date(a.createdAt || a.$createdAt || 0).getTime()
   );
-
-  const latestIncoming = ordered.find(
-    (conversation) => isIncomingConversation(conversation) && String(conversation.message || '').trim()
-  );
-  const latestAny = ordered.find((conversation) => String(conversation.message || '').trim());
-  const text = String(latestIncoming?.message || latestAny?.message || '').trim();
-  return text ? text.slice(0, 300) : null;
+  return buildBestConversationPreview(ordered);
 }
 
 function latestConversationTimestamp(conversations: ConversationDoc[]) {

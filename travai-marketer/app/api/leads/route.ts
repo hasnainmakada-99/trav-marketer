@@ -3,6 +3,7 @@ import { Query } from 'node-appwrite';
 import { listDocuments, createDocument } from '@/lib/appwrite';
 import { queryLocalDocuments } from '@/lib/local-crm-cache';
 import { humanizeLeadNotes } from '@/lib/message-preview';
+import { buildBestConversationPreview } from '@/lib/message-preview';
 import { syncLeadStatusesFromConversations } from '@/lib/crm-sync';
 import {
   CRM_STATUS_ORDER,
@@ -145,8 +146,72 @@ export async function GET(request: NextRequest) {
       }),
     }));
 
+    const conversationPhoneVariants = Array.from(
+      new Set(
+        leads.flatMap((lead) =>
+          buildPhoneVariants(lead.phone as string | null | undefined)
+        )
+      )
+    ).filter(Boolean);
+
+    const recentConversationResult =
+      conversationPhoneVariants.length > 0
+        ? await (forceRemote
+            ? listDocuments('conversations', [
+                Query.equal('teamId', teamId),
+                Query.equal('phone', conversationPhoneVariants),
+                Query.orderDesc('$createdAt'),
+                Query.limit(1000),
+              ])
+            : queryLocalDocuments('conversations', [
+                Query.equal('teamId', teamId),
+                Query.equal('phone', conversationPhoneVariants),
+                Query.orderDesc('$createdAt'),
+                Query.limit(1000),
+              ])).catch(() => ({ documents: [] }))
+        : { documents: [] };
+
+    const conversationsByPhone = new Map<
+      string,
+      Array<{
+        message?: string | null;
+        messageType?: string | null;
+        role?: 'user' | 'assistant' | null;
+        sentBy?: 'customer' | 'ai' | 'staff' | null;
+        createdAt?: string | null;
+        $createdAt?: string | null;
+      }>
+    >();
+
+    for (const conversation of (recentConversationResult.documents || []) as Array<{
+      phone?: string | null;
+      message?: string | null;
+      messageType?: string | null;
+      role?: 'user' | 'assistant' | null;
+      sentBy?: 'customer' | 'ai' | 'staff' | null;
+      createdAt?: string | null;
+      $createdAt?: string | null;
+    }>) {
+      const normalized = normalizePhoneForMatch(conversation.phone as string | null | undefined);
+      if (!normalized) continue;
+      const bucket = conversationsByPhone.get(normalized) || [];
+      bucket.push(conversation);
+      conversationsByPhone.set(normalized, bucket);
+    }
+
+    const enrichedLeads = leads.map((lead) => {
+      const normalized = normalizePhoneForMatch(lead.phone as string | null | undefined);
+      const preview = normalized
+        ? buildBestConversationPreview(conversationsByPhone.get(normalized) || [])
+        : null;
+      return {
+        ...lead,
+        notes: preview || lead.notes || null,
+      };
+    });
+
     return NextResponse.json(
-      { leads, total: leads.length },
+      { leads: enrichedLeads, total: enrichedLeads.length },
       { headers: { 'Cache-Control': 'private, max-age=15, stale-while-revalidate=15' } }
     );
   } catch (err) {
