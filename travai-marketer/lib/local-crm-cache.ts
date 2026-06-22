@@ -23,8 +23,9 @@ type LocalStore = {
 
 const STORE_VERSION = 1;
 const STORE_FILE = path.join(
-  process.cwd(),
-  process.env.LOCAL_CRM_CACHE_FILE || '.local-cache/local-crm-store.json'
+  /* turbopackIgnore: true */ process.cwd(),
+  '.local-cache',
+  'local-crm-store.json'
 );
 const LOG_BOOTSTRAP_LINE_LIMIT = Math.max(
   200,

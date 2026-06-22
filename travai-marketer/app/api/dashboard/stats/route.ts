@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
 import { listDocuments } from '@/lib/appwrite';
+import { queryLocalDocuments } from '@/lib/local-crm-cache';
 import {
   CRM_STATUS_ORDER,
   buildPhoneVariants,
@@ -35,25 +36,26 @@ export async function GET(request: NextRequest) {
       });
     }
 
+    const readDocuments = refresh ? listDocuments : queryLocalDocuments;
     const [leadsAll, campaignsSent, reviewsReplied, recentConvos, customers] =
       await Promise.allSettled([
-        listDocuments('leads', [Query.equal('teamId', teamId), Query.limit(150)]),
-        listDocuments('campaigns', [
+        readDocuments('leads', [Query.equal('teamId', teamId), Query.limit(150)]),
+        readDocuments('campaigns', [
           Query.equal('teamId', teamId),
           Query.equal('status', 'sent'),
           Query.limit(1),
         ]),
-        listDocuments('gbp_reviews', [
+        readDocuments('gbp_reviews', [
           Query.equal('teamId', teamId),
           Query.equal('replyStatus', 'replied'),
           Query.limit(1),
         ]),
-        listDocuments('conversations', [
+        readDocuments('conversations', [
           Query.equal('teamId', teamId),
           Query.orderDesc('$createdAt'),
           Query.limit(80),
         ]),
-        listDocuments('customers', [Query.equal('teamId', teamId), Query.limit(150)]),
+        readDocuments('customers', [Query.equal('teamId', teamId), Query.limit(150)]),
       ]);
 
     const get = (result: PromiseSettledResult<{ total?: number; documents?: unknown[] }>) =>
@@ -180,7 +182,11 @@ export async function GET(request: NextRequest) {
     };
 
     statsCache.set(teamId, {
-      expiresAt: Date.now() + Math.max(60_000, DASHBOARD_STATS_CACHE_TTL_MS),
+      expiresAt:
+        Date.now() +
+        (payload.totalLeads || payload.activeConversations || payload.campaignsSent || payload.reviewsReplied
+          ? Math.max(60_000, DASHBOARD_STATS_CACHE_TTL_MS)
+          : 60_000),
       payload,
     });
 

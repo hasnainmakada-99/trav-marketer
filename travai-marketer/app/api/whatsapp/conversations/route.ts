@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
 import { listDocuments } from '@/lib/appwrite';
+import { queryLocalDocuments } from '@/lib/local-crm-cache';
 import {
   buildPhoneVariants,
   buildStatusCounts,
@@ -112,16 +113,19 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const teamId = searchParams.get('teamId');
     const phone = searchParams.get('phone');
+    const refresh = searchParams.get('refresh') === '1';
 
     if (!teamId) {
       return NextResponse.json({ error: 'teamId required' }, { status: 400 });
     }
 
+    const readDocuments = refresh ? listDocuments : queryLocalDocuments;
+
     const [customerResult, leadResult] = await Promise.all([
-      listDocuments('customers', [Query.equal('teamId', teamId), Query.limit(500)]).catch(() => ({
+      readDocuments('customers', [Query.equal('teamId', teamId), Query.limit(500)]).catch(() => ({
         documents: [] as CustomerDoc[],
       })),
-      listDocuments('leads', [Query.equal('teamId', teamId), Query.limit(500)]).catch(() => ({
+      readDocuments('leads', [Query.equal('teamId', teamId), Query.limit(500)]).catch(() => ({
         documents: [] as LeadDoc[],
       })),
     ]);
@@ -133,7 +137,7 @@ export async function GET(request: NextRequest) {
 
     if (phone) {
       const decodedPhone = decodeURIComponent(phone);
-      const result = await listDocuments('conversations', [
+      const result = await readDocuments('conversations', [
         Query.equal('teamId', teamId),
         Query.equal('phone', buildPhoneVariants(decodedPhone)),
         Query.orderAsc('$createdAt'),
@@ -166,7 +170,7 @@ export async function GET(request: NextRequest) {
       }, { headers: { 'Cache-Control': 'no-store, max-age=0' } });
     }
 
-    const convoResult = await listDocuments('conversations', [
+    const convoResult = await readDocuments('conversations', [
       Query.equal('teamId', teamId),
       Query.orderDesc('$createdAt'),
       Query.limit(500),

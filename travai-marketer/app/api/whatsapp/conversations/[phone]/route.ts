@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
 import { listDocuments } from '@/lib/appwrite';
+import { queryLocalDocuments } from '@/lib/local-crm-cache';
 
 interface ConversationDoc {
   $id: string;
@@ -51,6 +52,9 @@ export async function GET(
       new URL(request.url).searchParams.get('teamId') ||
       process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID ||
       'system';
+    const refresh =
+      request.nextUrl.searchParams.get('refresh') === '1' ||
+      new URL(request.url).searchParams.get('refresh') === '1';
 
     if (!decodedPhone) {
       return NextResponse.json(
@@ -59,7 +63,8 @@ export async function GET(
       );
     }
 
-    const result = await listDocuments('conversations', [
+    const readDocuments = refresh ? listDocuments : queryLocalDocuments;
+    const result = await readDocuments('conversations', [
       Query.equal('teamId', teamId),
       Query.equal('phone', decodedPhone),
       Query.orderAsc('$createdAt'),

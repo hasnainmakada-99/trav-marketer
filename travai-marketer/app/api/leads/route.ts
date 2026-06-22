@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
 import { listDocuments, createDocument } from '@/lib/appwrite';
+import { queryLocalDocuments } from '@/lib/local-crm-cache';
 import { syncLeadStatusesFromConversations } from '@/lib/crm-sync';
 import {
   CRM_STATUS_ORDER,
@@ -53,6 +54,7 @@ export async function GET(request: NextRequest) {
     const status = searchParams.get('status') || 'all';
     const teamId = searchParams.get('teamId') || TEAM_ID;
     const refreshStatuses = searchParams.get('refreshStatuses') === '1';
+    const forceRemote = searchParams.get('refresh') === '1' || refreshStatuses;
     const limit = Math.min(Number(searchParams.get('limit') || '100'), 200);
     const offset = Number(searchParams.get('offset') || '0');
 
@@ -75,7 +77,9 @@ export async function GET(request: NextRequest) {
       queries.push(Query.equal('status', coerceLeadStatus(status)));
     }
 
-    const result = await listDocuments('leads', queries);
+    const result = forceRemote
+      ? await listDocuments('leads', queries)
+      : await queryLocalDocuments('leads', queries);
 
     // Enrich with customer names — leads only store names if AI extracted them from
     // conversation text; the customers collection gets updated as conversations grow.
@@ -85,13 +89,17 @@ export async function GET(request: NextRequest) {
 
     const nameByPhone = new Map<string, string>();
     if (phonesMissingName.length > 0) {
-      const custResult = await listDocuments('customers', [
+      const customerQueries = [
         Query.equal(
           'phone',
           Array.from(new Set(phonesMissingName.flatMap((phone) => buildPhoneVariants(phone))))
         ),
         Query.limit(200),
-      ]).catch(() => ({ documents: [] }));
+      ];
+      const custResult = await (forceRemote
+        ? listDocuments('customers', customerQueries)
+        : queryLocalDocuments('customers', customerQueries)
+      ).catch(() => ({ documents: [] }));
       for (const c of custResult.documents as Array<{ phone?: string; name?: string }>) {
         if (c.phone && c.name) {
           for (const variant of buildPhoneVariants(c.phone)) {

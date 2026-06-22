@@ -13,6 +13,7 @@ import {
 } from '@/lib/whatsapp-ycloud';
 import { getChatResponse, extractCustomerInfo, preprocessMessage, extractWorkflowSlots } from '@/lib/openai';
 import { createDocument, listDocuments, updateDocument } from '@/lib/appwrite';
+import { queryLocalDocuments } from '@/lib/local-crm-cache';
 import { normalizeToWhatsAppMarkdown } from '@/lib/whatsapp-format';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { loadTravelKnowledge } from '@/lib/travel-knowledge';
@@ -193,6 +194,19 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: 
   }
 }
 
+async function readCachedDocuments(collectionId: string, queries: string[]) {
+  const local = await queryLocalDocuments(collectionId, queries).catch(() => ({
+    total: 0,
+    documents: [] as Record<string, unknown>[],
+  }));
+
+  if ((local.documents || []).length > 0 || collectionId !== 'business_configs') {
+    return local;
+  }
+
+  return await listDocuments(collectionId, queries).catch(() => local);
+}
+
 function buildInboundDedupeKey(params: {
   teamId: string;
   phone: string;
@@ -233,7 +247,7 @@ async function hasHumanTakeover(teamId: string, phone: string) {
   if (DISABLE_HUMAN_HANDOVER) {
     return false;
   }
-  const rows = await listDocuments('conversations', [
+  const rows = await readCachedDocuments('conversations', [
     Query.equal('teamId', teamId),
     Query.equal('phone', phone),
     Query.orderDesc('$createdAt'),
@@ -515,7 +529,7 @@ async function saveLead(params: {
 
 async function findLatestLead(teamId: string, phone: string) {
   const variants = buildPhoneVariants(phone);
-  return listDocuments('leads', [
+  return readCachedDocuments('leads', [
     Query.equal('teamId', teamId),
     Query.equal('phone', variants.length ? variants : [phone]),
     Query.orderDesc('$createdAt'),
@@ -698,7 +712,7 @@ async function processIncomingMessage(
 
     let existingInbound: { customerId?: string; createdAt?: string; $createdAt?: string } | null = null;
     if (messageId) {
-      const existing = await listDocuments('conversations', [
+      const existing = await readCachedDocuments('conversations', [
         Query.equal('teamId', teamId),
         Query.equal('phone', phone),
         Query.equal('sentBy', 'customer'),
@@ -718,7 +732,7 @@ async function processIncomingMessage(
 
         let hasAiReplyAfterInbound = false;
         if (existingCustomerId && Number.isFinite(inboundTs) && inboundTs > 0) {
-          const aiAfterInbound = await listDocuments('conversations', [
+          const aiAfterInbound = await readCachedDocuments('conversations', [
             Query.equal('teamId', teamId),
             Query.equal('customerId', existingCustomerId),
             Query.equal('sentBy', 'ai'),
@@ -892,7 +906,7 @@ async function processMessageStatus(
     console.log(`[Status] Message ${messageId} from ${phone}: ${msgStatus}`);
 
     // Find the conversation with this messageId
-    const conversations = await listDocuments('conversations', [
+    const conversations = await readCachedDocuments('conversations', [
       Query.equal('teamId', teamId),
       Query.equal('metaMessageId', messageId),
       Query.limit(1),
@@ -915,7 +929,7 @@ async function processMessageStatus(
 async function findOrCreateCustomer(phone: string, teamId: string) {
   try {
     const variants = buildPhoneVariants(phone);
-    const result = await listDocuments('customers', [
+    const result = await readCachedDocuments('customers', [
       Query.equal('teamId', teamId),
       Query.equal('phone', variants.length ? variants : [phone]),
       Query.limit(1),
@@ -965,7 +979,7 @@ async function generateAndSendResponse(
 
       // Fetch up to 40 messages so both the workflow engine and OpenAI can see
       // the actual recent transcript instead of a very short clipped window.
-      const convos = await listDocuments('conversations', [
+      const convos = await readCachedDocuments('conversations', [
         Query.equal('teamId', resolvedTeamId),
         Query.equal('customerId', customer.$id),
         Query.orderDesc('$createdAt'),
@@ -994,7 +1008,7 @@ async function generateAndSendResponse(
     // Truncated history sent to OpenAI — last 20 messages keeps token budget sane
     const history = fullHistory;
 
-    const recentAi = await listDocuments('conversations', [
+    const recentAi = await readCachedDocuments('conversations', [
       Query.equal('teamId', resolvedTeamId),
       Query.equal('customerId', customer.$id),
       Query.equal('sentBy', 'ai'),
@@ -1007,7 +1021,7 @@ async function generateAndSendResponse(
     const recentAiText = normalizeTextForDedupe(recentAiDoc?.message || '');
     const recentAiTs = new Date(recentAiDoc?.createdAt || recentAiDoc?.$createdAt || 0).getTime();
 
-    const businessConfigResult = await listDocuments('business_configs', [
+    const businessConfigResult = await readCachedDocuments('business_configs', [
       Query.equal('teamId', resolvedTeamId),
       Query.limit(1),
     ]);
@@ -1444,7 +1458,7 @@ async function resolveTeamIdByPhoneNumberId(phoneNumberId: string): Promise<stri
     return process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'system';
   }
 
-  const configs = await listDocuments('business_configs', [
+  const configs = await readCachedDocuments('business_configs', [
     Query.equal('whatsappPhoneNumberId', phoneNumberId),
     Query.limit(1),
   ]);
