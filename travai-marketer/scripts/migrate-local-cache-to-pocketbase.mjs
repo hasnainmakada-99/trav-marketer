@@ -31,6 +31,10 @@ const schemaMap = new Map(schema.collections.map((collection) => [collection.nam
 const pb = new PocketBase(baseUrl);
 pb.autoCancellation(false);
 
+function looksLikePocketBaseId(value) {
+  return /^[a-z0-9]{15}$/i.test(String(value || ''));
+}
+
 function coerceValue(field, value) {
   if (value === undefined) return undefined;
   if (field?.type === 'json') return value ?? null;
@@ -54,28 +58,58 @@ function transformRecord(collectionId, record) {
     }
   }
 
-  next.id = String(record.$id || record.id || '');
+  const sourceId = String(record.$id || record.id || '');
+  if (sourceId) {
+    next.appwriteId = sourceId;
+    if (looksLikePocketBaseId(sourceId)) {
+      next.id = sourceId;
+    }
+  }
   return next;
+}
+
+async function findExistingRecord(collectionId, payload) {
+  if (payload.id) {
+    try {
+      return await pb.collection(collectionId).getOne(payload.id);
+    } catch (error) {
+      const status = Number(error?.status || 0);
+      if (status !== 404) {
+        throw error;
+      }
+    }
+  }
+
+  if (payload.appwriteId) {
+    try {
+      return await pb
+        .collection(collectionId)
+        .getFirstListItem(`appwriteId = "${String(payload.appwriteId).replace(/"/g, '\\"')}"`);
+    } catch (error) {
+      const status = Number(error?.status || 0);
+      if (status !== 404) {
+        throw error;
+      }
+    }
+  }
+
+  return null;
 }
 
 async function upsertRecord(collectionId, record) {
   const payload = transformRecord(collectionId, record);
-  if (!payload.id) {
+  if (!payload.id && !payload.appwriteId) {
     return false;
   }
 
-  try {
-    await pb.collection(collectionId).getOne(payload.id);
-    await pb.collection(collectionId).update(payload.id, payload);
+  const existing = await findExistingRecord(collectionId, payload);
+  if (existing) {
+    await pb.collection(collectionId).update(existing.id, payload);
     return 'updated';
-  } catch (error) {
-    const message = String(error?.message || '');
-    if (message.includes('404') || message.toLowerCase().includes('not found')) {
-      await pb.collection(collectionId).create(payload);
-      return 'created';
-    }
-    throw error;
   }
+
+  await pb.collection(collectionId).create(payload);
+  return 'created';
 }
 
 async function main() {

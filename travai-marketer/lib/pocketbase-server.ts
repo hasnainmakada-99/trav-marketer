@@ -90,6 +90,10 @@ function getFieldSchema(collectionId: string, fieldName: string) {
   return collectionMap.get(collectionId)?.fields.find((field) => field.name === fieldName) || null;
 }
 
+function hasField(collectionId: string, fieldName: string) {
+  return Boolean(getFieldSchema(collectionId, fieldName));
+}
+
 function mapFieldName(collectionId: string, attribute: string) {
   if (attribute === '$id') return 'id';
   if (attribute === '$createdAt') {
@@ -119,13 +123,26 @@ function buildListOptions(collectionId: string, queries: string[]) {
 
     if (query.method === 'equal') {
       const field = mapFieldName(collectionId, query.attribute);
+      const useAppwriteIdFallback = query.attribute === '$id' && hasField(collectionId, 'appwriteId');
       if (!query.values.length) {
         filters.push('id = ""');
       } else if (query.values.length === 1) {
-        filters.push(`${field} = "${escapeFilterValue(query.values[0])}"`);
+        const value = escapeFilterValue(query.values[0]);
+        filters.push(
+          useAppwriteIdFallback
+            ? `(id = "${value}" || appwriteId = "${value}")`
+            : `${field} = "${value}"`
+        );
       } else {
         filters.push(
-          `(${query.values.map((value) => `${field} = "${escapeFilterValue(value)}"`).join(' || ')})`
+          `(${query.values
+            .map((value) => {
+              const escaped = escapeFilterValue(value);
+              return useAppwriteIdFallback
+                ? `(id = "${escaped}" || appwriteId = "${escaped}")`
+                : `${field} = "${escaped}"`;
+            })
+            .join(' || ')})`
         );
       }
       continue;
@@ -215,6 +232,7 @@ function normalizeInput(collectionId: string, data: Record<string, any>) {
   const normalized: Record<string, any> = {};
   for (const [key, value] of Object.entries(data || {})) {
     if (value === undefined) continue;
+    if (key === '$id' || key === '$createdAt' || key === '$updatedAt') continue;
     normalized[key] = coerceForPocketBase(collectionId, key, value);
   }
   return normalized;
@@ -222,11 +240,41 @@ function normalizeInput(collectionId: string, data: Record<string, any>) {
 
 function toAppwriteLikeRecord(collectionId: string, record: Record<string, any>) {
   const next = { ...record } as Record<string, any>;
-  next.$id = record.id;
+  next.$id = record.appwriteId || record.id;
   next.$createdAt = record.created;
   next.$updatedAt = record.updated;
   next.$collectionId = collectionId;
   return next;
+}
+
+function looksLikePocketBaseId(value: string) {
+  return /^[a-z0-9]{15}$/i.test(String(value || ''));
+}
+
+async function findPocketBaseRecord(
+  collectionId: string,
+  documentId: string
+): Promise<Record<string, any>> {
+  const pb = await getPocketBaseAdmin();
+
+  if (looksLikePocketBaseId(documentId)) {
+    try {
+      return (await pb.collection(collectionId).getOne(documentId)) as Record<string, any>;
+    } catch (error) {
+      const status = Number((error as { status?: number })?.status || 0);
+      if (status !== 404 || !hasField(collectionId, 'appwriteId')) {
+        throw error;
+      }
+    }
+  }
+
+  if (!hasField(collectionId, 'appwriteId')) {
+    return (await pb.collection(collectionId).getOne(documentId)) as Record<string, any>;
+  }
+
+  return (await pb
+    .collection(collectionId)
+    .getFirstListItem(`appwriteId = "${escapeFilterValue(documentId)}"`)) as Record<string, any>;
 }
 
 export function isPocketBaseConfigured() {
@@ -270,15 +318,19 @@ export async function createPocketBaseDocument(
   const pb = await getPocketBaseAdmin();
   const payload = normalizeInput(collectionId, data);
   if (documentId) {
-    payload.id = documentId;
+    if (looksLikePocketBaseId(documentId)) {
+      payload.id = documentId;
+    }
+    if (hasField(collectionId, 'appwriteId')) {
+      payload.appwriteId = documentId;
+    }
   }
   const record = await pb.collection(collectionId).create(payload);
   return toAppwriteLikeRecord(collectionId, record as Record<string, any>);
 }
 
 export async function getPocketBaseDocument(collectionId: string, documentId: string) {
-  const pb = await getPocketBaseAdmin();
-  const record = await pb.collection(collectionId).getOne(documentId);
+  const record = await findPocketBaseRecord(collectionId, documentId);
   return toAppwriteLikeRecord(collectionId, record as Record<string, any>);
 }
 
@@ -319,8 +371,9 @@ export async function updatePocketBaseDocument(
   data: Record<string, any>
 ) {
   const pb = await getPocketBaseAdmin();
+  const existing = await findPocketBaseRecord(collectionId, documentId);
   const record = await pb.collection(collectionId).update(
-    documentId,
+    existing.id,
     normalizeInput(collectionId, data)
   );
   return toAppwriteLikeRecord(collectionId, record as Record<string, any>);
@@ -328,7 +381,8 @@ export async function updatePocketBaseDocument(
 
 export async function deletePocketBaseDocument(collectionId: string, documentId: string) {
   const pb = await getPocketBaseAdmin();
-  await pb.collection(collectionId).delete(documentId);
+  const existing = await findPocketBaseRecord(collectionId, documentId);
+  await pb.collection(collectionId).delete(existing.id);
   return { $id: documentId };
 }
 

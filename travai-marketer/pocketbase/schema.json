@@ -4,6 +4,7 @@
       "name": "business_configs",
       "type": "base",
       "fields": [
+        { "name": "appwriteId", "type": "text", "required": false, "max": 255 },
         { "name": "teamId", "type": "text", "required": true, "max": 256 },
         { "name": "businessName", "type": "text", "required": false, "max": 256 },
         { "name": "businessDescription", "type": "text", "required": false, "max": 4096 },
@@ -19,6 +20,7 @@
         { "name": "updatedAt", "type": "date", "required": false }
       ],
       "indexes": [
+        "CREATE INDEX idx_business_configs_appwriteId ON business_configs (appwriteId)",
         "CREATE INDEX idx_business_configs_teamId ON business_configs (teamId)"
       ]
     },
@@ -26,6 +28,7 @@
       "name": "customers",
       "type": "base",
       "fields": [
+        { "name": "appwriteId", "type": "text", "required": false, "max": 255 },
         { "name": "teamId", "type": "text", "required": true, "max": 256 },
         { "name": "phone", "type": "text", "required": true, "max": 32 },
         { "name": "name", "type": "text", "required": false, "max": 256 },
@@ -39,6 +42,7 @@
         { "name": "updatedAt", "type": "date", "required": false }
       ],
       "indexes": [
+        "CREATE INDEX idx_customers_appwriteId ON customers (appwriteId)",
         "CREATE INDEX idx_customers_team_phone ON customers (teamId, phone)",
         "CREATE INDEX idx_customers_team_createdAt ON customers (teamId, createdAt)"
       ]
@@ -47,6 +51,7 @@
       "name": "conversations",
       "type": "base",
       "fields": [
+        { "name": "appwriteId", "type": "text", "required": false, "max": 255 },
         { "name": "teamId", "type": "text", "required": true, "max": 256 },
         { "name": "customerId", "type": "text", "required": false, "max": 32 },
         { "name": "phone", "type": "text", "required": true, "max": 32 },
@@ -59,6 +64,7 @@
         { "name": "createdAt", "type": "date", "required": false }
       ],
       "indexes": [
+        "CREATE INDEX idx_conversations_appwriteId ON conversations (appwriteId)",
         "CREATE INDEX idx_conversations_team_phone ON conversations (teamId, phone)",
         "CREATE INDEX idx_conversations_team_customer ON conversations (teamId, customerId)",
         "CREATE INDEX idx_conversations_team_createdAt ON conversations (teamId, createdAt)"
@@ -68,6 +74,7 @@
       "name": "leads",
       "type": "base",
       "fields": [
+        { "name": "appwriteId", "type": "text", "required": false, "max": 255 },
         { "name": "teamId", "type": "text", "required": true, "max": 256 },
         { "name": "phone", "type": "text", "required": true, "max": 32 },
         { "name": "name", "type": "text", "required": false, "max": 256 },
@@ -82,6 +89,7 @@
         { "name": "updatedAt", "type": "date", "required": false }
       ],
       "indexes": [
+        "CREATE INDEX idx_leads_appwriteId ON leads (appwriteId)",
         "CREATE INDEX idx_leads_team_status ON leads (teamId, status)",
         "CREATE INDEX idx_leads_team_phone ON leads (teamId, phone)",
         "CREATE INDEX idx_leads_team_createdAt ON leads (teamId, createdAt)",
@@ -92,6 +100,7 @@
       "name": "campaigns",
       "type": "base",
       "fields": [
+        { "name": "appwriteId", "type": "text", "required": false, "max": 255 },
         { "name": "teamId", "type": "text", "required": true, "max": 256 },
         { "name": "title", "type": "text", "required": true, "max": 256 },
         { "name": "type", "type": "text", "required": false, "max": 64 },
@@ -111,6 +120,7 @@
         { "name": "updatedAt", "type": "date", "required": false }
       ],
       "indexes": [
+        "CREATE INDEX idx_campaigns_appwriteId ON campaigns (appwriteId)",
         "CREATE INDEX idx_campaigns_team_status ON campaigns (teamId, status)",
         "CREATE INDEX idx_campaigns_team_scheduledAt ON campaigns (teamId, scheduledAt)",
         "CREATE INDEX idx_campaigns_team_createdAt ON campaigns (teamId, createdAt)"
@@ -120,6 +130,7 @@
       "name": "campaign_logs",
       "type": "base",
       "fields": [
+        { "name": "appwriteId", "type": "text", "required": false, "max": 255 },
         { "name": "teamId", "type": "text", "required": true, "max": 256 },
         { "name": "campaignId", "type": "text", "required": false, "max": 32 },
         { "name": "phone", "type": "text", "required": false, "max": 32 },
@@ -132,6 +143,7 @@
         { "name": "error", "type": "text", "required": false, "max": 4000 }
       ],
       "indexes": [
+        "CREATE INDEX idx_campaign_logs_appwriteId ON campaign_logs (appwriteId)",
         "CREATE INDEX idx_campaign_logs_team_campaign ON campaign_logs (teamId, campaignId)",
         "CREATE INDEX idx_campaign_logs_team_phone ON campaign_logs (teamId, phone)",
         "CREATE INDEX idx_campaign_logs_status ON campaign_logs (status)"
@@ -141,6 +153,7 @@
       "name": "gbp_posts",
       "type": "base",
       "fields": [
+        { "name": "appwriteId", "type": "text", "required": false, "max": 255 },
         { "name": "teamId", "type": "text", "required": true, "max": 256 },
         { "name": "title", "type": "text", "required": true, "max": 256 },
         { "name": "content", "type": "text", "required": false, "max": 20000 },
@@ -159,6 +172,7 @@
         { "name": "syncSource", "type": "text", "required": false, "max": 64 }
       ],
       "indexes": [
+        "CREATE INDEX idx_gbp_posts_appwriteId ON gbp_posts (appwriteId)",
         "CREATE INDEX idx_gbp_posts_team_status ON gbp_posts (teamId, status)",
         "CREATE INDEX idx_gbp_posts_team_createdAt ON gbp_posts (teamId, createdAt)"
       ]
@@ -167,6 +181,7 @@
       "name": "gbp_reviews",
       "type": "base",
       "fields": [
+        { "name": "appwriteId", "type": "text", "required": false, "max": 255 },
         { "name": "teamId", "type": "text", "required": true, "max": 256 },
         { "name": "googleReviewId", "type": "text", "required": true, "max": 512 },
         { "name": "reviewer", "type": "text", "required": false, "max": 256 },
@@ -179,6 +194,7 @@
         { "name": "updatedAt", "type": "date", "required": false }
       ],
       "indexes": [
+        "CREATE INDEX idx_gbp_reviews_appwriteId ON gbp_reviews (appwriteId)",
         "CREATE INDEX idx_gbp_reviews_team_replyStatus ON gbp_reviews (teamId, replyStatus)",
         "CREATE INDEX idx_gbp_reviews_googleReviewId ON gbp_reviews (googleReviewId)"
       ]
@@ -187,6 +203,7 @@
       "name": "staff",
       "type": "base",
       "fields": [
+        { "name": "appwriteId", "type": "text", "required": false, "max": 255 },
         { "name": "teamId", "type": "text", "required": true, "max": 256 },
         { "name": "userId", "type": "text", "required": false, "max": 256 },
         { "name": "name", "type": "text", "required": false, "max": 256 },
@@ -198,6 +215,7 @@
         { "name": "createdAt", "type": "date", "required": false }
       ],
       "indexes": [
+        "CREATE INDEX idx_staff_appwriteId ON staff (appwriteId)",
         "CREATE INDEX idx_staff_team_role ON staff (teamId, role)",
         "CREATE INDEX idx_staff_userId ON staff (userId)",
         "CREATE INDEX idx_staff_email ON staff (email)"
@@ -207,6 +225,7 @@
       "name": "wa_local_templates",
       "type": "base",
       "fields": [
+        { "name": "appwriteId", "type": "text", "required": false, "max": 255 },
         { "name": "teamId", "type": "text", "required": true, "max": 128 },
         { "name": "name", "type": "text", "required": true, "max": 180 },
         { "name": "body", "type": "text", "required": true, "max": 12000 },
@@ -216,6 +235,7 @@
         { "name": "updatedAt", "type": "date", "required": false }
       ],
       "indexes": [
+        "CREATE INDEX idx_wa_local_templates_appwriteId ON wa_local_templates (appwriteId)",
         "CREATE INDEX idx_wa_local_templates_team_active_updated ON wa_local_templates (teamId, isActive, updatedAt)"
       ]
     },
@@ -223,6 +243,7 @@
       "name": "gbp_media",
       "type": "base",
       "fields": [
+        { "name": "appwriteId", "type": "text", "required": false, "max": 255 },
         { "name": "teamId", "type": "text", "required": true, "max": 256 },
         { "name": "fileName", "type": "text", "required": false, "max": 512 },
         { "name": "mimeType", "type": "text", "required": false, "max": 128 },
@@ -233,6 +254,7 @@
         { "name": "updatedAt", "type": "date", "required": false }
       ],
       "indexes": [
+        "CREATE INDEX idx_gbp_media_appwriteId ON gbp_media (appwriteId)",
         "CREATE INDEX idx_gbp_media_team_createdAt ON gbp_media (teamId, createdAt)"
       ]
     },
@@ -240,6 +262,7 @@
       "name": "website_knowledge",
       "type": "base",
       "fields": [
+        { "name": "appwriteId", "type": "text", "required": false, "max": 255 },
         { "name": "teamId", "type": "text", "required": true, "max": 256 },
         { "name": "sourceUrl", "type": "url", "required": false },
         { "name": "pageTitle", "type": "text", "required": false, "max": 512 },
@@ -253,6 +276,7 @@
         { "name": "updatedAt", "type": "date", "required": false }
       ],
       "indexes": [
+        "CREATE INDEX idx_website_knowledge_appwriteId ON website_knowledge (appwriteId)",
         "CREATE INDEX idx_website_knowledge_team_active ON website_knowledge (teamId, isActive)",
         "CREATE INDEX idx_website_knowledge_hash ON website_knowledge (contentHash)"
       ]
