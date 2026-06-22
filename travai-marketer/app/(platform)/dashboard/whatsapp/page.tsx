@@ -111,7 +111,7 @@ function formatTime(ts?: string) {
     : date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
 }
 
-function initials(name?: string | null, phone?: string) {
+function initials(name?: string | null) {
   if (name) {
     return name
       .split(' ')
@@ -527,7 +527,7 @@ function InboxTab({
                 <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                   <div className="flex items-start gap-3 sm:items-center sm:gap-4">
                     <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-[20px] bg-gradient-to-br ${CRM_STATUS_META[threadInfo?.crmStatus || selectedConversation?.crmStatus || 'normal_conversation'].panel} text-base font-bold text-white shadow-lg sm:h-14 sm:w-14`}>
-                      {initials(threadInfo?.name || selectedConversation?.name, selectedPhone)}
+                      {initials(threadInfo?.name || selectedConversation?.name)}
                     </div>
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">

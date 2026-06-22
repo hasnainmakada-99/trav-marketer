@@ -939,10 +939,6 @@ async function processMessageStatus(
 /**
  * Find or create a customer record
  */
-async function findOrCreateCustomer(phone: string, teamId: string) {
-  return findOrCreateCustomerWithSeed(phone, teamId, {});
-}
-
 async function findOrCreateCustomerWithSeed(
   phone: string,
   teamId: string,

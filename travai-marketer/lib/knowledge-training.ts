@@ -30,6 +30,9 @@ const APPWRITE_COLLECTIONS = [
 
 type WebsiteKnowledgeRecord = {
   id: string;
+  teamId?: string;
+  sourceUrl?: string;
+  contentHash?: string;
   isActive?: boolean;
   lastSyncedAt?: string;
 };
@@ -279,6 +282,8 @@ async function upsertKnowledgeRecord(params: {
 }) {
   const pb = await getPocketBaseAdmin();
   const contentHash = buildContentHash(params.sourceUrl, params.content);
+  const escapedTeamId = params.teamId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const escapedSourceUrl = params.sourceUrl.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const payload = {
     teamId: params.teamId,
     sourceUrl: params.sourceUrl,
@@ -295,7 +300,16 @@ async function upsertKnowledgeRecord(params: {
   try {
     const existing = (await pb
       .collection('website_knowledge')
-      .getFirstListItem(`contentHash = "${contentHash}"`)) as WebsiteKnowledgeRecord;
+      .getFirstListItem(
+        `teamId = "${escapedTeamId}" && sourceUrl = "${escapedSourceUrl}"`
+      )) as WebsiteKnowledgeRecord;
+
+    if (
+      existing.contentHash === contentHash &&
+      existing.lastSyncedAt === params.syncedAt
+    ) {
+      return { action: 'updated' as const };
+    }
 
     await pb.collection('website_knowledge').update(existing.id, payload);
     return { action: 'updated' as const };

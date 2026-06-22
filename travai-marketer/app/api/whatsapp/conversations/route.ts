@@ -226,7 +226,16 @@ export async function GET(request: NextRequest) {
     }
 
     const conversations = Array.from(byPhone.values())
-      .map(({ awaitingReply, ...conversation }) => conversation)
+      .map((conversation) => ({
+        phone: conversation.phone,
+        name: conversation.name,
+        email: conversation.email,
+        crmStatus: conversation.crmStatus,
+        lastMessage: conversation.lastMessage,
+        lastTimestamp: conversation.lastTimestamp,
+        lastType: conversation.lastType,
+        unreadCount: conversation.unreadCount,
+      }))
       .sort((a, b) => new Date(b.lastTimestamp).getTime() - new Date(a.lastTimestamp).getTime());
 
     return NextResponse.json(
