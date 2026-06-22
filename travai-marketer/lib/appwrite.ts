@@ -6,6 +6,13 @@
  */
 
 import { Client, Databases, Users, Avatars, Storage } from 'node-appwrite';
+import {
+  getLocalDocument,
+  isAppwriteReadLimitError,
+  queryLocalDocuments,
+  removeLocalDocument,
+  upsertLocalDocument,
+} from '@/lib/local-crm-cache';
 
 let client: Client | null = null;
 let databases: Databases | null = null;
@@ -90,13 +97,15 @@ export async function createDocument(
 ) {
   const db = getDatabaseClient();
   const id = documentId || `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  
-  return await db.createDocument(
+
+  const created = await db.createDocument(
     APPWRITE_DATABASE_ID,
     collectionId,
     id,
     data
   );
+  await upsertLocalDocument(collectionId, created as Record<string, any>).catch(() => null);
+  return created;
 }
 
 /**
@@ -107,11 +116,23 @@ export async function getDocument(
   documentId: string
 ) {
   const db = getDatabaseClient();
-  return await db.getDocument(
-    APPWRITE_DATABASE_ID,
-    collectionId,
-    documentId
-  );
+  try {
+    const document = await db.getDocument(
+      APPWRITE_DATABASE_ID,
+      collectionId,
+      documentId
+    );
+    await upsertLocalDocument(collectionId, document as Record<string, any>).catch(() => null);
+    return document;
+  } catch (error) {
+    if (isAppwriteReadLimitError(error)) {
+      const localDocument = await getLocalDocument(collectionId, documentId);
+      if (localDocument) {
+        return localDocument;
+      }
+    }
+    throw error;
+  }
 }
 
 /**
@@ -122,11 +143,24 @@ export async function listDocuments(
   queries: string[] = []
 ) {
   const db = getDatabaseClient();
-  return await db.listDocuments(
-    APPWRITE_DATABASE_ID,
-    collectionId,
-    queries
-  );
+  try {
+    const result = await db.listDocuments(
+      APPWRITE_DATABASE_ID,
+      collectionId,
+      queries
+    );
+    await Promise.all(
+      ((result.documents || []) as Array<Record<string, any>>).map((document) =>
+        upsertLocalDocument(collectionId, document).catch(() => null)
+      )
+    );
+    return result;
+  } catch (error) {
+    if (isAppwriteReadLimitError(error)) {
+      return await queryLocalDocuments(collectionId, queries);
+    }
+    throw error;
+  }
 }
 
 /**
@@ -138,12 +172,14 @@ export async function updateDocument(
   data: Record<string, any>
 ) {
   const db = getDatabaseClient();
-  return await db.updateDocument(
+  const updated = await db.updateDocument(
     APPWRITE_DATABASE_ID,
     collectionId,
     documentId,
     data
   );
+  await upsertLocalDocument(collectionId, updated as Record<string, any>).catch(() => null);
+  return updated;
 }
 
 /**
@@ -154,11 +190,13 @@ export async function deleteDocument(
   documentId: string
 ) {
   const db = getDatabaseClient();
-  return await db.deleteDocument(
+  const deleted = await db.deleteDocument(
     APPWRITE_DATABASE_ID,
     collectionId,
     documentId
   );
+  await removeLocalDocument(collectionId, documentId).catch(() => null);
+  return deleted;
 }
 
 export function getPublicFileViewUrl(bucketId: string, fileId: string): string {
