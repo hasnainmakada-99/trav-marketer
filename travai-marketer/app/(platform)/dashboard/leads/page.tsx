@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getCurrentUser } from '@/lib/appwrite-client';
 import {
@@ -11,8 +11,6 @@ import {
   type CrmLeadStatus,
 } from '@/lib/crm';
 
-const POLL_MS_RAW = Number(process.env.NEXT_PUBLIC_LEADS_POLL_MS || '15000');
-const POLL_MS = Number.isFinite(POLL_MS_RAW) ? Math.max(10_000, POLL_MS_RAW) : 15_000;
 const TEAM_ID = process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
 
 interface Lead {
@@ -119,8 +117,6 @@ export default function LeadsPage() {
   const [invoiceLead, setInvoiceLead] = useState<Lead | null>(null);
   const [invoiceForm, setInvoiceForm] = useState({ service: '', amount: '', date: new Date().toISOString().slice(0, 10), notes: '' });
   const [sendingInvoice, setSendingInvoice] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
   useEffect(() => {
     getCurrentUser().then((user) => {
       if (!user) router.push('/login');
@@ -156,20 +152,10 @@ export default function LeadsPage() {
 
   useEffect(() => {
     queueMicrotask(() => {
-      void fetchLeads(false, { refreshStatuses: true });
+      void fetchLeads(false, { refreshStatuses: false });
     });
-    const start = () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-      pollRef.current = setInterval(() => {
-        if (document.visibilityState === 'hidden') return;
-        fetchLeads(true);
-      }, POLL_MS);
-    };
-    start();
-    document.addEventListener('visibilitychange', start);
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-      document.removeEventListener('visibilitychange', start);
+      // manual refresh only to keep Appwrite reads low
     };
   }, [fetchLeads]);
 

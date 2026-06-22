@@ -11,16 +11,33 @@ import {
 } from '@/lib/crm';
 
 const TEAM_ID = process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
+const DASHBOARD_STATS_CACHE_TTL_MS = Number(process.env.DASHBOARD_STATS_CACHE_TTL_MS || `${15 * 60 * 1000}`);
+
+const statsCache = new Map<
+  string,
+  {
+    expiresAt: number;
+    payload: unknown;
+  }
+>();
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const teamId = searchParams.get('teamId') || TEAM_ID;
+    const refresh = searchParams.get('refresh') === '1';
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+    const cached = statsCache.get(teamId);
+    if (!refresh && cached && cached.expiresAt > Date.now()) {
+      return NextResponse.json(cached.payload, {
+        headers: { 'Cache-Control': 'private, max-age=60, stale-while-revalidate=120' },
+      });
+    }
 
     const [leadsAll, campaignsSent, reviewsReplied, recentConvos, customers] =
       await Promise.allSettled([
-        listDocuments('leads', [Query.equal('teamId', teamId), Query.limit(500)]),
+        listDocuments('leads', [Query.equal('teamId', teamId), Query.limit(150)]),
         listDocuments('campaigns', [
           Query.equal('teamId', teamId),
           Query.equal('status', 'sent'),
@@ -34,9 +51,9 @@ export async function GET(request: NextRequest) {
         listDocuments('conversations', [
           Query.equal('teamId', teamId),
           Query.orderDesc('$createdAt'),
-          Query.limit(300),
+          Query.limit(80),
         ]),
-        listDocuments('customers', [Query.equal('teamId', teamId), Query.limit(500)]),
+        listDocuments('customers', [Query.equal('teamId', teamId), Query.limit(150)]),
       ]);
 
     const get = (result: PromiseSettledResult<{ total?: number; documents?: unknown[] }>) =>
@@ -151,7 +168,7 @@ export async function GET(request: NextRequest) {
       }),
     }));
 
-    return NextResponse.json({
+    const payload = {
       totalLeads: normalizedLeads.length,
       activeConversations: activeConversationCount,
       campaignsSent: get(campaignsSent).total ?? 0,
@@ -160,7 +177,14 @@ export async function GET(request: NextRequest) {
       statusOrder: CRM_STATUS_ORDER,
       recentConversations: recentConversationDocs,
       recentLeads: recentLeadDocs,
-    }, { headers: { 'Cache-Control': 'private, max-age=10, stale-while-revalidate=20' } });
+    };
+
+    statsCache.set(teamId, {
+      expiresAt: Date.now() + Math.max(60_000, DASHBOARD_STATS_CACHE_TTL_MS),
+      payload,
+    });
+
+    return NextResponse.json(payload, { headers: { 'Cache-Control': 'private, max-age=60, stale-while-revalidate=120' } });
   } catch (err) {
     console.error('[Dashboard Stats] Error:', err);
     return NextResponse.json({ error: 'Failed to load stats' }, { status: 500 });

@@ -1,13 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getCurrentUser } from '@/lib/appwrite-client';
 import { CRM_STATUS_META, CRM_STATUS_ORDER, type CrmLeadStatus } from '@/lib/crm';
 
 const TEAM_ID = process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
-const DASHBOARD_POLL_MS = 30_000;
-
 interface Stats {
   totalLeads: number;
   activeConversations: number;
@@ -51,10 +49,9 @@ export default function DashboardPage() {
   const [statsLoading, setStatsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState<Stats | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const loadStats = useCallback(async (options?: { silent?: boolean }) => {
+  const loadStats = useCallback(async (options?: { silent?: boolean; forceFresh?: boolean }) => {
     const silent = options?.silent ?? false;
+    const forceFresh = options?.forceFresh ?? false;
     if (!silent) {
       setRefreshing(true);
     }
@@ -62,7 +59,11 @@ export default function DashboardPage() {
       setStatsLoading(true);
     }
     try {
-      const response = await fetch(`/api/dashboard/stats?teamId=${TEAM_ID}`, { cache: 'no-store' });
+      const params = new URLSearchParams({ teamId: TEAM_ID });
+      if (forceFresh) {
+        params.set('refresh', '1');
+      }
+      const response = await fetch(`/api/dashboard/stats?${params.toString()}`, { cache: 'no-store' });
       if (response.ok) {
         setStats(await response.json());
       }
@@ -96,21 +97,10 @@ export default function DashboardPage() {
   }, [router, loadStats]);
 
   useEffect(() => {
-    const startPolling = () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-      pollRef.current = setInterval(() => {
-        if (document.visibilityState === 'hidden') return;
-        void loadStats({ silent: true });
-      }, DASHBOARD_POLL_MS);
-    };
-
-    startPolling();
-    document.addEventListener('visibilitychange', startPolling);
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-      document.removeEventListener('visibilitychange', startPolling);
+      // manual refresh only to keep Appwrite reads low
     };
-  }, [loadStats]);
+  }, []);
 
   const greeting = useMemo(() => {
     const hour = new Date().getHours();
@@ -213,7 +203,7 @@ export default function DashboardPage() {
               Open GBP workspace
             </button>
             <button
-              onClick={() => void loadStats()}
+              onClick={() => void loadStats({ forceFresh: true })}
               className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/20"
             >
               {refreshing ? 'Refreshing...' : 'Refresh dashboard'}

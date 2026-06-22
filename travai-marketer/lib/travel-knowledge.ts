@@ -5,7 +5,7 @@ import { isConfidentialOrBlockedRoutePath, isCustomerSafeRoutePath } from '@/lib
 const WEBSITE_BASE_URL =
   process.env.TRAVENTIONS_WEBSITE_URL || 'https://traventions-ai.vercel.app';
 
-const SECONDARY_DEFAULT_DATABASE_ID = '696e96950008a6b5cddd';
+const SECONDARY_DEFAULT_DATABASE_ID = '';
 
 const PACKAGE_TERMS_REGEX =
   /\b(package|packages|itinerary|trip|tour|price|pricing|budget|offer|day|days|night|nights|inclusions|exclusions)\b/i;
@@ -129,6 +129,7 @@ type TravelKnowledge = {
 
 let collectionCache: CacheEntry<CollectionRef[]> | null = null;
 let siteCache: CacheEntry<WebsitePage[]> | null = null;
+let knowledgeQueryCache: CacheEntry<Map<string, TravelKnowledge>> | null = null;
 
 function now() {
   return Date.now();
@@ -172,7 +173,7 @@ async function resolveKnowledgeDatabaseIds() {
     .filter(Boolean);
   const secondaryDatabaseId = (process.env.WA_KNOWLEDGE_SECONDARY_DATABASE_ID || '').trim();
   const autoDiscoverDatabases =
-    (process.env.WA_KNOWLEDGE_AUTO_DISCOVER_DBS || 'true').trim().toLowerCase() !== 'false';
+    (process.env.WA_KNOWLEDGE_AUTO_DISCOVER_DBS || 'false').trim().toLowerCase() === 'true';
   const discovered: string[] = [];
 
   if (autoDiscoverDatabases) {
@@ -352,7 +353,7 @@ async function resolveKnowledgeCollections(): Promise<CollectionRef[]> {
   const deduped = Array.from(
     new Map(refs.map((r) => [`${r.databaseId}:${r.collectionId}`, r])).values()
   );
-  collectionCache = toCache(deduped, 5 * 60 * 1000);
+  collectionCache = toCache(deduped, 60 * 60 * 1000);
   return deduped;
 }
 
@@ -435,7 +436,7 @@ function docToSearchText(databaseId: string, collectionId: string, doc: Record<s
 }
 
 async function fetchCollectionDocs(databaseId: string, collectionId: string, teamId: string) {
-  const baseLimit = Number(process.env.WA_DB_DOC_LIMIT || '80');
+  const baseLimit = Number(process.env.WA_DB_DOC_LIMIT || '12');
   const limit = Number.isFinite(baseLimit) && baseLimit > 0 ? baseLimit : 80;
   const db = getDatabaseClient();
 
@@ -523,6 +524,13 @@ export async function loadTravelKnowledge(
   teamId: string,
   userMessage: string
 ): Promise<TravelKnowledge> {
+  const cacheKey = `${teamId}::${userMessage.toLowerCase().replace(/\s+/g, ' ').trim()}`;
+  const cachedMap = fromCache(knowledgeQueryCache);
+  const cached = cachedMap?.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   const keywords = extractKeywords(userMessage);
   const collections = await resolveKnowledgeCollections();
   const collectionDocCounts: Record<string, number> = {};
@@ -575,7 +583,7 @@ export async function loadTravelKnowledge(
         `${entry.page.title} - ${entry.page.url} - ${entry.page.snippet.slice(0, 180)}`
     );
 
-  return {
+  const result: TravelKnowledge = {
     databaseSnippets: dbTop.map((item) => item.text),
     hasPackageData,
     bestWebsiteUrl: best.url,
@@ -587,4 +595,10 @@ export async function loadTravelKnowledge(
       crawledPages: websitePages.length,
     },
   };
+
+  const nextCache = cachedMap || new Map<string, TravelKnowledge>();
+  nextCache.set(cacheKey, result);
+  knowledgeQueryCache = toCache(nextCache, 6 * 60 * 60 * 1000);
+
+  return result;
 }

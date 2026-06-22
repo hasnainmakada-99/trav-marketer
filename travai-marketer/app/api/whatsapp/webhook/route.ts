@@ -121,6 +121,27 @@ function shouldEnforceDatabaseFirst(params: {
   );
 }
 
+function shouldLoadAppwriteKnowledge(params: {
+  workflowIntent: WorkflowIntent;
+  workflowStage: WorkflowStage;
+  userMessage: string;
+}): boolean {
+  const normalized = String(params.userMessage || '').toLowerCase();
+  if (!normalized.trim()) return false;
+
+  if (params.workflowStage === 'show_packages') {
+    return true;
+  }
+
+  if (!isTravelSalesIntent(params.workflowIntent)) {
+    return false;
+  }
+
+  return /\b(show|share|send|suggest|recommend|options?|packages?|itinerary|details?|price|pricing|cost|budget|fare|hotels?|flights?|inclusions?|exclusions?)\b/.test(
+    normalized
+  );
+}
+
 function getGreetingImageUrl(requestUrl: string) {
   const configured = (process.env.WA_GREETING_IMAGE_URL || '').trim();
   if (configured) {
@@ -1223,6 +1244,11 @@ async function generateAndSendResponse(
     const stageDraftReply = null; // AI stages only (show_packages, confirmed, unknown)
 
     // Call AI with workflow-aware system prompt
+    const shouldUseKnowledge = shouldLoadAppwriteKnowledge({
+      workflowIntent: workflowState.intent,
+      workflowStage: workflowState.stage,
+      userMessage: correctedText,
+    });
     const knowledgeQuery = [
       correctedText,
       workflowState.intent,
@@ -1235,7 +1261,20 @@ async function generateAndSendResponse(
     ]
       .filter(Boolean)
       .join(' ');
-    const knowledge = await loadTravelKnowledgeFast(resolvedTeamId, knowledgeQuery || correctedText);
+    const knowledge = shouldUseKnowledge
+      ? await loadTravelKnowledgeFast(resolvedTeamId, knowledgeQuery || correctedText)
+      : {
+          databaseSnippets: [] as string[],
+          hasPackageData: false,
+          bestWebsiteUrl: sanitizeWebsiteUrlForBot(WEBSITE_FALLBACK_URL),
+          bestWebsiteTitle: 'Traventions',
+          websiteSnippets: [] as string[],
+          diagnostics: {
+            collectionsScanned: [] as string[],
+            collectionDocCounts: {} as Record<string, number>,
+            crawledPages: 0,
+          },
+        };
     const safeWebsiteSnippets = sanitizeWebsiteSnippetsForBot(knowledge.websiteSnippets);
     const safeBestWebsiteUrl = sanitizeWebsiteUrlForBot(
       knowledge.bestWebsiteUrl || WEBSITE_FALLBACK_URL

@@ -9,10 +9,6 @@ import {
 } from '@/lib/crm';
 
 const TEAM_ID = process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
-const POLL_INTERVAL_RAW = Number(process.env.NEXT_PUBLIC_WHATSAPP_POLL_MS || '15000');
-const POLL_INTERVAL_MS = Number.isFinite(POLL_INTERVAL_RAW)
-  ? Math.max(30_000, POLL_INTERVAL_RAW)
-  : 30_000;
 const GOOGLE_REVIEW_LINK =
   process.env.NEXT_PUBLIC_GOOGLE_REVIEW_LINK || 'https://g.page/r/traventions/review';
 
@@ -310,7 +306,6 @@ function InboxTab({
   const [contactsText, setContactsText] = useState('');
   const [importingContacts, setImportingContacts] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const previousUnreadRef = useRef(0);
   const selectedPhoneRef = useRef<string | null>(null);
 
@@ -396,39 +391,25 @@ function InboxTab({
   }, []);
 
   useEffect(() => {
-    void loadConversations();
+    queueMicrotask(() => {
+      void loadConversations();
+    });
   }, [loadConversations]);
 
   useEffect(() => {
     if (!selectedPhone) return;
-    void loadThread(selectedPhone);
+    queueMicrotask(() => {
+      void loadThread(selectedPhone);
+    });
   }, [selectedPhone, loadThread]);
 
   useEffect(() => {
     if (!focusPhone) return;
-    setSelectedPhone(focusPhone);
-    onFocusConsumed();
+    queueMicrotask(() => {
+      setSelectedPhone(focusPhone);
+      onFocusConsumed();
+    });
   }, [focusPhone, onFocusConsumed]);
-
-  useEffect(() => {
-    const startPolling = () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-      pollRef.current = setInterval(() => {
-        if (document.visibilityState === 'hidden') return;
-        void loadConversations({ silent: true });
-        if (selectedPhoneRef.current) {
-          void loadThread(selectedPhoneRef.current, { silent: true });
-        }
-      }, POLL_INTERVAL_MS);
-    };
-
-    startPolling();
-    document.addEventListener('visibilitychange', startPolling);
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-      document.removeEventListener('visibilitychange', startPolling);
-    };
-  }, [loadConversations, loadThread]);
 
   useEffect(() => {
     if (threadRef.current) {
