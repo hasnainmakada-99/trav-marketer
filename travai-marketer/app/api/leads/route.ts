@@ -146,28 +146,18 @@ export async function GET(request: NextRequest) {
       }),
     }));
 
-    const conversationPhoneVariants = Array.from(
-      new Set(
-        leads.flatMap((lead) =>
-          buildPhoneVariants(lead.phone as string | null | undefined)
-        )
-      )
-    ).filter(Boolean);
-
     const recentConversationResult =
-      conversationPhoneVariants.length > 0
+      leads.length > 0
         ? await (forceRemote
             ? listDocuments('conversations', [
                 Query.equal('teamId', teamId),
-                Query.equal('phone', conversationPhoneVariants),
                 Query.orderDesc('$createdAt'),
-                Query.limit(1000),
+                Query.limit(1500),
               ])
             : queryLocalDocuments('conversations', [
                 Query.equal('teamId', teamId),
-                Query.equal('phone', conversationPhoneVariants),
                 Query.orderDesc('$createdAt'),
-                Query.limit(1000),
+                Query.limit(1500),
               ])).catch(() => ({ documents: [] }))
         : { documents: [] };
 
