@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
 import { listDocuments, createDocument } from '@/lib/appwrite';
 import { queryLocalDocuments } from '@/lib/local-crm-cache';
+import { humanizeLeadNotes } from '@/lib/message-preview';
 import { syncLeadStatusesFromConversations } from '@/lib/crm-sync';
 import {
   CRM_STATUS_ORDER,
@@ -133,6 +134,7 @@ export async function GET(request: NextRequest) {
     const leads = Array.from(dedupedLeads.values()).map(l => ({
       ...l,
       status: coerceLeadStatus(l.status as string | null),
+      notes: humanizeLeadNotes(l.notes as string | null | undefined),
       name: getPreferredLeadName({
         leadName: l.name as string | null,
         customerName:

@@ -7,6 +7,7 @@ import {
   coerceLeadStatus,
   type CrmLeadStatus,
 } from '@/lib/crm';
+import { humanizeMessagePreview } from '@/lib/message-preview';
 
 const TEAM_ID = process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
 const GOOGLE_REVIEW_LINK =
@@ -122,13 +123,7 @@ function initials(name?: string | null, phone?: string) {
 }
 
 function preview(msg: string, type?: string) {
-  const trimmed = (msg || '').trim();
-  if (trimmed && trimmed !== '[unsupported]') return trimmed.replace(/\n+/g, ' ');
-  if (type === 'image') return 'Photo attachment';
-  if (type === 'audio' || type === 'voice') return 'Voice note';
-  if (type === 'video') return 'Video attachment';
-  if (type === 'document') return 'Document attachment';
-  return 'Attachment';
+  return humanizeMessagePreview(msg, { messageType: type });
 }
 
 function conversationListUrl() {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
 import { listDocuments } from '@/lib/appwrite';
 import { queryLocalDocuments } from '@/lib/local-crm-cache';
+import { humanizeLeadNotes, humanizeMessagePreview } from '@/lib/message-preview';
 import {
   buildPhoneVariants,
   buildStatusCounts,
@@ -57,9 +58,7 @@ interface ThreadDoc {
 }
 
 function formatPreview(message?: string | null, messageType?: string) {
-  if (message && message.trim()) return message;
-  if (!messageType || messageType === 'text') return 'Text message';
-  return `[${messageType}]`;
+  return humanizeMessagePreview(message, { messageType });
 }
 
 function buildContactMaps(customers: CustomerDoc[], leads: LeadDoc[]) {
@@ -100,7 +99,7 @@ function resolveContact(phone: string, maps: ReturnType<typeof buildContactMaps>
     }),
     email: customer?.email || lead?.email || null,
     status: coerceLeadStatus(lead?.status),
-    notes: lead?.notes || null,
+    notes: humanizeLeadNotes(lead?.notes || null),
   };
 }
 
@@ -153,7 +152,10 @@ export async function GET(request: NextRequest) {
           phone: doc.phone,
           type: (isOutgoing ? 'outgoing' : 'incoming') as 'incoming' | 'outgoing',
           messageType: doc.messageType || 'text',
-          text: doc.message || null,
+          text: humanizeMessagePreview(doc.message || null, {
+            messageType: doc.messageType,
+            direction: isOutgoing ? 'outgoing' : 'incoming',
+          }),
           status: doc.deliveryStatus || undefined,
           timestamp: doc.createdAt || doc.$createdAt || null,
           createdAt: doc.createdAt || doc.$createdAt || null,

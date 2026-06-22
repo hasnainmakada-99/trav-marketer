@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
 import { listDocuments } from '@/lib/appwrite';
 import { queryLocalDocuments } from '@/lib/local-crm-cache';
+import { humanizeMessagePreview } from '@/lib/message-preview';
 import {
   CRM_STATUS_ORDER,
   buildPhoneVariants,
@@ -164,6 +165,12 @@ export async function GET(request: NextRequest) {
 
     const recentConversationDocs = conversationFeed.slice(0, 5).map((conversation) => ({
       ...conversation,
+      message: humanizeMessagePreview(conversation.message, {
+        direction:
+          conversation.role === 'user' || conversation.sentBy === 'customer'
+            ? 'incoming'
+            : 'outgoing',
+      }),
       name: getDisplayName({
         customerName: customerByPhone.get(buildPhoneVariants(conversation.phone)[0] || '') || null,
         phone: conversation.phone || null,
