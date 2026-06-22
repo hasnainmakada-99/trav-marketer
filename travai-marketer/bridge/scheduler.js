@@ -11,6 +11,7 @@
 
 import dotenv from 'dotenv';
 import { Client, Databases, Query } from 'node-appwrite';
+import PocketBase from 'pocketbase';
 
 dotenv.config();
 
@@ -19,6 +20,10 @@ const APPWRITE_ENDPOINT = process.env.APPWRITE_ENDPOINT || 'https://sfo.cloud.ap
 const APPWRITE_PROJECT_ID = process.env.APPWRITE_PROJECT_ID || '';
 const APPWRITE_API_KEY = process.env.APPWRITE_API_KEY || '';
 const APPWRITE_DATABASE_ID = process.env.APPWRITE_DATABASE_ID || 'travai';
+const APP_DATA_BACKEND = (process.env.APP_DATA_BACKEND || 'appwrite').trim().toLowerCase();
+const POCKETBASE_URL = (process.env.POCKETBASE_URL || 'http://127.0.0.1:8090').replace(/\/+$/, '');
+const POCKETBASE_SUPERUSER_EMAIL = (process.env.POCKETBASE_SUPERUSER_EMAIL || '').trim();
+const POCKETBASE_SUPERUSER_PASSWORD = (process.env.POCKETBASE_SUPERUSER_PASSWORD || '').trim();
 const TEAM_ID = process.env.TEAM_ID || process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
 const YCLOUD_API_KEY = (process.env.YCLOUD_API_KEY || '').trim();
 const YCLOUD_FROM = (process.env.YCLOUD_WHATSAPP_FROM || '').trim();
@@ -34,6 +39,99 @@ const client = new Client()
   .setKey(APPWRITE_API_KEY);
 
 const db = new Databases(client);
+let pocketbaseAuthPromise = null;
+let pocketbaseClient = null;
+
+async function getPocketBaseClient() {
+  if (pocketbaseClient?.authStore?.isValid) {
+    return pocketbaseClient;
+  }
+
+  if (!POCKETBASE_SUPERUSER_EMAIL || !POCKETBASE_SUPERUSER_PASSWORD) {
+    throw new Error('PocketBase credentials missing in scheduler environment');
+  }
+
+  if (!pocketbaseAuthPromise) {
+    pocketbaseAuthPromise = (async () => {
+      const pb = new PocketBase(POCKETBASE_URL);
+      pb.autoCancellation(false);
+      await pb.collection('_superusers').authWithPassword(
+        POCKETBASE_SUPERUSER_EMAIL,
+        POCKETBASE_SUPERUSER_PASSWORD
+      );
+      pocketbaseClient = pb;
+      return pb;
+    })().finally(() => {
+      pocketbaseAuthPromise = null;
+    });
+  }
+
+  return pocketbaseAuthPromise;
+}
+
+function escapeFilterValue(value) {
+  return String(value ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"');
+}
+
+async function listLeadsForFollowup(threeDaysAgo) {
+  if (APP_DATA_BACKEND === 'pocketbase') {
+    const pb = await getPocketBaseClient();
+    return await pb.collection('leads').getFullList({
+      filter:
+        `teamId = "${escapeFilterValue(TEAM_ID)}" && ` +
+        `status != "converted" && status != "closed" && ` +
+        `lastContactedAt < "${escapeFilterValue(threeDaysAgo)}"`,
+      sort: '-createdAt',
+    });
+  }
+
+  const result = await db.listDocuments(APPWRITE_DATABASE_ID, 'leads', [
+    Query.equal('teamId', TEAM_ID),
+    Query.notEqual('status', 'converted'),
+    Query.notEqual('status', 'closed'),
+    Query.lessThan('lastContactedAt', threeDaysAgo),
+    Query.limit(50),
+  ]);
+  return result.documents;
+}
+
+async function touchLeadLastContact(leadId, nowIso) {
+  if (APP_DATA_BACKEND === 'pocketbase') {
+    const pb = await getPocketBaseClient();
+    await pb.collection('leads').update(leadId, {
+      lastContactedAt: nowIso,
+      updatedAt: nowIso,
+    });
+    return;
+  }
+
+  await db.updateDocument(APPWRITE_DATABASE_ID, 'leads', leadId, {
+    lastContactedAt: nowIso,
+    updatedAt: nowIso,
+  });
+}
+
+async function listScheduledCampaigns(nowIso) {
+  if (APP_DATA_BACKEND === 'pocketbase') {
+    const pb = await getPocketBaseClient();
+    return await pb.collection('campaigns').getFullList({
+      filter:
+        `teamId = "${escapeFilterValue(TEAM_ID)}" && ` +
+        `status = "scheduled" && scheduledAt <= "${escapeFilterValue(nowIso)}"`,
+      sort: '+scheduledAt',
+    });
+  }
+
+  const result = await db.listDocuments(APPWRITE_DATABASE_ID, 'campaigns', [
+    Query.equal('teamId', TEAM_ID),
+    Query.equal('status', 'scheduled'),
+    Query.lessThanEqual('scheduledAt', nowIso),
+    Query.limit(10),
+  ]);
+  return result.documents;
+}
 
 function toE164(phone) {
   return `+${String(phone || '').replace(/[^\d]/g, '')}`;
@@ -67,15 +165,7 @@ async function runFollowUpJob() {
   const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
 
   try {
-    const result = await db.listDocuments(APPWRITE_DATABASE_ID, 'leads', [
-      Query.equal('teamId', TEAM_ID),
-      Query.notEqual('status', 'converted'),
-      Query.notEqual('status', 'closed'),
-      Query.lessThan('lastContactedAt', threeDaysAgo),
-      Query.limit(50),
-    ]);
-
-    const leads = result.documents;
+    const leads = (await listLeadsForFollowup(threeDaysAgo)).slice(0, 50);
     console.log(`[Scheduler] Found ${leads.length} inactive leads to follow up`);
 
     let sent = 0;
@@ -85,10 +175,8 @@ async function runFollowUpJob() {
       const ok = await sendWhatsApp(lead.phone, msg);
       if (ok) {
         sent++;
-        await db.updateDocument(APPWRITE_DATABASE_ID, 'leads', lead.$id, {
-          lastContactedAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        }).catch(() => {});
+        const leadId = lead.id || lead.$id;
+        await touchLeadLastContact(leadId, new Date().toISOString()).catch(() => {});
       }
       // Small delay to avoid rate limits
       await new Promise(r => setTimeout(r, 500));
@@ -105,23 +193,17 @@ async function runCampaignDispatchJob() {
   const now = new Date().toISOString();
 
   try {
-    const result = await db.listDocuments(APPWRITE_DATABASE_ID, 'campaigns', [
-      Query.equal('teamId', TEAM_ID),
-      Query.equal('status', 'scheduled'),
-      Query.lessThanEqual('scheduledAt', now),
-      Query.limit(10),
-    ]);
-
-    const campaigns = result.documents;
+    const campaigns = (await listScheduledCampaigns(now)).slice(0, 10);
     console.log(`[Scheduler] Found ${campaigns.length} campaigns to dispatch`);
 
     for (const campaign of campaigns) {
-      console.log(`[Scheduler] Dispatching campaign: ${campaign.title} (${campaign.$id})`);
+      const campaignId = campaign.appwriteId || campaign.$id || campaign.id;
+      console.log(`[Scheduler] Dispatching campaign: ${campaign.title} (${campaignId})`);
       try {
         const res = await fetch(`${APP_URL}/api/campaigns/send`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ campaignId: campaign.$id, teamId: TEAM_ID }),
+          body: JSON.stringify({ campaignId, teamId: TEAM_ID }),
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
