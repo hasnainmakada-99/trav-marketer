@@ -15,6 +15,40 @@ import {
 
 const TEAM_ID = process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
 
+async function listLeadPreviewConversations(params: {
+  teamId: string;
+  forceRemote: boolean;
+  maxItems?: number;
+}) {
+  const pageSize = 1000;
+  const maxItems = Math.max(pageSize, params.maxItems || 2500);
+  const all: Array<Record<string, unknown>> = [];
+
+  for (let offset = 0; offset < maxItems; offset += pageSize) {
+    const result = await (params.forceRemote
+      ? listDocuments('conversations', [
+          Query.equal('teamId', params.teamId),
+          Query.orderDesc('$createdAt'),
+          Query.limit(pageSize),
+          Query.offset(offset),
+        ])
+      : queryLocalDocuments('conversations', [
+          Query.equal('teamId', params.teamId),
+          Query.orderDesc('$createdAt'),
+          Query.limit(pageSize),
+          Query.offset(offset),
+        ])).catch(() => ({ documents: [] as Array<Record<string, unknown>> }));
+
+    const documents = (result.documents || []) as Array<Record<string, unknown>>;
+    all.push(...documents);
+    if (documents.length < pageSize) {
+      break;
+    }
+  }
+
+  return all;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json() as {
@@ -146,20 +180,14 @@ export async function GET(request: NextRequest) {
       }),
     }));
 
-    const recentConversationResult =
+    const recentConversationDocuments =
       leads.length > 0
-        ? await (forceRemote
-            ? listDocuments('conversations', [
-                Query.equal('teamId', teamId),
-                Query.orderDesc('$createdAt'),
-                Query.limit(1500),
-              ])
-            : queryLocalDocuments('conversations', [
-                Query.equal('teamId', teamId),
-                Query.orderDesc('$createdAt'),
-                Query.limit(1500),
-              ])).catch(() => ({ documents: [] }))
-        : { documents: [] };
+        ? await listLeadPreviewConversations({
+            teamId,
+            forceRemote,
+            maxItems: 2500,
+          })
+        : [];
 
     const conversationsByPhone = new Map<
       string,
@@ -173,7 +201,7 @@ export async function GET(request: NextRequest) {
       }>
     >();
 
-    for (const conversation of (recentConversationResult.documents || []) as Array<{
+    for (const conversation of recentConversationDocuments as Array<{
       phone?: string | null;
       message?: string | null;
       messageType?: string | null;
