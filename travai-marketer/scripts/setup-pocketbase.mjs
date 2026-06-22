@@ -43,21 +43,25 @@ function buildCollectionBody(collection) {
 
 async function main() {
   await pb.collection('_superusers').authWithPassword(email, password);
+  const existingCollections = await pb.collections.getFullList();
+  const collectionsByName = new Map(
+    existingCollections.map((collection) => [collection.name, collection])
+  );
 
   for (const collection of schema.collections) {
     const payload = buildCollectionBody(collection);
+    const existing = collectionsByName.get(collection.name);
+
     try {
-      const existing = await pb.collections.getOne(collection.name);
+      if (existing) {
       await pb.collections.update(existing.id, payload);
       console.log(`updated collection ${collection.name}`);
-    } catch (error) {
-      const message = String(error?.message || '');
-      if (message.includes('404') || message.toLowerCase().includes('not found')) {
+      } else {
         await pb.collections.create(payload);
         console.log(`created collection ${collection.name}`);
-      } else {
-        throw error;
       }
+    } catch (error) {
+      throw error;
     }
   }
 }
