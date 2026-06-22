@@ -11,6 +11,23 @@ export function getActiveDataBackend(): DataBackend {
   return normalizeBackend(process.env.APP_DATA_BACKEND, 'appwrite');
 }
 
+function getPocketBasePrimaryCollections() {
+  return new Set(
+    String(process.env.POCKETBASE_PRIMARY_COLLECTIONS || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean)
+  );
+}
+
+export function shouldUsePocketBaseForCollection(collectionId: string): boolean {
+  if (getActiveDataBackend() === 'pocketbase') {
+    return true;
+  }
+
+  return getPocketBasePrimaryCollections().has(collectionId);
+}
+
 export function getActiveStorageBackend(): DataBackend {
   return normalizeBackend(process.env.APP_STORAGE_BACKEND, getActiveDataBackend());
 }

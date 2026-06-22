@@ -8,6 +8,7 @@
 import { Client, Databases, Users, Avatars, Storage } from 'node-appwrite';
 import {
   getActiveDataBackend,
+  shouldUsePocketBaseForCollection,
   shouldMirrorWritesToPocketBase,
 } from '@/lib/data-backend';
 import {
@@ -31,6 +32,8 @@ let databases: Databases | null = null;
 let users: Users | null = null;
 let avatars: Avatars | null = null;
 let storage: Storage | null = null;
+let fallbackBusinessConfigSeeded = false;
+let fallbackBusinessConfigSeedPromise: Promise<void> | null = null;
 
 function getClient(): Client {
   if (!client) {
@@ -95,6 +98,57 @@ export const STORAGE_BUCKETS = {
     '696e9d5f0032436becb7',
 } as const;
 
+function buildFallbackBusinessConfig() {
+  const teamId = (process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || '').trim();
+  if (!teamId) {
+    return null;
+  }
+
+  const now = new Date(0).toISOString();
+
+  return {
+    $id: `env-business-config-${teamId}`,
+    teamId,
+    businessName: (process.env.TRAVENTIONS_BUSINESS_NAME || 'Traventions').trim(),
+    openaiSystemPrompt: (process.env.WHATSAPP_OPENAI_SYSTEM_PROMPT || '').trim(),
+    whatsappToken: (process.env.WHATSAPP_TOKEN || '').trim() || null,
+    whatsappPhoneNumberId: (process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim() || null,
+    whatsappVerifyToken: (process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || '').trim() || null,
+    createdAt: now,
+    updatedAt: now,
+    $createdAt: now,
+    $updatedAt: now,
+  };
+}
+
+async function ensureFallbackBusinessConfigCached(collectionId: string) {
+  if (collectionId !== COLLECTIONS.BUSINESS_CONFIGS) {
+    return;
+  }
+
+  if (fallbackBusinessConfigSeeded) {
+    return;
+  }
+
+  if (fallbackBusinessConfigSeedPromise) {
+    return fallbackBusinessConfigSeedPromise;
+  }
+
+  fallbackBusinessConfigSeedPromise = (async () => {
+    const fallbackConfig = buildFallbackBusinessConfig();
+    if (fallbackConfig) {
+      await upsertLocalDocument(COLLECTIONS.BUSINESS_CONFIGS, fallbackConfig).catch(() => null);
+    }
+    fallbackBusinessConfigSeeded = true;
+  })();
+
+  try {
+    await fallbackBusinessConfigSeedPromise;
+  } finally {
+    fallbackBusinessConfigSeedPromise = null;
+  }
+}
+
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
@@ -107,7 +161,7 @@ export async function createDocument(
   data: Record<string, any>,
   documentId?: string
 ) {
-  if (getActiveDataBackend() === 'pocketbase') {
+  if (shouldUsePocketBaseForCollection(collectionId)) {
     const created = await createPocketBaseDocument(collectionId, data, documentId);
     await upsertLocalDocument(collectionId, created as Record<string, any>).catch(() => null);
     return created;
@@ -136,10 +190,17 @@ export async function getDocument(
   collectionId: string,
   documentId: string
 ) {
-  if (getActiveDataBackend() === 'pocketbase') {
+  await ensureFallbackBusinessConfigCached(collectionId);
+
+  if (shouldUsePocketBaseForCollection(collectionId)) {
     const document = await getPocketBaseDocument(collectionId, documentId);
     await upsertLocalDocument(collectionId, document as Record<string, any>).catch(() => null);
     return document;
+  }
+
+  const localDocument = await getLocalDocument(collectionId, documentId);
+  if (localDocument && collectionId === COLLECTIONS.BUSINESS_CONFIGS) {
+    return localDocument;
   }
 
   const db = getDatabaseClient();
@@ -169,7 +230,9 @@ export async function listDocuments(
   collectionId: string,
   queries: string[] = []
 ) {
-  if (getActiveDataBackend() === 'pocketbase') {
+  await ensureFallbackBusinessConfigCached(collectionId);
+
+  if (shouldUsePocketBaseForCollection(collectionId)) {
     const result = await listPocketBaseDocuments(collectionId, queries);
     await Promise.all(
       ((result.documents || []) as Array<Record<string, any>>).map((document) =>
@@ -177,6 +240,16 @@ export async function listDocuments(
       )
     );
     return result;
+  }
+
+  if (collectionId === COLLECTIONS.BUSINESS_CONFIGS) {
+    const localResult = await queryLocalDocuments(collectionId, queries).catch(() => ({
+      total: 0,
+      documents: [] as Array<Record<string, any>>,
+    }));
+    if ((localResult.documents || []).length > 0) {
+      return localResult;
+    }
   }
 
   const db = getDatabaseClient();
@@ -208,7 +281,7 @@ export async function updateDocument(
   documentId: string,
   data: Record<string, any>
 ) {
-  if (getActiveDataBackend() === 'pocketbase') {
+  if (shouldUsePocketBaseForCollection(collectionId)) {
     const updated = await updatePocketBaseDocument(collectionId, documentId, data);
     await upsertLocalDocument(collectionId, updated as Record<string, any>).catch(() => null);
     return updated;
@@ -237,7 +310,7 @@ export async function deleteDocument(
   collectionId: string,
   documentId: string
 ) {
-  if (getActiveDataBackend() === 'pocketbase') {
+  if (shouldUsePocketBaseForCollection(collectionId)) {
     const deleted = await deletePocketBaseDocument(collectionId, documentId);
     await removeLocalDocument(collectionId, documentId).catch(() => null);
     return deleted;
