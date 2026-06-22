@@ -129,6 +129,12 @@ async function listAllDocuments(collectionId) {
   return all;
 }
 
+function isMissingAppwriteCollection(error) {
+  const code = Number(error?.code || 0);
+  const type = String(error?.type || '');
+  return code === 404 && type === 'collection_not_found';
+}
+
 async function upsertPocketBaseRecord(collectionId, record) {
   const payload = transformRecord(collectionId, record);
   if (!payload.id && !payload.appwriteId) return false;
@@ -157,7 +163,16 @@ async function main() {
       continue;
     }
 
-    const documents = await listAllDocuments(collectionId);
+    let documents = [];
+    try {
+      documents = await listAllDocuments(collectionId);
+    } catch (error) {
+      if (isMissingAppwriteCollection(error)) {
+        console.warn(`${collectionId}: skipped (missing in Appwrite database ${appwriteDatabaseId})`);
+        continue;
+      }
+      throw error;
+    }
     let created = 0;
     let updated = 0;
 

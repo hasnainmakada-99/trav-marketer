@@ -1,5 +1,7 @@
 import { Query } from 'node-appwrite';
 import { APPWRITE_DATABASE_ID, getDatabaseClient } from '@/lib/appwrite';
+import { getActiveDataBackend } from '@/lib/data-backend';
+import { getPocketBaseSchema, listPocketBaseDocuments } from '@/lib/pocketbase-server';
 import { isConfidentialOrBlockedRoutePath, isCustomerSafeRoutePath } from '@/lib/whatsapp-bot-routing';
 
 const WEBSITE_BASE_URL =
@@ -319,6 +321,18 @@ async function resolveKnowledgeCollections(): Promise<CollectionRef[]> {
   const cached = fromCache(collectionCache);
   if (cached) return cached;
 
+  if (getActiveDataBackend() === 'pocketbase') {
+    const refs = getPocketBaseSchema()
+      .map((collection) => collection.name)
+      .filter((collectionId) => shouldIncludeCollection(collectionId))
+      .map((collectionId) => ({
+        databaseId: 'pocketbase',
+        collectionId,
+      }));
+    collectionCache = toCache(refs, 60 * 60 * 1000);
+    return refs;
+  }
+
   const db = getDatabaseClient();
   const envCollections = (process.env.WA_KNOWLEDGE_COLLECTIONS || '')
     .split(',')
@@ -438,6 +452,33 @@ function docToSearchText(databaseId: string, collectionId: string, doc: Record<s
 async function fetchCollectionDocs(databaseId: string, collectionId: string, teamId: string) {
   const baseLimit = Number(process.env.WA_DB_DOC_LIMIT || '12');
   const limit = Number.isFinite(baseLimit) && baseLimit > 0 ? baseLimit : 80;
+
+  if (getActiveDataBackend() === 'pocketbase') {
+    try {
+      const result = await listPocketBaseDocuments(collectionId, [
+        Query.equal('teamId', teamId),
+        Query.orderDesc('$createdAt'),
+        Query.limit(limit),
+      ]);
+      return result.documents as Array<Record<string, unknown>>;
+    } catch {
+      try {
+        const result = await listPocketBaseDocuments(collectionId, [
+          Query.orderDesc('$createdAt'),
+          Query.limit(limit),
+        ]);
+        return result.documents as Array<Record<string, unknown>>;
+      } catch {
+        try {
+          const result = await listPocketBaseDocuments(collectionId, [Query.limit(limit)]);
+          return result.documents as Array<Record<string, unknown>>;
+        } catch {
+          return [];
+        }
+      }
+    }
+  }
+
   const db = getDatabaseClient();
 
   try {
