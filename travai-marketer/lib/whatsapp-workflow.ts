@@ -890,20 +890,30 @@ export function resolveWorkflowState(args: {
   // If the current message sets post_package_action AND no lead has been
   // explicitly provided AFTER the last post_package_action in session history,
   // clear any accidentally accumulated lead slots so the bot always asks fresh.
+  // Exception: if the current message itself provides callback_time (or name/phone/email),
+  // preserve those — the user is giving both a callback request AND the details in one go.
   const currentMsgPpa = currentMessageSlots.post_package_action;
   if (currentMsgPpa) {
-    const msgsAfterLastPpa = lastPpaIdx !== -1
-      ? sessionMessages.slice(lastPpaIdx + 1)
-      : [];
-    const leadProvidedAfterPpa = msgsAfterLastPpa.some(m => {
-      const p = parseGeneralSlots(m, intent, {});
-      return Boolean(p.name || p.phone || p.callback_time);
-    });
-    if (!leadProvidedAfterPpa) {
-      delete slots.name;
-      delete slots.phone;
-      delete slots.email;
-      delete slots.callback_time;
+    const currentMsgProvidesLead = Boolean(
+      currentMessageSlots.callback_time ||
+      currentMessageSlots.name ||
+      currentMessageSlots.phone ||
+      currentMessageSlots.email
+    );
+    if (!currentMsgProvidesLead) {
+      const msgsAfterLastPpa = lastPpaIdx !== -1
+        ? sessionMessages.slice(lastPpaIdx + 1)
+        : [];
+      const leadProvidedAfterPpa = msgsAfterLastPpa.some(m => {
+        const p = parseGeneralSlots(m, intent, {});
+        return Boolean(p.name || p.phone || p.callback_time);
+      });
+      if (!leadProvidedAfterPpa) {
+        delete slots.name;
+        delete slots.phone;
+        delete slots.email;
+        delete slots.callback_time;
+      }
     }
   }
 
@@ -1327,13 +1337,11 @@ export function detectWorkflowIntent(message: string, classifiedIntent?: string)
   if (/(mice|corporate event|meetings incentives conferences exhibitions)/.test(joined)) return 'mice';
   if (/(booking status|status|pnr|reference|booking id)/.test(joined)) return 'booking_status';
 
-  // NEW: standalone callback request
-  // Match explicit phrases like "arrange callback", "call me", "callback please" etc.
-  // Only if no other service intent has been triggered.
-  if (
-    /\b(arrange\s*(a\s)?callback|call\s*me|call\s*back|callback\s*request|request\s*callback|get\s*callback)\b/i.test(joined) ||
-    (/\bcallback\b/i.test(joined) && joined.length < 30)  // short message containing only "callback"
-  ) {
+  // standalone callback request
+  // Any message mentioning "callback" that hasn't matched a service intent above
+  // is treated as a callback request. This catches "I want a callback",
+  // "I need a callback", "callback tomorrow at 3 pm", etc.
+  if (/\b(callback|call\s*me|call\s*back)\b/i.test(joined)) {
     return 'callback_request';
   }
 
