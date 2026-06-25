@@ -35,51 +35,57 @@ export async function sendCallbackEmails(params: {
 }) {
   const transporter = buildTransport();
   const from = (process.env.SMTP_FROM || process.env.SMTP_USER || process.env.GMAIL_APP_EMAIL || '').trim();
-  const internalTo = (process.env.CALLBACK_NOTIFY_TO || from).trim();
-  const customerEmail = (params.customerEmail || '').trim();
+  const internalTo = (process.env.CALLBACK_NOTIFY_TO || process.env.SMTP_USER || process.env.GMAIL_APP_EMAIL || '').trim();
 
-  if (!transporter || !from || !customerEmail) {
-    return { sent: false, reason: 'missing_config_or_customer_email' as const };
+  if (!transporter || !from) {
+    return { sent: false, reason: 'missing_config' as const };
   }
 
   const businessName = params.businessName?.trim() || 'Traventions';
   const customerName = params.customerName?.trim() || 'there';
+  const customerEmail = (params.customerEmail || '').trim();
   const summaryLine = params.serviceSummary?.trim()
-    ? `Service request: ${params.serviceSummary.trim()}`
-    : 'Service request: Travel callback enquiry';
+    ? `Service: ${params.serviceSummary.trim()}`
+    : 'Service: Travel callback enquiry';
 
-  await transporter.sendMail({
-    from,
-    to: customerEmail,
-    subject: `${businessName} callback scheduled`,
-    text: [
-      `Hi ${customerName},`,
-      '',
-      `Your callback with ${businessName} has been requested successfully.`,
-      `Preferred callback time: ${params.callbackTime}`,
-      `Phone: ${params.phone}`,
-      summaryLine,
-      '',
-      `Our team will reach out to you at the requested time.`,
-      '',
-      `Thanks,`,
-      businessName,
-    ].join('\n'),
-  });
+  if (customerEmail) {
+    await transporter.sendMail({
+      from,
+      to: customerEmail,
+      subject: `${businessName} — Callback Scheduled`,
+      text: [
+        `Hi ${customerName},`,
+        '',
+        `Your callback with ${businessName} has been requested successfully.`,
+        '',
+        `Preferred time: ${params.callbackTime}`,
+        `Phone: ${params.phone}`,
+        summaryLine,
+        '',
+        `Our team will reach out to you at the requested time.`,
+        '',
+        `Thanks,`,
+        businessName,
+      ].join('\n'),
+    });
+  }
 
   if (internalTo) {
     await transporter.sendMail({
       from,
       to: internalTo,
-      subject: `New WhatsApp callback request: ${params.phone}`,
+      subject: `New WhatsApp Callback: ${params.phone}`,
       text: [
-        `A WhatsApp callback request has been captured.`,
+        `A WhatsApp callback has been requested.`,
         '',
         `Customer: ${params.customerName || 'Unknown'}`,
-        `Email: ${customerEmail}`,
         `Phone: ${params.phone}`,
-        `Preferred callback time: ${params.callbackTime}`,
+        `Email: ${customerEmail || 'Not provided'}`,
+        `Preferred time: ${params.callbackTime}`,
         summaryLine,
+        '',
+        `---`,
+        `Please contact the customer at the scheduled time.`,
       ].join('\n'),
     });
   }

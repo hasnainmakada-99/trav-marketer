@@ -1419,14 +1419,14 @@ GLOBAL RULES:
       response = stageDraftReply || 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
     }
 
-    const shouldSendCallbackEmail =
+    const hasCallbackTime = Boolean(workflowState.slots.callback_time);
+    const isFreshCallbackConfirmed =
       workflowState.stage === 'confirmed' &&
-      Boolean(workflowState.slots.callback_time && enrichedCustomerEmail) &&
       previousWorkflowState?.stage !== 'confirmed' &&
       !isConversionIntent(correctedText);
 
-    if (shouldSendCallbackEmail) {
-      await sendCallbackEmails({
+    if (hasCallbackTime && isFreshCallbackConfirmed) {
+      const emailResult = await sendCallbackEmails({
         customerEmail: enrichedCustomerEmail,
         customerName: enrichedCustomerName,
         phone,
@@ -1434,8 +1434,14 @@ GLOBAL RULES:
         businessName: businessConfig?.businessName,
         serviceSummary: buildServiceSummary(workflowState.intent, leadNotes),
       }).catch((error) => {
-        console.warn('[WhatsApp] Callback email skipped:', error instanceof Error ? error.message : error);
+        console.warn('[WhatsApp] Callback email error:', error instanceof Error ? error.message : error);
+        return { sent: false, reason: 'exception' as const };
       });
+      if (emailResult.sent) {
+        console.log(`[OK] Callback notification email sent for ${phone}`);
+      } else {
+        console.warn(`[WhatsApp] Callback email not sent: ${emailResult.reason}`);
+      }
     }
 
     const waFormattedResponse = normalizeToWhatsAppMarkdown(enforceSafeUrlsInReply(response));
