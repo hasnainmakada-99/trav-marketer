@@ -1,3 +1,5 @@
+import Link from 'next/link';
+
 export const metadata = {
   title: 'Terms of Service — TravAI Marketer',
   description: 'Terms of Service for the TravAI Marketer platform.',
@@ -7,12 +9,9 @@ export default function TermsPage() {
   return (
     <div className="min-h-screen bg-white">
       <div className="max-w-3xl mx-auto px-6 py-12">
-        <a
-          href="/"
-          className="text-sm text-indigo-600 hover:text-indigo-700"
-        >
-          ← Back to home
-        </a>
+        <Link href="/" className="text-sm text-indigo-600 hover:text-indigo-700">
+          Back to home
+        </Link>
 
         <h1 className="text-3xl font-bold text-gray-900 mt-6 mb-2">
           Terms of Service
@@ -115,7 +114,7 @@ export default function TermsPage() {
                 <strong>OpenAI</strong> — Used for AI text generation
               </li>
               <li>
-                <strong>Appwrite Cloud</strong> — Used for data storage
+                <strong>PocketBase</strong> — Used for application data storage
               </li>
             </ul>
             <p>

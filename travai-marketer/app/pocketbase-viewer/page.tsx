@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 type ViewerCollection = {
   name: string;
@@ -20,7 +20,7 @@ type ViewerRecordsPayload = {
 
 export default function PocketBaseViewerPage() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
-  const [username, setUsername] = useState('hasnain');
+  const [username, setUsername] = useState('hasnainmakada@gmail.com');
   const [password, setPassword] = useState('hasnain123');
   const [loginError, setLoginError] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
@@ -31,6 +31,45 @@ export default function PocketBaseViewerPage() {
   const [recordsPayload, setRecordsPayload] = useState<ViewerRecordsPayload | null>(null);
   const [recordsLoading, setRecordsLoading] = useState(false);
   const [page, setPage] = useState(1);
+
+  const loadCollections = useCallback(async () => {
+    setCollectionsLoading(true);
+    try {
+      const response = await fetch('/api/pocketbase-viewer/collections', {
+        cache: 'no-store',
+      });
+      const data = await response.json();
+      if (response.ok) {
+        const nextCollections = (data.collections || []) as ViewerCollection[];
+        setCollections(nextCollections);
+        setSelectedCollection((current) => current || nextCollections[0]?.name || '');
+      }
+    } finally {
+      setCollectionsLoading(false);
+    }
+  }, []);
+
+  const loadRecords = useCallback(async () => {
+    if (!selectedCollection) return;
+    setRecordsLoading(true);
+    try {
+      const params = new URLSearchParams({
+        collection: selectedCollection,
+        page: String(page),
+        perPage: '20',
+      });
+      const response = await fetch(
+        `/api/pocketbase-viewer/records?${params.toString()}`,
+        { cache: 'no-store' }
+      );
+      const data = await response.json();
+      if (response.ok) {
+        setRecordsPayload(data as ViewerRecordsPayload);
+      }
+    } finally {
+      setRecordsLoading(false);
+    }
+  }, [page, selectedCollection]);
 
   useEffect(() => {
     const loadSession = async () => {
@@ -45,51 +84,17 @@ export default function PocketBaseViewerPage() {
 
   useEffect(() => {
     if (!authenticated) return;
-    const loadCollections = async () => {
-      setCollectionsLoading(true);
-      try {
-        const response = await fetch('/api/pocketbase-viewer/collections', {
-          cache: 'no-store',
-        });
-        const data = await response.json();
-        if (response.ok) {
-          const nextCollections = (data.collections || []) as ViewerCollection[];
-          setCollections(nextCollections);
-          if (!selectedCollection && nextCollections.length > 0) {
-            setSelectedCollection(nextCollections[0].name);
-          }
-        }
-      } finally {
-        setCollectionsLoading(false);
-      }
-    };
-    void loadCollections();
-  }, [authenticated, selectedCollection]);
+    queueMicrotask(() => {
+      void loadCollections();
+    });
+  }, [authenticated, loadCollections]);
 
   useEffect(() => {
     if (!authenticated || !selectedCollection) return;
-    const loadRecords = async () => {
-      setRecordsLoading(true);
-      try {
-        const params = new URLSearchParams({
-          collection: selectedCollection,
-          page: String(page),
-          perPage: '20',
-        });
-        const response = await fetch(
-          `/api/pocketbase-viewer/records?${params.toString()}`,
-          { cache: 'no-store' }
-        );
-        const data = await response.json();
-        if (response.ok) {
-          setRecordsPayload(data as ViewerRecordsPayload);
-        }
-      } finally {
-        setRecordsLoading(false);
-      }
-    };
-    void loadRecords();
-  }, [authenticated, page, selectedCollection]);
+    queueMicrotask(() => {
+      void loadRecords();
+    });
+  }, [authenticated, loadRecords, page, selectedCollection]);
 
   const selectedMeta = useMemo(
     () => collections.find((item) => item.name === selectedCollection) || null,
@@ -149,7 +154,7 @@ export default function PocketBaseViewerPage() {
 
           <form className="mt-6 space-y-4" onSubmit={handleLogin}>
             <div>
-              <label className="mb-1.5 block text-sm text-slate-200">Username</label>
+              <label className="mb-1.5 block text-sm text-slate-200">Email</label>
               <input
                 value={username}
                 onChange={(event) => setUsername(event.target.value)}
@@ -208,7 +213,14 @@ export default function PocketBaseViewerPage() {
             <h2 className="text-sm font-semibold text-slate-900">Collections</h2>
             {collectionsLoading ? (
               <span className="text-xs text-slate-400">Loading...</span>
-            ) : null}
+            ) : (
+              <button
+                onClick={() => void loadCollections()}
+                className="rounded-xl border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+              >
+                Refresh
+              </button>
+            )}
           </div>
           <div className="mt-4 space-y-2">
             {collections.map((collection) => (
@@ -256,6 +268,12 @@ export default function PocketBaseViewerPage() {
             </div>
             {recordsPayload ? (
               <div className="flex items-center gap-2">
+                <button
+                  onClick={() => void loadRecords()}
+                  className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                >
+                  Refresh
+                </button>
                 <button
                   onClick={() => setPage((current) => Math.max(1, current - 1))}
                   disabled={page <= 1}

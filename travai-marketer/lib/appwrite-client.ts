@@ -1,41 +1,32 @@
 /**
- * Appwrite Client-Side SDK
- * 
- * Used in browser/client components for real-time features and authentication.
+ * Legacy client auth shim.
+ *
+ * This file keeps the old import path stable while the app now authenticates
+ * against PocketBase-backed dashboard session routes instead of Appwrite.
  */
 
-import { Client, Account, Databases } from 'appwrite';
+type ClientUser = {
+  $id: string;
+  name: string;
+  email: string;
+};
 
-let client: Client | null = null;
-let accountInstance: Account | null = null;
-let databases: Databases | null = null;
+async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(input, {
+    cache: 'no-store',
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(init?.headers || {}),
+    },
+  });
 
-function getClient(): Client {
-  if (!client) {
-    client = new Client()
-      .setEndpoint(process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || 'https://cloud.appwrite.io/v1')
-      .setProject(process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || '');
+  const data = (await response.json().catch(() => ({}))) as T & { error?: string };
+  if (!response.ok) {
+    throw new Error(String((data as { error?: string }).error || 'Request failed'));
   }
-  return client;
+  return data;
 }
-
-export function getAccountClient(): Account {
-  if (!accountInstance) {
-    accountInstance = new Account(getClient());
-  }
-  return accountInstance;
-}
-
-export const account = getAccountClient();
-
-export function getDatabaseClient(): Databases {
-  if (!databases) {
-    databases = new Databases(getClient());
-  }
-  return databases;
-}
-
-export const APPWRITE_DATABASE_ID = process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID || 'travai';
 
 // ============================================================================
 // COLLECTIONS
@@ -57,29 +48,55 @@ export const COLLECTIONS = {
 // AUTHENTICATION
 // ============================================================================
 
-export async function getCurrentUser() {
+export async function getCurrentUser(): Promise<ClientUser | null> {
   try {
-    const accountClient = getAccountClient();
-    return await accountClient.get();
-  } catch (error) {
+    const data = await requestJson<{ authenticated?: boolean; user?: ClientUser | null }>(
+      '/api/auth/session',
+      { method: 'GET' }
+    );
+    return data.user || null;
+  } catch {
     return null;
   }
 }
 
 export async function login(email: string, password: string) {
-  const accountClient = getAccountClient();
-  return await accountClient.createEmailSession(email, password);
+  const data = await requestJson<{ user: ClientUser }>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  });
+  return data.user;
 }
 
 export async function logout() {
-  const accountClient = getAccountClient();
-  return await accountClient.deleteSession('current');
+  return await requestJson<{ success: boolean }>('/api/auth/logout', {
+    method: 'POST',
+  });
 }
 
 export async function register(email: string, password: string, name: string) {
-  const accountClient = getAccountClient();
-  return await accountClient.create('unique()', email, password, name);
+  void password;
+  throw new Error(
+    `Self-service registration is disabled. Ask an admin to create PocketBase access for ${name || email}.`
+  );
 }
+
+export const account = {
+  async get() {
+    const user = await getCurrentUser();
+    if (!user) {
+      throw new Error('Unauthorized');
+    }
+    return user;
+  },
+  async createEmailSession(email: string, password: string) {
+    return await login(email, password);
+  },
+  async deleteSession(sessionId: string) {
+    void sessionId;
+    return await logout();
+  },
+};
 
 // ============================================================================
 // REAL-TIME SUBSCRIPTIONS (Coming in Phase 2 - requires Realtime API)
@@ -113,11 +130,9 @@ export async function listDocuments(
   collectionId: string,
   queries: string[] = []
 ) {
-  const db = getDatabaseClient();
-  return await db.listDocuments(
-    APPWRITE_DATABASE_ID,
-    collectionId,
-    queries
+  void queries;
+  throw new Error(
+    `Client-side direct collection reads are disabled for ${collectionId}. Use server routes instead.`
   );
 }
 
@@ -125,10 +140,5 @@ export async function getDocument(
   collectionId: string,
   documentId: string
 ) {
-  const db = getDatabaseClient();
-  return await db.getDocument(
-    APPWRITE_DATABASE_ID,
-    collectionId,
-    documentId
-  );
+  throw new Error(`Client-side direct document reads are disabled for ${collectionId}:${documentId}.`);
 }

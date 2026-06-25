@@ -155,7 +155,7 @@ export default function LeadsPage() {
       void fetchLeads(false, { refreshStatuses: false });
     });
     return () => {
-      // manual refresh only to keep Appwrite reads low
+      // lead data stays manual-refresh only
     };
   }, [fetchLeads]);
 

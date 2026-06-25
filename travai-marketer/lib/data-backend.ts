@@ -8,7 +8,7 @@ function normalizeBackend(value: string | null | undefined, fallback: DataBacken
 }
 
 export function getActiveDataBackend(): DataBackend {
-  return normalizeBackend(process.env.APP_DATA_BACKEND, 'appwrite');
+  return normalizeBackend(process.env.APP_DATA_BACKEND, 'pocketbase');
 }
 
 function getPocketBasePrimaryCollections() {

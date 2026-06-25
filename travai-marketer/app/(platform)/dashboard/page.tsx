@@ -64,9 +64,7 @@ export default function DashboardPage() {
     if (!silent) {
       setRefreshing(true);
     }
-    if (!stats) {
-      setStatsLoading(true);
-    }
+    setStatsLoading((current) => current || !silent);
     try {
       const params = new URLSearchParams({ teamId: TEAM_ID });
       if (forceFresh) {
@@ -84,7 +82,7 @@ export default function DashboardPage() {
         setRefreshing(false);
       }
     }
-  }, [stats]);
+  }, []);
 
   const loadKnowledgeStatus = useCallback(async () => {
     setKnowledgeLoading(true);
@@ -138,7 +136,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     return () => {
-      // manual refresh only to keep Appwrite reads low
+      // dashboard data stays manual-refresh only
     };
   }, []);
 

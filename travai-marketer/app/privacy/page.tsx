@@ -1,3 +1,5 @@
+import Link from 'next/link';
+
 export const metadata = {
   title: 'Privacy Policy — TravAI Marketer',
   description: 'Privacy Policy for the TravAI Marketer platform.',
@@ -7,12 +9,9 @@ export default function PrivacyPolicyPage() {
   return (
     <div className="min-h-screen bg-white">
       <div className="max-w-3xl mx-auto px-6 py-12">
-        <a
-          href="/"
-          className="text-sm text-indigo-600 hover:text-indigo-700"
-        >
-          ← Back to home
-        </a>
+        <Link href="/" className="text-sm text-indigo-600 hover:text-indigo-700">
+          Back to home
+        </Link>
 
         <h1 className="text-3xl font-bold text-gray-900 mt-6 mb-2">
           Privacy Policy
@@ -142,9 +141,10 @@ export default function PrivacyPolicyPage() {
               6. Data Storage & Security
             </h2>
             <p>
-              All data is stored on Appwrite Cloud infrastructure, encrypted at
-              rest and in transit (TLS). Access is restricted to authorized
-              personnel and protected by API keys and role-based permissions.
+              All data is stored on PocketBase-backed infrastructure managed on
+              the Traventions Oracle environment, encrypted in transit (TLS),
+              and restricted to authorized personnel through protected admin
+              credentials and role-based access.
             </p>
           </section>
 

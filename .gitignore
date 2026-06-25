@@ -17,3 +17,5 @@ package-lock.json
 # Environment files
 .env
 .env.*
+backups/
+.local-cache/
