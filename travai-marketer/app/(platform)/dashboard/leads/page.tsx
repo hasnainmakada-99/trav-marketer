@@ -18,6 +18,7 @@ import { Card } from '@/components/ui/card';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
 import { EmptyState } from '@/components/ui/empty-state';
 import { showToast } from '@/components/ui/toast';
+import { humanizeMessagePreview } from '@/lib/message-preview';
 
 const TEAM_ID = process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
 
@@ -34,10 +35,82 @@ interface Lead {
   $createdAt?: string;
 }
 
+interface ThreadMessage {
+  $id: string;
+  phone: string;
+  type: 'incoming' | 'outgoing';
+  messageType?: string;
+  text?: string | null;
+  status?: string;
+  timestamp?: string;
+  createdAt?: string;
+}
+
+interface ThreadResponse {
+  phone: string;
+  name: string;
+  email?: string | null;
+  crmStatus: CrmLeadStatus;
+  notes?: string | null;
+  messages: ThreadMessage[];
+}
+
 function getLeadDisplayName(lead: Lead) {
   if (lead.name?.trim()) return lead.name.trim();
+  if (lead.phone) return lead.phone;
   if (lead.source === 'walk_in') return 'Walk-in lead';
   return 'WhatsApp contact';
+}
+
+function renderInlineMarkdown(text: string) {
+  const parts: React.ReactNode[] = [];
+  const pattern = /(\*\*[^*]+\*\*|\*[^*\n]+\*|_[^_\n]+_|~[^~\n]+~|https?:\/\/[^\s]+)/g;
+  let lastIndex = 0;
+  let key = 0;
+  for (const match of text.matchAll(pattern)) {
+    const full = match[0];
+    const start = match.index ?? 0;
+    if (start > lastIndex) parts.push(text.slice(lastIndex, start));
+    if (/^https?:\/\//.test(full)) {
+      parts.push(<a key={key++} href={full} target="_blank" rel="noopener noreferrer" className="break-all underline">{full}</a>);
+    } else if (full.startsWith('**') && full.endsWith('**')) {
+      parts.push(<strong key={key++}>{full.slice(2, -2)}</strong>);
+    } else if (full.startsWith('*') && full.endsWith('*')) {
+      parts.push(<strong key={key++}>{full.slice(1, -1)}</strong>);
+    } else if (full.startsWith('_') && full.endsWith('_')) {
+      parts.push(<em key={key++}>{full.slice(1, -1)}</em>);
+    } else if (full.startsWith('~') && full.endsWith('~')) {
+      parts.push(<span key={key++} className="line-through">{full.slice(1, -1)}</span>);
+    }
+    lastIndex = start + full.length;
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return parts;
+}
+
+function renderMessage(raw?: string | null) {
+  const text = (raw || '').trim();
+  if (!text) return <span className="italic opacity-50">empty</span>;
+  return (
+    <div className="space-y-1.5 whitespace-pre-wrap text-sm leading-relaxed">
+      {text.split('\n').map((line, index) => (
+        <p key={`${line}-${index}`}>{renderInlineMarkdown(line)}</p>
+      ))}
+    </div>
+  );
+}
+
+function formatTime(ts?: string) {
+  if (!ts) return '';
+  const date = new Date(ts);
+  const now = new Date();
+  return date.toDateString() === now.toDateString()
+    ? date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+    : date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+}
+
+function preview(msg: string, type?: string) {
+  return humanizeMessagePreview(msg, { messageType: type });
 }
 
 function formatAgoLabel(iso?: string) {
@@ -71,6 +144,10 @@ export default function LeadsPage() {
   const [invoiceLead, setInvoiceLead] = useState<Lead | null>(null);
   const [invoiceForm, setInvoiceForm] = useState({ service: '', amount: '', date: new Date().toISOString().slice(0, 10), notes: '' });
   const [sendingInvoice, setSendingInvoice] = useState(false);
+  const [viewingThreadPhone, setViewingThreadPhone] = useState<string | null>(null);
+  const [thread, setThread] = useState<ThreadMessage[]>([]);
+  const [threadInfo, setThreadInfo] = useState<ThreadResponse | null>(null);
+  const [threadLoading, setThreadLoading] = useState(false);
 
   useEffect(() => {
     getCurrentUser().then((user) => { if (!user) router.push('/login'); });
@@ -193,6 +270,26 @@ export default function LeadsPage() {
     } catch (error) {
       showToast({ message: error instanceof Error ? error.message : 'Failed to send', type: 'error' });
     } finally { setSendingInvoice(false); }
+  }
+
+  async function loadThread(phone: string) {
+    setViewingThreadPhone(phone);
+    setThreadLoading(true);
+    try {
+      const response = await fetch(
+        `/api/whatsapp/conversations?teamId=${encodeURIComponent(TEAM_ID)}&phone=${encodeURIComponent(phone)}&_ts=${Date.now()}`,
+        { cache: 'no-store' }
+      );
+      const data = (await response.json()) as ThreadResponse;
+      setThread(data.messages || []);
+      setThreadInfo(data);
+    } catch {
+      setThread([]);
+      setThreadInfo(null);
+      showToast({ message: 'Failed to load conversation', type: 'error' });
+    } finally {
+      setThreadLoading(false);
+    }
   }
 
   return (
@@ -318,6 +415,10 @@ export default function LeadsPage() {
                             Mark Converted
                           </button>
                         )}
+                        <button onClick={() => loadThread(lead.phone)}
+                          className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50">
+                          View conversation
+                        </button>
                         <button onClick={() => { setInvoiceLead(lead); setInvoiceForm({ service: '', amount: '', date: new Date().toISOString().slice(0, 10), notes: '' }); }}
                           className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">
                           Send invoice
@@ -402,6 +503,59 @@ export default function LeadsPage() {
                 className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100" />
             </div>
             <Button onClick={handleSendInvoice} loading={sendingInvoice} className="w-full">Send invoice via WhatsApp</Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Conversation thread modal */}
+      {viewingThreadPhone && (
+        <Modal title={threadInfo?.name || viewingThreadPhone} onClose={() => setViewingThreadPhone(null)} size="lg">
+          <div className="flex flex-col" style={{ maxHeight: '70vh' }}>
+            <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-slate-100 pb-3">
+              <a href={`https://wa.me/${viewingThreadPhone}`} target="_blank" rel="noreferrer"
+                className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100">
+                Open in WhatsApp
+              </a>
+              {threadInfo?.crmStatus && (
+                <StatusBadge status={threadInfo.crmStatus} size="sm" />
+              )}
+              {threadInfo?.email && (
+                <span className="text-xs text-slate-400">{threadInfo.email}</span>
+              )}
+            </div>
+
+            <div className="flex-1 space-y-4 overflow-y-auto">
+              {threadLoading ? (
+                <LoadingSpinner />
+              ) : thread.length === 0 ? (
+                <div className="py-16 text-center text-sm text-slate-400">No messages yet.</div>
+              ) : (
+                thread.map((message) => {
+                  const outgoing = message.type === 'outgoing';
+                  const messageText = (message.text || '').trim();
+                  const isMedia = !messageText || messageText === '[unsupported]' || messageText === '[media]' || ['image','audio','video','document','sticker','location','media'].includes(message.messageType || '');
+                  return (
+                    <div key={message.$id} className={`flex ${outgoing ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[92%] rounded-[24px] px-4 py-3 shadow-sm sm:max-w-[82%] xl:max-w-[78%] ${
+                        outgoing
+                          ? 'rounded-tr-sm bg-emerald-500 text-white'
+                          : 'rounded-tl-sm border border-white/80 bg-white text-slate-800'
+                      }`}>
+                        {isMedia ? (
+                          <p className={`text-sm italic ${outgoing ? 'text-emerald-50' : 'text-slate-400'}`}>
+                            {preview(message.text || '', message.messageType)}
+                          </p>
+                        ) : renderMessage(message.text)}
+                        <p className={`mt-2 text-right text-[11px] ${outgoing ? 'text-emerald-50/90' : 'text-slate-400'}`}>
+                          {formatTime(message.timestamp || message.createdAt)}
+                          {outgoing && message.status ? ` · ${message.status}` : ''}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </div>
         </Modal>
       )}
