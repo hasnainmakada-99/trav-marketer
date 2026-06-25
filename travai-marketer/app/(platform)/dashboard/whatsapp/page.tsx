@@ -604,7 +604,7 @@ function InboxTab({
                   thread.map((message) => {
                     const outgoing = message.type === 'outgoing';
                     const messageText = (message.text || '').trim();
-                    const isMedia = !messageText || messageText === '[unsupported]';
+                    const isMedia = !messageText || messageText === '[unsupported]' || messageText === '[media]' || ['image','audio','video','document','sticker','location','media'].includes(message.messageType || '');
                     return (
                       <div key={message.$id} className={`flex ${outgoing ? 'justify-end' : 'justify-start'}`}>
                         <div

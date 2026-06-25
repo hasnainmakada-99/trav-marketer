@@ -35,10 +35,10 @@ export function humanizeMessagePreview(
   const messageType = placeholderType || explicitMessageType;
   const direction = options?.direction || null;
 
-  if (messageType === 'unsupported') {
+  if (messageType === 'unsupported' || messageType === 'media') {
     return direction === 'outgoing'
-      ? 'Unsupported WhatsApp event'
-      : 'Unsupported WhatsApp message';
+      ? 'Media message sent'
+      : 'Media message received';
   }
 
   if (messageType === 'revoke') {

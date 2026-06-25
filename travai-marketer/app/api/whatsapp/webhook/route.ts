@@ -778,13 +778,14 @@ async function processIncomingMessage(
 
     // Save the conversation message
     if (!existingInbound) {
+      const displayType = type === 'unsupported' ? 'media' : type;
       await createDocument('conversations', {
         teamId,
         customerId: customer.$id,
         phone: phone,
         role: 'user',
-        message: text || `[${type}]`,
-        messageType: type,
+        message: text || `[${displayType}]`,
+        messageType: displayType,
         sentBy: 'customer',
         metaMessageId: messageId || null,
         deliveryStatus: 'received',
@@ -797,7 +798,7 @@ async function processIncomingMessage(
       // Non-text message (audio, image, video, sticker) — send a friendly nudge
       const nonTextReply = type === 'audio' || type === 'voice'
         ? '😊 I received your voice note! Unfortunately I can only read text right now. Please type your message and I\'ll be happy to help!'
-        : type === 'image' || type === 'video'
+        : type === 'image' || type === 'video' || type === 'unsupported'
           ? '📸 Thanks for sharing! I work best with text messages. Please describe what you need and I\'ll assist you right away 😊'
           : '😊 I work best with text messages. Please type your query and I\'ll help you plan your trip!';
 

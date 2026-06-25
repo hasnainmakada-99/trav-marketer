@@ -311,7 +311,7 @@ function inferYCloudMessageType(message: Record<string, unknown>): string {
   if (message.text) return 'text';
   if (message.button) return 'button';
   if (message.interactive) return 'interactive';
-  if (message.image) return 'image';
+  if (message.image || (message as Record<string, unknown>).unsupportedType === 'IMAGE') return 'image';
   if (message.document) return 'document';
   if (message.audio) return 'audio';
   if (message.video) return 'video';
@@ -474,6 +474,23 @@ export function extractMessage(message: IncomingMessage) {
         message.type === 'audio' ? message.audio?.id : message.video?.id,
       caption: message.type === 'video' ? message.video?.caption : undefined,
     };
+  }
+
+  if (message.type === 'unsupported' || message.type === 'media') {
+    const mediaFields = ['image', 'document', 'audio', 'video', 'sticker', 'location'] as const;
+    for (const field of mediaFields) {
+      if ((message as Record<string, unknown>)[field]) {
+        const mediaObj = (message as Record<string, unknown>)[field] as Record<string, unknown> | undefined;
+        return {
+          ...base,
+          type: field === 'sticker' ? 'sticker' : field,
+          text: mediaObj?.caption ? String(mediaObj.caption) : '',
+          mediaId: mediaObj?.id ? String(mediaObj.id) : undefined,
+          caption: mediaObj?.caption ? String(mediaObj.caption) : undefined,
+        };
+      }
+    }
+    return { ...base, text: '' };
   }
 
   return base;
