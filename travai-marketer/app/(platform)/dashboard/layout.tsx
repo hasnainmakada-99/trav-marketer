@@ -114,7 +114,7 @@ function SidebarInner(props: {
 
       <nav className={`space-y-1.5 ${props.collapsed ? 'px-3 py-3.5' : 'px-3 py-4'}`}>
         {navItems.map((item) => {
-          const isActive = item.exact ? props.pathname === item.href : props.pathname.startsWith(item.href);
+          const isActive = (item as { exact?: boolean }).exact ? props.pathname === item.href : props.pathname.startsWith(item.href);
           return (
             <Link
               key={item.href}

@@ -217,7 +217,7 @@ export async function GET(request: NextRequest) {
     }
 
     const enrichedLeads = leads.map((lead) => {
-      const normalized = normalizePhoneForMatch(lead.phone as string | null | undefined);
+      const normalized = normalizePhoneForMatch((lead as Record<string, any>).phone as string | null | undefined);
       const preview = normalized
         ? buildBestLeadPreview(conversationsByPhone.get(normalized) || [])
         : null;

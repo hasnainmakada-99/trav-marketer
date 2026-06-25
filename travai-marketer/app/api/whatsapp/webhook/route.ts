@@ -49,6 +49,7 @@ import {
   isTravelOrPlatformQueryLike,
   type WorkflowIntent,
   type WorkflowStage,
+  type WorkflowState,
 } from '@/lib/whatsapp-workflow';
 
 // Verify webhook token from Meta
@@ -944,7 +945,7 @@ async function findOrCreateCustomerWithSeed(
   phone: string,
   teamId: string,
   seed: { name?: string | null }
-) {
+): Promise<{ $id: string; name?: string; email?: string }> {
   try {
     const variants = buildPhoneVariants(phone);
     const result = await readCachedDocuments('customers', [
@@ -954,12 +955,12 @@ async function findOrCreateCustomerWithSeed(
     ]);
 
     if (result.documents.length > 0) {
-      const existing = result.documents[0] as { $id: string; name?: string | null };
+      const existing = result.documents[0] as { $id: string; name?: string; email?: string };
       if (seed.name && !existing.name) {
         const updated = await updateDocument('customers', existing.$id, {
           name: seed.name,
           updatedAt: new Date().toISOString(),
-        }).catch(() => null);
+        }).catch(() => null) as { $id: string; name?: string; email?: string } | null;
         if (updated) {
           return updated;
         }
@@ -975,11 +976,78 @@ async function findOrCreateCustomerWithSeed(
       source: 'whatsapp',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-    });
+    }) as { $id: string; name?: string; email?: string };
   } catch (error) {
     console.error('[WhatsApp] Error finding/creating customer:', error);
     throw error;
   }
+}
+
+/**
+ * Post-process AI response to catch hallucinated claims before sending.
+ * Checks for invented prices, package names, inventory claims, URLs, etc.
+ */
+async function validateAndSanitizeResponse(
+  response: string,
+  workflowState: WorkflowState,
+  databaseSnippets: string[],
+  safeWebsiteUrl: string,
+  userMessage: string,
+  phone: string,
+  teamId: string
+): Promise<string> {
+  const lower = response.toLowerCase();
+
+  // 1. Catch hard-coded price patterns like "₹25,000" or "₹ 25000" that aren't in package data
+  const pricePattern = /₹\s*[\d,]+/g;
+  const priceMatches = lower.match(pricePattern) || [];
+  if (priceMatches.length > 0) {
+    const snippetText = databaseSnippets.join(' ').toLowerCase();
+    const allPricesInSnippets = snippetText.match(pricePattern) || [];
+    let inventedPrice = false;
+    for (const price of priceMatches) {
+      const normalized = price.replace(/\s/g, '');
+      if (!allPricesInSnippets.some((p) => p.replace(/\s/g, '') === normalized)) {
+        const contextMatch = userMessage.match(/price|cost|rate|₹/i);
+        if (contextMatch) {
+          inventedPrice = true;
+          break;
+        }
+      }
+    }
+    if (inventedPrice) {
+      console.warn(`[Anti-Hallucination] Stripped invented price from response for ${phone}`);
+      return 'Thanks for your interest! I don\'t have exact pricing details available right now. Our team can check current rates and availability for you — let me connect you with a specialist.';
+    }
+  }
+
+  // 2. Catch "I checked" / "just checked" / "according to our system" without data
+  const claimingInventory = /\b(i checked|just checked|according to our system|our records show|i can see that)\b/i.test(lower);
+  if (claimingInventory && databaseSnippets.length === 0) {
+    console.warn(`[Anti-Hallucination] Stripped inventory claim from response for ${phone}`);
+    return 'Thanks for reaching out! I don\'t have live availability info at the moment. Our operations team can check real-time options for you.';
+  }
+
+  // 3. Catch invented URLs not in the website data
+  const urlPattern = /https?:\/\/[^\s]+/g;
+  const urls = response.match(urlPattern) || [];
+  if (urls.length > 0 && safeWebsiteUrl) {
+    const allowedDomains = ['161-118-174-116.sslip.io', 'wa.me', 'ycloud.com', 'api.whatsapp.com', 'wa.link'];
+    for (const url of urls) {
+      try {
+        const parsed = new URL(url);
+        const isAllowed = allowedDomains.some((d) => parsed.hostname.endsWith(d));
+        if (!isAllowed) {
+          console.warn(`[Anti-Hallucination] Stripped response with invented URL ${url} for ${phone}`);
+          return `You can visit our website at ${safeWebsiteUrl} for more information. Let me know how I can help!`;
+        }
+      } catch {
+        console.warn(`[Anti-Hallucination] Failed to parse URL ${url} for ${phone}`);
+      }
+    }
+  }
+
+  return response;
 }
 
 /**
@@ -1388,13 +1456,26 @@ GLOBAL RULES:
 - ALWAYS send a reply — never respond with empty text.
 - Website: ${safeBestWebsiteUrl}`,
       `TONE AND CONTINUITY RULES:
-- Reply like a real travel consultant on WhatsApp, not like a scripted bot.
-- Never say "as an AI", "I am a bot", "travel assistant bot", or anything mechanical.
-- If the customer sends a follow-up like "cheapest", "best", "luxury", "family option", "customise this", or "arrange callback", continue from the existing chat context instead of restarting the flow.
-- If the customer asks a travel-related or Traventions/platform-related question at any stage, answer it first and then resume the flow from the exact point where it paused.
-- Prefer natural sentences over rigid forms or checklists.
-- Ask only one compact follow-up when something is missing.
-- If the needed context is already present in chat history, answer directly instead of showing the menu again.`,
+      - Reply like a real travel consultant on WhatsApp, not like a scripted bot.
+      - Never say "as an AI", "I am a bot", "travel assistant bot", or anything mechanical.
+      - If the customer sends a follow-up like "cheapest", "best", "luxury", "family option", "customise this", or "arrange callback", continue from the existing chat context instead of restarting the flow.
+      - If the customer asks a travel-related or Traventions/platform-related question at any stage, answer it first and then resume the flow from the exact point where it paused.
+      - Prefer natural sentences over rigid forms or checklists.
+      - Ask only one compact follow-up when something is missing.
+      - If the needed context is already present in chat history, answer directly instead of showing the menu again.`,
+
+      `ANTI-HALLUCINATION RULES (CRITICAL - VIOLATION = ACCOUNT TERMINATION):
+      - NEVER invent package names, hotel names, flight numbers, or itinerary details.
+      - NEVER invent prices, discounts, inclusions, exclusions, or durations.
+      - NEVER claim "availability", "confirmed seats", "live inventory", or "real-time pricing".
+      - NEVER say "I checked and..." unless the data is explicitly in PACKAGE KNOWLEDGE above.
+      - If asked about specifics not in PACKAGE KNOWLEDGE → say "I don't have that exact detail in our system. Let me connect you with a specialist who can check live availability."
+      - If PACKAGE KNOWLEDGE is empty → say "I don't have live package data right now. Our team can check exact availability and pricing for you."
+      - For any specific claim (price, date, hotel, flight), if not in PACKAGE KNOWLEDGE → MUST say "sample/estimated" or "I'll confirm with the team".
+      - NO fabricated landmarks, attractions, visa rules, or weather info beyond general knowledge.
+      - If unsure about ANY fact → "Let me verify that with our operations team" NOT a guess.
+      - INR pricing only — if unsure of exact amount, give a range or say "starting from ₹X".
+      - Website URLs must be from WEBSITE PAGES list above — never invent URLs.`,
       knowledge.databaseSnippets.length
         ? `\nPACKAGE KNOWLEDGE:\n${knowledge.databaseSnippets.slice(0, 6).map((v, i) => `${i + 1}. ${v}`).join('\n')}`
         : '',
@@ -1418,6 +1499,17 @@ GLOBAL RULES:
     } else {
       response = stageDraftReply || 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
     }
+
+    // --- ANTI-HALLUCINATION VALIDATION LAYER ---
+    response = await validateAndSanitizeResponse(
+      response,
+      workflowState,
+      knowledge.databaseSnippets,
+      safeBestWebsiteUrl,
+      correctedText,
+      phone,
+      resolvedTeamId
+    );
 
     const hasCallbackTime = Boolean(workflowState.slots.callback_time);
     const isFreshCallbackConfirmed =

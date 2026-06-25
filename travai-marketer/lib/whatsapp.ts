@@ -479,8 +479,8 @@ export function extractMessage(message: IncomingMessage) {
   if (message.type === 'unsupported' || message.type === 'media') {
     const mediaFields = ['image', 'document', 'audio', 'video', 'sticker', 'location'] as const;
     for (const field of mediaFields) {
-      if ((message as Record<string, unknown>)[field]) {
-        const mediaObj = (message as Record<string, unknown>)[field] as Record<string, unknown> | undefined;
+      if ((message as unknown as Record<string, unknown>)[field]) {
+        const mediaObj = (message as unknown as Record<string, unknown>)[field] as Record<string, unknown> | undefined;
         return {
           ...base,
           type: field === 'sticker' ? 'sticker' : field,

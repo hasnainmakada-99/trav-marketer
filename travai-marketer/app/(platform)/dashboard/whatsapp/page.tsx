@@ -780,7 +780,7 @@ function InboxTab({
                           <div
                             className={`mt-0.5 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br ${CRM_STATUS_META[conversation.crmStatus].panel} text-sm font-bold text-white shadow-lg`}
                           >
-                            {initials(conversation.name, conversation.phone)}
+                            {initials(conversation.name)}
                           </div>
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center justify-between gap-2">

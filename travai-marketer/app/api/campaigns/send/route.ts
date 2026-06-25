@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
     // Get customers based on segment
     const recipients = await getSegmentedCustomers(
       teamId || campaign.teamId,
-      campaign.segment,
+      campaign.segment || '',
       campaign.segmentValue
     );
 
