@@ -182,14 +182,14 @@ function autoCorrect(text: string): string {
 }
 
 function isGreetingLike(msg: string): boolean {
-  // Allow punctuation/emoji variants like "Hello!", "Hi ðŸ˜Š", "Good morning!!"
-  // but do not treat longer intent-bearing sentences as pure greetings.
+  // Match any message that starts with a greeting word (including help requests
+  // like "Hi I need help..." or "Hello I want to book...").
   const stripped = String(msg || '')
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return /^(hi|hello|hey|hlo|helo|namaste|yo|good morning|good afternoon|good evening)$/i.test(
+  return /^(hi|hello|hey|hlo|helo|namaste|yo|good morning|good afternoon|good evening)\b/i.test(
     stripped
   );
 }

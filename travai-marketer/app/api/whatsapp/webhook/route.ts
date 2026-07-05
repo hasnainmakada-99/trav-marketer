@@ -86,7 +86,7 @@ function isGreetingMessage(text: string) {
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return /^(hi|hello|hey|hlo|helo|namaste|yo|good morning|good afternoon|good evening)$/.test(
+  return /^(hi|hello|hey|hlo|helo|namaste|yo|good morning|good afternoon|good evening)\b/.test(
     normalized
   );
 }
