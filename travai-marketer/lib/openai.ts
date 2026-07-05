@@ -203,12 +203,14 @@ CRITICAL: You MUST return valid JSON in this exact format (no markdown, no code 
 
 Rules:
 - The title (headline) must be under 72 characters, catchy, and include key destination or offer
+- Use emojis in the headline and content body to make posts visually engaging
 - The content must feel natural, high-conviction, and easy to scan
 - Include relevant keywords for local SEO
 - Include a clear call-to-action
 - Match the exact offer, destination, or visual context from uploaded media — describe what you see in images
 - Never invent details not visible or mentioned
 - End content with 3 to 5 focused local-search hashtags
+- Keep hashtags clean — no emojis inside hashtags
 - Keep hashtags at the end`;
 
     const keywordsStr =
