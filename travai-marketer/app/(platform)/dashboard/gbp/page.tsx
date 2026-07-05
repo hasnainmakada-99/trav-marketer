@@ -484,6 +484,7 @@ function GbpPageInner() {
       }
       setPostForm((current) => ({
         ...current,
+        title: data.title || current.title,
         content: data.content || '',
         keywords: Array.isArray(data.keywords) ? data.keywords.join(', ') : current.keywords,
         autoGenerate: false,
