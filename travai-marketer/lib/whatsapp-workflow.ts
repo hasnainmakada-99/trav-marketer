@@ -1,4 +1,4 @@
-﻿export type WorkflowIntent =
+export type WorkflowIntent =
   | 'plan_holiday'
   | 'flights'
   | 'hotels'
@@ -1059,9 +1059,9 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
   // â”€â”€ ask_destination â”€â”€
   if (stage === 'ask_destination') {
     return (
-      'That sounds lovely.\n\n' +
-      'Which destination are you planning for?\n\n' +
-      'Example: Dubai, Bali, Kashmir, Thailand'
+      'That sounds lovely! 🌍\n\n' +
+      'Which destination are you planning for? 🗺️\n\n' +
+      'Example: Dubai, Bali, Kashmir, Thailand ✨'
     );
   }
 
@@ -1070,10 +1070,10 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
     const dest = slots.destination || 'your chosen destination';
     const tagline = getDestinationTagline(dest);
     return (
-      `Great choice! ${dest} is ${tagline}.\n\n` +
-      'Would you prefer ready holiday options or a more personalized plan?\n\n' +
-      '1. Exclusive Holiday Deals\n' +
-      '2. Personalized Holidays'
+      `Great choice! ${dest} is ${tagline}. 🌟\n\n` +
+      'Would you prefer ready holiday options or a more personalized plan? 🤔\n\n' +
+      '1️⃣ Exclusive Holiday Deals 🎯\n' +
+      '2️⃣ Personalized Holidays ✨'
     );
   }
 
@@ -1090,9 +1090,9 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
           !slots.hotel_preference ? 'hotel preference' : '',
         ].filter(Boolean);
         return (
-          `Lovely, I'll shape a personalized ${dest} holiday for you.\n\n` +
-          `Just send me your ${joinMissing(missing)} in one message if that's easy.\n\n` +
-          'Example:\n2 Adults, 10th July, Delhi, 5 Nights, 4 Star Hotels'
+          `Lovely, I'll shape a personalized ${dest} holiday for you! 🎉\n\n` +
+          `Just send me your ${joinMissing(missing)} in one message if that's easy. 📝\n\n` +
+          'Example:\n👨‍👩‍👧 2 Adults, 10th July, Delhi, 5 Nights, 4 Star Hotels ⭐'
         );
       }
       // exclusive
@@ -1103,8 +1103,8 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
         !slots.nights ? 'number of nights' : '',
       ].filter(Boolean);
       return (
-        `Perfect. Send me your ${joinMissing(missing)} and I'll suggest the best holiday options.\n\n` +
-        'Example:\n2 Adults, July, Bangalore, 5 Nights'
+        `Perfect. Send me your ${joinMissing(missing)} and I'll suggest the best holiday options. 🏆\n\n` +
+        'Example:\n👨‍👩‍👧 2 Adults, July, Bangalore, 5 Nights'
       );
     }
 
@@ -1116,8 +1116,8 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
         !slots.travellers ? 'number of travellers' : '',
       ].filter(Boolean);
       return (
-        `Sure, send me your ${joinMissing(missing)} and I'll check suitable flight options.\n\n` +
-        'Example:\nDelhi to Mumbai, 25th June, 2 Adults'
+        `Sure, send me your ${joinMissing(missing)} and I'll check suitable flight options. ✈️\n\n` +
+        'Example:\n📍 Delhi to Mumbai, 25th June, 2 Adults 👨‍👩‍👧'
       );
     }
 
@@ -1129,16 +1129,16 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
         !slots.nights ? 'number of nights' : '',
       ].filter(Boolean);
       return (
-        `Of course. Send me your ${joinMissing(missing)} and I'll share hotel options that fit.\n\n` +
-        'Example:\nDubai, 2 Adults, July, 4 Nights'
+        `Of course. Send me your ${joinMissing(missing)} and I'll share hotel options that fit. 🏨\n\n` +
+        'Example:\n📍 Dubai, 2 Adults, July, 4 Nights 👨‍👩‍👧'
       );
     }
 
     // Other intents (should not reach here under current logic, but safe fallback)
     return (
-      'Sure! Please share the following details:\n\n' +
-      'Full Name\nContact Number\nPreferred Callback Time\n\n' +
-      'Example: Sini, +91 9876543210, Tomorrow at 5 PM'
+      'Sure! Please share the following details: 📋\n\n' +
+      '👤 Full Name\n📞 Contact Number\n⏰ Preferred Callback Time\n\n' +
+      'Example: Sini, +91 9876543210, Tomorrow at 5 PM ✅'
     );
   }
 
@@ -1150,15 +1150,15 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
   // collect_lead
   if (stage === 'collect_lead') {
     const missingLeadLines = [
-      !slots.name ? '- Full Name' : '',
-      !slots.phone ? '- Contact Number' : '',
-      !slots.callback_time ? '- Preferred Callback Time' : '',
+      !slots.name ? '👤 - Full Name' : '',
+      !slots.phone ? '📞 - Contact Number' : '',
+      !slots.callback_time ? '⏰ - Preferred Callback Time' : '',
     ].filter(Boolean);
 
     const capturedLeadLines = [
-      slots.name ? `Done: Name - ${slots.name}` : '',
-      slots.phone ? `Done: Contact Number - ${slots.phone}` : '',
-      slots.callback_time ? `Done: Preferred Callback Time - ${slots.callback_time}` : '',
+      slots.name ? `✅ Name - ${slots.name}` : '',
+      slots.phone ? `✅ Contact Number - ${slots.phone}` : '',
+      slots.callback_time ? `✅ Callback Time - ${slots.callback_time}` : '',
     ].filter(Boolean);
 
     const exampleParts = [
@@ -1175,12 +1175,12 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
       : '';
 
     return (
-      'I can arrange a quick call from our travel expert.\n\n' +
-      'Please share the remaining details:\n\n' +
+      'I can arrange a quick call from our travel expert. 📞🤝\n\n' +
+      'Please share the remaining details: 📝\n\n' +
       capturedBlock +
       `${missingLeadLines.join('\n')}\n\n` +
       exampleBlock +
-      'We will call you at the time that suits you best.'
+      'We will call you at the time that suits you best. 😊'
     );
   }
 
@@ -1188,9 +1188,9 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
   if (stage === 'ask_callback') {
     const name = slots.name ? `, ${slots.name}` : '';
     return (
-      `Thanks${name}.\n\n` +
-      'What time would be convenient for your callback?\n\n' +
-      'Example: Today at 5 PM  /  Tomorrow Morning'
+      `Thanks${name}. 🙏\n\n` +
+      'What time would be convenient for your callback? ⏰\n\n' +
+      'Example: Today at 5 PM 🌇 / Tomorrow Morning 🌅'
     );
   }
 
@@ -1243,17 +1243,17 @@ export function buildConfirmedWorkflowReply(args: {
 
   if (!isCallbackConfirmationMessage(lastAssistantMessage)) {
     return (
-      `Perfect${name}! Your callback has been scheduled successfully.\n\n` +
-      `Our travel expert will contact you *${callbackTime}* and ${ctx}.\n\n` +
-      'Is there anything else I may assist you with today?'
+      `Perfect${name}! Your callback has been scheduled successfully. ✅📞\n\n` +
+      `Our travel expert will contact you *${callbackTime}* and ${ctx}. 🤝\n\n` +
+      'Is there anything else I may assist you with today? 😊'
     );
   }
 
   if (isConversationClosureReply(userMessage)) {
     return (
-      'Thank you for your time.\n' +
-      'We truly appreciate your support.\n\n' +
-      'Kindly rate your experience with us:\n' +
+      'Thank you for your time! 🙏⏰\n' +
+      'We truly appreciate your support. ❤️\n\n' +
+      'Kindly rate your experience with us ⭐⭐⭐⭐⭐:\n' +
       'https://www.google.com/search?q=Traventions+India+Pvt+Ltd+Reviews'
     );
   }
@@ -1261,17 +1261,17 @@ export function buildConfirmedWorkflowReply(args: {
   if (isAffirmativeContinuationReply(userMessage)) {
     return (
       'How may I assist you today?\n\n' +
-      '1. Plan a Holiday\n' +
-      '2. Flights\n' +
-      '3. Hotels'
+      '1️⃣ Plan a Holiday 🏖️\n' +
+      '2️⃣ Flights ✈️\n' +
+      '3️⃣ Hotels 🏨'
     );
   }
 
   return (
     'How may I assist you today?\n\n' +
-    '1. Plan a Holiday\n' +
-    '2. Flights\n' +
-    '3. Hotels'
+    '1️⃣ Plan a Holiday 🏖️\n' +
+    '2️⃣ Flights ✈️\n' +
+    '3️⃣ Hotels 🏨'
   );
 }
 
@@ -1411,7 +1411,7 @@ export function getWorkflowSystemPromptBlock(
   if (intent === 'unknown' || stage === 'unknown') {
     task = `The customer's intent is not yet identified. Respond warmly and naturally.
 Guidelines:
-- Greeting (Hi, Hello, etc.) -> warmly greet and invite the travel requirement naturally, then offer: "1. Plan a Holiday  2. Flights  3. Hotels"
+- Greeting (Hi, Hello, etc.) -> warmly greet and invite the travel requirement naturally, then offer: "1️⃣ Plan a Holiday 🏖️  2️⃣ Flights ✈️  3️⃣ Hotels 🏨"
 - Travel-related question -> answer directly first, and only offer options if needed
 - Off-topic question (weather, jokes, math, etc.) -> politely say you can help with travel planning and booking support
 - Confused or unclear message -> respond with empathy and ask what kind of trip they are planning
@@ -1589,20 +1589,20 @@ If they ask any travel-related or Traventions/platform/business question, answer
     task = `Look at the conversation history:
 A) If the last assistant message does NOT already contain "callback has been scheduled":
    -> Send EXACTLY this confirmation message (replace placeholders):
-   "Perfect${name}! Your callback has been scheduled successfully.
+   "Perfect${name}! Your callback has been scheduled successfully. ✅📞
 
-Our travel expert will contact you *${callbackTime}* and ${ctx}.
+Our travel expert will contact you *${callbackTime}* and ${ctx}. 🤝
 
-Is there anything else I may assist you with today?"
+Is there anything else I may assist you with today? 😊"
 
 B) If the last assistant message ALREADY contains "callback has been scheduled":
    -> The customer is replying to "Is there anything else?". Handle as follows:
-   - If YES or a new travel question -> reply: "How may I assist you today?\n\n1. Plan a Holiday\n2. Flights\n3. Hotels"
+   - If YES or a new travel question -> reply: "How may I assist you today?\n\n1️⃣ Plan a Holiday 🏖️\n2️⃣ Flights ✈️\n3️⃣ Hotels 🏨"
    - If NO / Thank you / ending -> reply with EXACTLY:
-"Thank you for your time.
-We truly appreciate your support.
+"Thank you for your time! 🙏⏰
+We truly appreciate your support. ❤️
 
-Kindly rate your experience with us:
+Kindly rate your experience with us ⭐⭐⭐⭐⭐:
 https://www.google.com/search?q=Traventions+India+Pvt+Ltd+Reviews"
 Do NOT repeat the callback confirmation. Do NOT ask for details already collected.`;
   }
@@ -1633,15 +1633,15 @@ FORMATTING RULES (mandatory):
 
 export function getGreetingIntroText(customerName?: string | null): string {
   const namePart = customerName ? `, ${customerName}` : '';
-  return `Hi${namePart}! I'm *SINI* from Traventions.`;
+  return `Hi${namePart}! 👋 I'm *SINI* from Traventions. 🌍✈️`;
 }
 
 export function getGreetingMenuText(_customerName?: string | null): string {
   return (
-    'Tell me what kind of trip you have in mind, and I’ll help from there.\n\n' +
-    '1. Plan a Holiday\n' +
-    '2. Flights\n' +
-    '3. Hotels'
+    'Tell me what kind of trip you have in mind, and I’ll help from there. 🗺️✨\n\n' +
+    '1️⃣ Plan a Holiday 🏖️\n' +
+    '2️⃣ Flights ✈️\n' +
+    '3️⃣ Hotels 🏨'
   );
 }
 

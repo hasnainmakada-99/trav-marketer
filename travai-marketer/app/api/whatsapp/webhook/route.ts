@@ -106,9 +106,9 @@ function isHardOffTopicInput(message: string, workflowIntent: WorkflowIntent): b
 function buildOffTopicReply(name?: string | null): string {
   const prefix = name ? `${name.split(' ')[0]}, ` : '';
   return (
-    `${prefix}I can help only with travel planning and bookings.\n\n` +
+    `${prefix}I can help only with travel planning and bookings. 🌍✈️\n\n` +
     `Please choose one option to continue:\n\n` +
-    `1. Plan a Holiday\n2. Flights\n3. Hotels`
+    `1️⃣ Plan a Holiday 🏖️\n2️⃣ Flights ✈️\n3️⃣ Hotels 🏨`
   );
 }
 
@@ -1039,7 +1039,7 @@ async function validateAndSanitizeResponse(
         const isAllowed = allowedDomains.some((d) => parsed.hostname.endsWith(d));
         if (!isAllowed) {
           console.warn(`[Anti-Hallucination] Stripped response with invented URL ${url} for ${phone}`);
-          return `You can visit our website at ${safeWebsiteUrl} for more information. Let me know how I can help!`;
+          return `You can visit our website at ${safeWebsiteUrl} for more information. Let me know how I can help! 🌐😊`;
         }
       } catch {
         console.warn(`[Anti-Hallucination] Failed to parse URL ${url} for ${phone}`);
