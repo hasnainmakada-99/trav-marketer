@@ -1,6 +1,4 @@
 import { createHash } from 'crypto';
-import { Query } from 'node-appwrite';
-import { getDatabaseClient } from '@/lib/appwrite';
 import { getPocketBaseAdmin } from '@/lib/pocketbase-server';
 import { extractKeywords } from '@/lib/travel-knowledge';
 import {
@@ -10,23 +8,8 @@ import {
 
 const WEBSITE_BASE_URL =
   process.env.TRAVENTIONS_WEBSITE_URL || 'https://traventions-ai.vercel.app';
-const SECONDARY_DATABASE_ID =
-  (process.env.WA_KNOWLEDGE_SECONDARY_DATABASE_ID || '').trim() || '696e96950008a6b5cddd';
 
 const WEBSITE_MAX_PAGES = 18;
-const APPWRITE_BATCH_SIZE = 100;
-const APPWRITE_COLLECTIONS = [
-  'featured_itineraries',
-  'destinations',
-  'promotions',
-  'chat_response_templates',
-  'itineraries',
-  'itinerary_days',
-  'itinerary_activities',
-  'itinerary_hotels',
-  'hotel_options',
-  'flight_options',
-] as const;
 
 type WebsiteKnowledgeRecord = {
   id: string;
@@ -52,12 +35,9 @@ export type KnowledgeStatus = {
 
 export type TrainKnowledgeSummary = KnowledgeStatus & {
   websitePagesImported: number;
-  appwriteRecordsImported: number;
   upserted: number;
   updated: number;
   skipped: number;
-  collections: Record<string, number>;
-  sourceDatabaseId: string;
 };
 
 function normalizeUrl(url: string): string | null {
@@ -165,110 +145,12 @@ async function crawlWebsitePages() {
   return pages;
 }
 
-function stringifyValue(value: unknown): string {
-  if (value == null) return '';
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (Array.isArray(value)) {
-    return value.map((item) => stringifyValue(item)).filter(Boolean).join(', ');
-  }
-  if (typeof value === 'object') {
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return '';
-    }
-  }
-  return '';
-}
-
-function buildAppwriteKnowledgeContent(collectionId: string, doc: Record<string, unknown>) {
-  const preferredKeys = [
-    'title',
-    'name',
-    'packageName',
-    'destination',
-    'country',
-    'city',
-    'category',
-    'duration',
-    'days',
-    'nights',
-    'price',
-    'budget',
-    'hotelName',
-    'flightNumber',
-    'summary',
-    'highlights',
-    'inclusions',
-    'exclusions',
-    'description',
-    'content',
-    'notes',
-    'tags',
-  ];
-
-  const ignoreKeys = new Set([
-    '$id',
-    '$databaseId',
-    '$collectionId',
-    '$permissions',
-    '$createdAt',
-    '$updatedAt',
-    'createdAt',
-    'updatedAt',
-    'teamId',
-  ]);
-
-  const chunks: string[] = [`Collection: ${collectionId}`];
-  for (const key of preferredKeys) {
-    if (!(key in doc)) continue;
-    const text = stringifyValue(doc[key]).trim();
-    if (text) {
-      chunks.push(`${key}: ${text}`);
-    }
-  }
-
-  if (chunks.length <= 1) {
-    for (const [key, value] of Object.entries(doc)) {
-      if (ignoreKeys.has(key)) continue;
-      const text = stringifyValue(value).trim();
-      if (!text) continue;
-      chunks.push(`${key}: ${text}`);
-      if (chunks.length >= 16) break;
-    }
-  }
-
-  return chunks.join('\n').slice(0, 120000);
-}
-
 function buildContentHash(sourceUrl: string, content: string) {
   return createHash('sha256').update(`${sourceUrl}\n${content}`).digest('hex');
 }
 
 function buildKnowledgeTags(seedText: string, fallback: string[]) {
   return Array.from(new Set([...extractKeywords(seedText), ...fallback])).slice(0, 16);
-}
-
-async function fetchAllAppwriteDocs(databaseId: string, collectionId: string) {
-  const db = getDatabaseClient();
-  const all: Array<Record<string, unknown>> = [];
-  let offset = 0;
-
-  while (true) {
-    const result = await db.listDocuments(databaseId, collectionId, [
-      Query.limit(APPWRITE_BATCH_SIZE),
-      Query.offset(offset),
-    ]);
-    const docs = (result.documents || []) as Array<Record<string, unknown>>;
-    all.push(...docs);
-    if (docs.length < APPWRITE_BATCH_SIZE) {
-      break;
-    }
-    offset += docs.length;
-  }
-
-  return all;
 }
 
 async function upsertKnowledgeRecord(params: {
@@ -328,26 +210,28 @@ async function upsertKnowledgeRecord(params: {
 }
 
 export async function getKnowledgeTrainingStatus(teamId: string): Promise<KnowledgeStatus> {
-  const pb = await getPocketBaseAdmin();
-  const records = (await pb.collection('website_knowledge').getFullList({
-    filter: `teamId = "${teamId.replace(/"/g, '\\"')}"`,
-    sort: '-lastSyncedAt',
-    fields: 'id,isActive,lastSyncedAt',
-  })) as WebsiteKnowledgeRecord[];
+  try {
+    const pb = await getPocketBaseAdmin();
+    const records = (await pb.collection('website_knowledge').getFullList({
+      filter: `teamId = "${teamId.replace(/"/g, '\\"')}"`,
+      sort: '-lastSyncedAt',
+      fields: 'id,isActive,lastSyncedAt',
+    })) as WebsiteKnowledgeRecord[];
 
-  return {
-    totalRecords: records.length,
-    activeRecords: records.filter((record) => record.isActive !== false).length,
-    lastSyncedAt: records[0]?.lastSyncedAt || null,
-  };
+    return {
+      totalRecords: records.length,
+      activeRecords: records.filter((record) => record.isActive !== false).length,
+      lastSyncedAt: records[0]?.lastSyncedAt || null,
+    };
+  } catch {
+    return { totalRecords: 0, activeRecords: 0, lastSyncedAt: null };
+  }
 }
 
 export async function trainKnowledgeBase(teamId: string): Promise<TrainKnowledgeSummary> {
   const syncedAt = new Date().toISOString();
   const websitePages = await crawlWebsitePages();
-  const collections: Record<string, number> = {};
   let websitePagesImported = 0;
-  let appwriteRecordsImported = 0;
   let upserted = 0;
   let updated = 0;
   let skipped = 0;
@@ -357,55 +241,21 @@ export async function trainKnowledgeBase(teamId: string): Promise<TrainKnowledge
       skipped += 1;
       continue;
     }
-    const result = await upsertKnowledgeRecord({
-      teamId,
-      sourceUrl: page.url,
-      pageTitle: page.title,
-      excerpt: page.excerpt,
-      content: page.content,
-      tags: buildKnowledgeTags(`${page.title} ${page.excerpt}`, ['website', 'traventions']),
-      syncedAt,
-    });
-    websitePagesImported += 1;
-    if (result.action === 'created') upserted += 1;
-    if (result.action === 'updated') updated += 1;
-  }
-
-  for (const collectionId of APPWRITE_COLLECTIONS) {
     try {
-      const docs = await fetchAllAppwriteDocs(SECONDARY_DATABASE_ID, collectionId);
-      collections[collectionId] = docs.length;
-      for (const doc of docs) {
-        const content = buildAppwriteKnowledgeContent(collectionId, doc);
-        if (!content.trim()) {
-          skipped += 1;
-          continue;
-        }
-
-        const sourceUrl = `https://appwrite.local/${SECONDARY_DATABASE_ID}/${collectionId}/${String(doc.$id || '')}`;
-        const pageTitle =
-          stringifyValue(doc.title).trim() ||
-          stringifyValue(doc.name).trim() ||
-          `${collectionId} knowledge`;
-
-        const result = await upsertKnowledgeRecord({
-          teamId,
-          sourceUrl,
-          pageTitle,
-          excerpt: content.slice(0, 900),
-          content,
-          tags: buildKnowledgeTags(`${collectionId} ${content.slice(0, 200)}`, [
-            'appwrite',
-            collectionId,
-          ]),
-          syncedAt,
-        });
-        appwriteRecordsImported += 1;
-        if (result.action === 'created') upserted += 1;
-        if (result.action === 'updated') updated += 1;
-      }
+      const result = await upsertKnowledgeRecord({
+        teamId,
+        sourceUrl: page.url,
+        pageTitle: page.title,
+        excerpt: page.excerpt,
+        content: page.content,
+        tags: buildKnowledgeTags(`${page.title} ${page.excerpt}`, ['website', 'traventions']),
+        syncedAt,
+      });
+      websitePagesImported += 1;
+      if (result.action === 'created') upserted += 1;
+      if (result.action === 'updated') updated += 1;
     } catch {
-      collections[collectionId] = 0;
+      skipped += 1;
     }
   }
 
@@ -413,11 +263,8 @@ export async function trainKnowledgeBase(teamId: string): Promise<TrainKnowledge
   return {
     ...status,
     websitePagesImported,
-    appwriteRecordsImported,
     upserted,
     updated,
     skipped,
-    collections,
-    sourceDatabaseId: SECONDARY_DATABASE_ID,
   };
 }

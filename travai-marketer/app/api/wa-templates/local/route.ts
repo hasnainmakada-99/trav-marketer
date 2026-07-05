@@ -1,11 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { IndexType, Query } from 'node-appwrite';
-import { getActiveDataBackend } from '@/lib/data-backend';
+import { Query } from 'node-appwrite';
 import {
-  APPWRITE_DATABASE_ID,
   createDocument,
   deleteDocument,
-  getDatabaseClient,
   listDocuments,
   updateDocument,
 } from '@/lib/appwrite';
@@ -22,15 +19,6 @@ type LocalTemplateDoc = {
   createdAt?: string;
   updatedAt?: string;
 };
-
-let ready = false;
-let initPromise: Promise<void> | null = null;
-
-function isAlreadyExists(error: unknown) {
-  const e = error as { code?: number; type?: string; message?: string };
-  const text = `${e?.type || ''} ${e?.message || ''}`.toLowerCase();
-  return e?.code === 409 || text.includes('already exists');
-}
 
 function parseButtons(raw: unknown): string[] {
   if (Array.isArray(raw)) {
@@ -55,83 +43,7 @@ function parseButtons(raw: unknown): string[] {
 }
 
 async function ensureCollection() {
-  if (getActiveDataBackend() === 'pocketbase') {
-    ready = true;
-    return;
-  }
-
-  if (ready) return;
-  if (initPromise) {
-    await initPromise;
-    return;
-  }
-
-  initPromise = (async () => {
-    const db = getDatabaseClient();
-    let exists = false;
-    try {
-      await db.getCollection(APPWRITE_DATABASE_ID, COLLECTION_ID);
-      exists = true;
-    } catch {
-      // create below
-    }
-
-    if (!exists) {
-      try {
-        await db.createCollection(APPWRITE_DATABASE_ID, COLLECTION_ID, 'WA Local Templates');
-      } catch (error) {
-        if (!isAlreadyExists(error)) throw error;
-      }
-    }
-
-    const ensure = async (fn: () => Promise<unknown>) => {
-      try {
-        await fn();
-      } catch (error) {
-        if (!isAlreadyExists(error)) throw error;
-      }
-    };
-
-    await ensure(() =>
-      db.createStringAttribute(APPWRITE_DATABASE_ID, COLLECTION_ID, 'teamId', 128, true)
-    );
-    await ensure(() =>
-      db.createStringAttribute(APPWRITE_DATABASE_ID, COLLECTION_ID, 'name', 180, true)
-    );
-    await ensure(() =>
-      db.createStringAttribute(APPWRITE_DATABASE_ID, COLLECTION_ID, 'body', 8000, true)
-    );
-    await ensure(() =>
-      db.createStringAttribute(APPWRITE_DATABASE_ID, COLLECTION_ID, 'buttons', 2000, false)
-    );
-    await ensure(() =>
-      db.createBooleanAttribute(APPWRITE_DATABASE_ID, COLLECTION_ID, 'isActive', true, true)
-    );
-    await ensure(() =>
-      db.createDatetimeAttribute(APPWRITE_DATABASE_ID, COLLECTION_ID, 'createdAt', true)
-    );
-    await ensure(() =>
-      db.createDatetimeAttribute(APPWRITE_DATABASE_ID, COLLECTION_ID, 'updatedAt', true)
-    );
-    await ensure(() =>
-      db.createIndex(
-        APPWRITE_DATABASE_ID,
-        COLLECTION_ID,
-        'team_active_updated_idx',
-        IndexType.Key,
-        ['teamId', 'isActive', 'updatedAt'],
-        ['asc', 'asc', 'desc']
-      )
-    );
-
-    ready = true;
-  })();
-
-  try {
-    await initPromise;
-  } finally {
-    initPromise = null;
-  }
+  // PocketBase handles schema automatically
 }
 
 function toResponse(doc: LocalTemplateDoc) {

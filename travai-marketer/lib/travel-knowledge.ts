@@ -1,13 +1,9 @@
 import { Query } from 'node-appwrite';
-import { APPWRITE_DATABASE_ID, getDatabaseClient } from '@/lib/appwrite';
-import { getActiveDataBackend } from '@/lib/data-backend';
 import { getPocketBaseSchema, listPocketBaseDocuments } from '@/lib/pocketbase-server';
 import { isConfidentialOrBlockedRoutePath, isCustomerSafeRoutePath } from '@/lib/whatsapp-bot-routing';
 
 const WEBSITE_BASE_URL =
   process.env.TRAVENTIONS_WEBSITE_URL || 'https://traventions-ai.vercel.app';
-
-const SECONDARY_DEFAULT_DATABASE_ID = '';
 
 const PACKAGE_TERMS_REGEX =
   /\b(package|packages|itinerary|trip|tour|price|pricing|budget|offer|day|days|night|nights|inclusions|exclusions)\b/i;
@@ -171,37 +167,8 @@ function scoreByKeywords(text: string, keywords: string[]) {
   return score;
 }
 
-async function resolveKnowledgeDatabaseIds() {
-  const envDatabaseIds = (process.env.WA_KNOWLEDGE_DATABASE_IDS || '')
-    .split(',')
-    .map((v) => v.trim())
-    .filter(Boolean);
-  const secondaryDatabaseId = (process.env.WA_KNOWLEDGE_SECONDARY_DATABASE_ID || '').trim();
-  const autoDiscoverDatabases =
-    (process.env.WA_KNOWLEDGE_AUTO_DISCOVER_DBS || 'false').trim().toLowerCase() === 'true';
-  const discovered: string[] = [];
-
-  if (autoDiscoverDatabases) {
-    try {
-      const db = getDatabaseClient();
-      const response = await db.list();
-      for (const item of response.databases || []) {
-        if (item?.$id) discovered.push(item.$id);
-      }
-    } catch {
-      // best effort only
-    }
-  }
-
-  return Array.from(
-    new Set([
-      APPWRITE_DATABASE_ID,
-      SECONDARY_DEFAULT_DATABASE_ID,
-      secondaryDatabaseId,
-      ...envDatabaseIds,
-      ...discovered,
-    ])
-  );
+async function resolveKnowledgeDatabaseIds(): Promise<string[]> {
+  return ['pocketbase'];
 }
 
 function shouldIncludeCollection(collectionId: string) {
@@ -324,54 +291,15 @@ async function resolveKnowledgeCollections(): Promise<CollectionRef[]> {
   const cached = fromCache(collectionCache);
   if (cached) return cached;
 
-  if (getActiveDataBackend() === 'pocketbase') {
-    const refs = getPocketBaseSchema()
-      .map((collection) => collection.name)
-      .filter((collectionId) => shouldIncludeCollection(collectionId))
-      .map((collectionId) => ({
-        databaseId: 'pocketbase',
-        collectionId,
-      }));
-    collectionCache = toCache(refs, 60 * 60 * 1000);
-    return refs;
-  }
-
-  const db = getDatabaseClient();
-  const envCollections = (process.env.WA_KNOWLEDGE_COLLECTIONS || '')
-    .split(',')
-    .map((v) => v.trim())
-    .filter(Boolean);
-  const refs: CollectionRef[] = [];
-
-  const databaseIds = await resolveKnowledgeDatabaseIds();
-  for (const databaseId of databaseIds) {
-    try {
-      const response = await db.listCollections(databaseId);
-      const discovered = response.collections
-        .map((c) => c.$id)
-        .filter((id) => shouldIncludeCollection(id));
-
-      const mergedForDb = Array.from(
-        new Set([
-          ...envCollections.filter((c) => discovered.includes(c)),
-          ...PRIORITY_COLLECTIONS.filter((c) => discovered.includes(c)),
-          ...discovered,
-        ])
-      );
-
-      for (const collectionId of mergedForDb) {
-        refs.push({ databaseId, collectionId });
-      }
-    } catch {
-      // Skip inaccessible DB and continue.
-    }
-  }
-
-  const deduped = Array.from(
-    new Map(refs.map((r) => [`${r.databaseId}:${r.collectionId}`, r])).values()
-  );
-  collectionCache = toCache(deduped, 60 * 60 * 1000);
-  return deduped;
+  const refs = getPocketBaseSchema()
+    .map((collection) => collection.name)
+    .filter((collectionId) => shouldIncludeCollection(collectionId))
+    .map((collectionId) => ({
+      databaseId: 'pocketbase',
+      collectionId,
+    }));
+  collectionCache = toCache(refs, 60 * 60 * 1000);
+  return refs;
 }
 
 function stringifyValue(value: unknown): string {
@@ -452,40 +380,12 @@ function docToSearchText(databaseId: string, collectionId: string, doc: Record<s
   return `[${databaseId}.${collectionId}] ${chunks.join(' | ')}`.slice(0, 1000);
 }
 
-async function fetchCollectionDocs(databaseId: string, collectionId: string, teamId: string) {
+async function fetchCollectionDocs(_databaseId: string, collectionId: string, teamId: string) {
   const baseLimit = Number(process.env.WA_DB_DOC_LIMIT || '12');
   const limit = Number.isFinite(baseLimit) && baseLimit > 0 ? baseLimit : 80;
 
-  if (getActiveDataBackend() === 'pocketbase') {
-    try {
-      const result = await listPocketBaseDocuments(collectionId, [
-        Query.equal('teamId', teamId),
-        Query.orderDesc('$createdAt'),
-        Query.limit(limit),
-      ]);
-      return result.documents as Array<Record<string, unknown>>;
-    } catch {
-      try {
-        const result = await listPocketBaseDocuments(collectionId, [
-          Query.orderDesc('$createdAt'),
-          Query.limit(limit),
-        ]);
-        return result.documents as Array<Record<string, unknown>>;
-      } catch {
-        try {
-          const result = await listPocketBaseDocuments(collectionId, [Query.limit(limit)]);
-          return result.documents as Array<Record<string, unknown>>;
-        } catch {
-          return [];
-        }
-      }
-    }
-  }
-
-  const db = getDatabaseClient();
-
   try {
-    const result = await db.listDocuments(databaseId, collectionId, [
+    const result = await listPocketBaseDocuments(collectionId, [
       Query.equal('teamId', teamId),
       Query.orderDesc('$createdAt'),
       Query.limit(limit),
@@ -493,14 +393,14 @@ async function fetchCollectionDocs(databaseId: string, collectionId: string, tea
     return result.documents as Array<Record<string, unknown>>;
   } catch {
     try {
-      const result = await db.listDocuments(databaseId, collectionId, [
+      const result = await listPocketBaseDocuments(collectionId, [
         Query.orderDesc('$createdAt'),
         Query.limit(limit),
       ]);
       return result.documents as Array<Record<string, unknown>>;
     } catch {
       try {
-        const result = await db.listDocuments(databaseId, collectionId, [Query.limit(limit)]);
+        const result = await listPocketBaseDocuments(collectionId, [Query.limit(limit)]);
         return result.documents as Array<Record<string, unknown>>;
       } catch {
         return [];
@@ -577,59 +477,57 @@ export async function loadTravelKnowledge(
 
   const keywords = extractKeywords(userMessage);
 
-  if (getActiveDataBackend() === 'pocketbase') {
-    const importedKnowledge = await fetchCollectionDocs('pocketbase', 'website_knowledge', teamId);
-    if (importedKnowledge.length > 0) {
-      const scoredKnowledge = importedKnowledge
-        .map((doc) => {
-          const sourceUrl = stringifyValue(doc.sourceUrl) || WEBSITE_BASE_URL;
-          const title = stringifyValue(doc.pageTitle) || 'Traventions knowledge';
-          const excerpt = stringifyValue(doc.excerpt);
-          const content = stringifyValue(doc.content);
-          const text = `[website_knowledge] title: ${title} | url: ${sourceUrl} | excerpt: ${excerpt} | content: ${content}`.slice(
-            0,
-            2000
-          );
-          return {
-            text,
-            score: scoreByKeywords(`${title} ${excerpt} ${content} ${sourceUrl}`, keywords),
-            hasPackageSignal: PACKAGE_TERMS_REGEX.test(`${title} ${excerpt} ${content}`),
-            sourceUrl,
-            title,
-            excerpt,
-          };
-        })
-        .filter((item) => item.score > 0 || item.hasPackageSignal)
-        .sort((a, b) => {
-          if (b.hasPackageSignal !== a.hasPackageSignal) {
-            return b.hasPackageSignal ? 1 : -1;
-          }
-          return b.score - a.score;
-        });
-
-      if (scoredKnowledge.length > 0) {
-        const top = scoredKnowledge.slice(0, 10);
-        const best = top[0];
-        const result: TravelKnowledge = {
-          databaseSnippets: top.map((item) => item.text),
-          hasPackageData: top.some((item) => item.hasPackageSignal),
-          bestWebsiteUrl: best?.sourceUrl || WEBSITE_BASE_URL,
-          bestWebsiteTitle: best?.title || 'Traventions',
-          websiteSnippets: top
-            .slice(0, 5)
-            .map((item) => `${item.title} - ${item.sourceUrl} - ${item.excerpt.slice(0, 180)}`),
-          diagnostics: {
-            collectionsScanned: ['pocketbase.website_knowledge'],
-            collectionDocCounts: { 'pocketbase.website_knowledge': importedKnowledge.length },
-            crawledPages: 0,
-          },
+  const importedKnowledge = await fetchCollectionDocs('pocketbase', 'website_knowledge', teamId);
+  if (importedKnowledge.length > 0) {
+    const scoredKnowledge = importedKnowledge
+      .map((doc) => {
+        const sourceUrl = stringifyValue(doc.sourceUrl) || WEBSITE_BASE_URL;
+        const title = stringifyValue(doc.pageTitle) || 'Traventions knowledge';
+        const excerpt = stringifyValue(doc.excerpt);
+        const content = stringifyValue(doc.content);
+        const text = `[website_knowledge] title: ${title} | url: ${sourceUrl} | excerpt: ${excerpt} | content: ${content}`.slice(
+          0,
+          2000
+        );
+        return {
+          text,
+          score: scoreByKeywords(`${title} ${excerpt} ${content} ${sourceUrl}`, keywords),
+          hasPackageSignal: PACKAGE_TERMS_REGEX.test(`${title} ${excerpt} ${content}`),
+          sourceUrl,
+          title,
+          excerpt,
         };
+      })
+      .filter((item) => item.score > 0 || item.hasPackageSignal)
+      .sort((a, b) => {
+        if (b.hasPackageSignal !== a.hasPackageSignal) {
+          return b.hasPackageSignal ? 1 : -1;
+        }
+        return b.score - a.score;
+      });
 
-        const nextCache = cachedMap || new Map<string, TravelKnowledge>();
-        nextCache.set(cacheKey, result);
-        knowledgeQueryCache = toCache(nextCache, 6 * 60 * 60 * 1000);
-        return result;
-      }
+    if (scoredKnowledge.length > 0) {
+      const top = scoredKnowledge.slice(0, 10);
+      const best = top[0];
+      const result: TravelKnowledge = {
+        databaseSnippets: top.map((item) => item.text),
+        hasPackageData: top.some((item) => item.hasPackageSignal),
+        bestWebsiteUrl: best?.sourceUrl || WEBSITE_BASE_URL,
+        bestWebsiteTitle: best?.title || 'Traventions',
+        websiteSnippets: top
+          .slice(0, 5)
+          .map((item) => `${item.title} - ${item.sourceUrl} - ${item.excerpt.slice(0, 180)}`),
+        diagnostics: {
+          collectionsScanned: ['pocketbase.website_knowledge'],
+          collectionDocCounts: { 'pocketbase.website_knowledge': importedKnowledge.length },
+          crawledPages: 0,
+        },
+      };
+
+      const nextCache = cachedMap || new Map<string, TravelKnowledge>();
+      nextCache.set(cacheKey, result);
+      knowledgeQueryCache = toCache(nextCache, 6 * 60 * 60 * 1000);
+      return result;
     }
   }
 

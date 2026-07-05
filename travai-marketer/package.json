@@ -17,7 +17,6 @@
     "migrate-pocketbase:remaining": "node scripts/migrate-appwrite-to-pocketbase.mjs business_configs,staff,campaigns,campaign_logs,gbp_posts,gbp_reviews,wa_local_templates,gbp_media,website_knowledge"
   },
   "dependencies": {
-    "appwrite": "^13.0.0",
     "axios": "^1.6.0",
     "dotenv": "^16.3.1",
     "next": "16.2.4",
