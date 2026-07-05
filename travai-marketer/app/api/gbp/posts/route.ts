@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
 import { generateGBPKeywordSuggestions, generateGBPPost } from '@/lib/openai';
@@ -24,6 +25,7 @@ type StoredPost = {
   teamId: string;
   title: string;
   content: string;
+  contentHash?: string;
   googlePostId?: string | null;
   status: 'draft' | 'posted' | 'failed';
   postedAt?: string | null;
@@ -87,6 +89,27 @@ function serializePost(document: StoredPost) {
     callToAction:
       safeJsonParse<GbpCallToAction>(document.callToActionJson) || null,
   };
+}
+
+function makeContentHash(content: string, media: PostMediaPayload[]): string {
+  const mediaUrls = media
+    .map((m) => m.publicUrl)
+    .sort()
+    .join(',');
+  return createHash('sha256').update(`${content}|${mediaUrls}`).digest('hex');
+}
+
+async function findExistingPostByHash(teamId: string, hash: string): Promise<StoredPost | null> {
+  try {
+    const existing = await listDocuments('gbp_posts', [
+      Query.equal('teamId', teamId),
+      Query.equal('contentHash', hash),
+      Query.limit(1),
+    ]);
+    return (existing.documents[0] as unknown as StoredPost) || null;
+  } catch {
+    return null;
+  }
 }
 
 function inferPostTitle(content: string, title?: string | null) {
@@ -391,6 +414,38 @@ Description: ${String((business as unknown as Record<string, unknown>).businessD
       postedAt = createdPost.createTime || new Date().toISOString();
     }
 
+    const contentHash = makeContentHash(String(finalContent || ''), normalizedMedia);
+
+    const existingHash = await findExistingPostByHash(teamId, contentHash);
+    if (existingHash) {
+      if (existingHash.status === 'posted' || status === 'posted') {
+        return NextResponse.json(
+          { message: 'A post with identical content already exists', post: serializePost(existingHash) },
+          { status: 200 }
+        );
+      }
+      const updated = await updateDocument('gbp_posts', existingHash.$id, {
+        title: inferPostTitle(String(finalContent), title || 'Auto-generated Post'),
+        content: finalContent,
+        googlePostId,
+        status,
+        postedAt,
+        type: type || (autoGenerate ? 'auto_generated' : 'manual'),
+        createdBy,
+        updatedAt: new Date().toISOString(),
+        mediaJson: JSON.stringify(normalizedMedia.slice(0, 6)),
+        callToActionJson: sanitizeCallToAction(callToAction as GbpCallToAction | undefined)
+          ? JSON.stringify(sanitizeCallToAction(callToAction as GbpCallToAction | undefined))
+          : '',
+        languageCode: typeof languageCode === 'string' ? languageCode : 'en',
+        googleState,
+        googleSearchUrl,
+        syncSource: publishNow ? 'app' : existingHash.syncSource || 'draft',
+        contentHash,
+      });
+      return NextResponse.json(serializePost(updated as unknown as StoredPost), { status: 200 });
+    }
+
     const post = await createDocument('gbp_posts', {
       teamId,
       title: inferPostTitle(String(finalContent), title || 'Auto-generated Post'),
@@ -410,6 +465,7 @@ Description: ${String((business as unknown as Record<string, unknown>).businessD
       googleState,
       googleSearchUrl,
       syncSource: publishNow ? 'app' : 'draft',
+      contentHash,
     });
 
     return NextResponse.json(serializePost(post as unknown as StoredPost), { status: 201 });
@@ -521,6 +577,23 @@ export async function PATCH(request: NextRequest) {
         return NextResponse.json({ error: 'Missing teamId for publish' }, { status: 400 });
       }
 
+      const content = String(updates.content || existingPost.content || '');
+      if (!content.trim()) {
+        return NextResponse.json({ error: 'Post content is empty' }, { status: 400 });
+      }
+
+      const contentHash = makeContentHash(content, resolvedMedia);
+      const existingHash = await findExistingPostByHash(resolvedTeamId, contentHash);
+      if (existingHash && existingHash.$id !== postId) {
+        if (existingHash.status === 'posted') {
+          return NextResponse.json(
+            { message: 'A post with identical content has already been published', post: serializePost(existingHash) },
+            { status: 200 }
+          );
+        }
+      }
+      updates.contentHash = contentHash;
+
       const accessToken = await getAccessTokenForTeam(resolvedTeamId);
       const business = await getBusinessConfigByTeamId(resolvedTeamId);
       const connectedLocation =
@@ -535,11 +608,6 @@ export async function PATCH(request: NextRequest) {
           { error: 'No Google location selected. Click your business name in the Setup tab first.' },
           { status: 400 }
         );
-      }
-
-      const content = String(updates.content || existingPost.content || '');
-      if (!content.trim()) {
-        return NextResponse.json({ error: 'Post content is empty' }, { status: 400 });
       }
 
       const resolvedCta = sanitizeCallToAction(resolvedCallToAction);
