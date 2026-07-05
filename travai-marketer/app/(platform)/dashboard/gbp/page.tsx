@@ -1167,8 +1167,8 @@ function GbpPageInner() {
                       type="text"
                       value={postForm.title}
                       onChange={(event) => setPostForm((current) => ({ ...current, title: event.target.value }))}
-                      placeholder="Travel South Goa"
-                      className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-base text-slate-900 outline-none transition focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
+                       placeholder="e.g. Discover South Goa's Hidden Beaches"
+                       className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-base text-slate-900 placeholder:text-slate-300 italic outline-none transition focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
                     />
                   </div>
 
@@ -1191,8 +1191,8 @@ function GbpPageInner() {
                       onChange={(event) => setPostForm((current) => ({ ...current, content: event.target.value, autoGenerate: false }))}
                       rows={9}
                       maxLength={1500}
-                      placeholder="Write the post copy or generate it with AI"
-                      className="min-h-[280px] w-full rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4 text-base leading-8 text-slate-800 outline-none transition focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
+                       placeholder="AI will generate this from your keywords, business info &amp; uploaded media. You can also type or paste content here."
+                       className="min-h-[280px] w-full rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4 text-base leading-8 text-slate-800 placeholder:text-slate-300 italic outline-none transition focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
                     />
 
                     <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">

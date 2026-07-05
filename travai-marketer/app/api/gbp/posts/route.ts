@@ -293,6 +293,7 @@ export async function POST(request: NextRequest) {
 
     const normalizedMedia = Array.isArray(media) ? (media as PostMediaPayload[]) : [];
     let finalContent = content;
+    let aiResult: { title: string; content: string } | null = null;
     let resolvedKeywords = Array.isArray(keywords)
       ? keywords.map((item) => String(item).trim()).filter(Boolean)
       : [];
@@ -308,7 +309,7 @@ export async function POST(request: NextRequest) {
       const businessContext = `Business: ${business.businessName}
 Description: ${String((business as unknown as Record<string, unknown>).businessDescription || 'No description')}`;
 
-      finalContent = await generateGBPPost(businessContext, keywords || [], {
+      aiResult = await generateGBPPost(businessContext, keywords || [], {
         title,
         media: normalizedMedia.map((item) => ({
           publicUrl: item.publicUrl,
@@ -317,10 +318,11 @@ Description: ${String((business as unknown as Record<string, unknown>).businessD
           mediaFormat: item.mediaFormat,
         })),
       });
+      finalContent = aiResult.content;
 
       resolvedKeywords = await generateGBPKeywordSuggestions(businessContext, {
-        title,
-        content: String(finalContent || ''),
+        title: aiResult.title,
+        content: String(aiResult.content || ''),
         media: normalizedMedia.map((item) => ({
           publicUrl: item.publicUrl,
           mimeType: item.mimeType,
@@ -338,9 +340,10 @@ Description: ${String((business as unknown as Record<string, unknown>).businessD
     }
 
     if (previewOnly) {
+      const previewTitle = (aiResult?.title || inferPostTitle(finalContent, title));
       return NextResponse.json(
         {
-          title: inferPostTitle(finalContent, title),
+          title: previewTitle,
           content: finalContent,
           keywords: resolvedKeywords,
           media: normalizedMedia,

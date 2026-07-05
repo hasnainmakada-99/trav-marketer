@@ -194,20 +194,22 @@ export async function generateGBPPost(
       mediaFormat?: 'PHOTO' | 'VIDEO';
     }>;
   }
-): Promise<string> {
+): Promise<{ title: string; content: string }> {
   try {
-    const systemPrompt = `You are an SEO expert and social media strategist.
-Generate an engaging Google Business Profile post that:
-- Includes relevant keywords for local SEO
-- Feels natural, high-conviction, and easy to scan
-- Prioritizes destination, offer, and business relevance for Google local discovery
-- Includes a clear call-to-action
-- Is professional yet approachable
-- Matches the exact offer, destination, or visual context from the uploaded media when media is provided
-- Never invent details that are not visible or not mentioned in the business context
-- Ends with 3 to 5 focused hashtags that improve local search relevance
-- Uses hashtags related to destination, travel intent, and the brand
-- Keeps hashtags at the end of the caption`;
+    const systemPrompt = `You are an SEO expert and social media strategist creating Google Business Profile posts.
+
+CRITICAL: You MUST return valid JSON in this exact format (no markdown, no code fences):
+{"title": "A short engaging headline under 72 characters", "content": "The full post body with hashtags at the end"}
+
+Rules:
+- The title (headline) must be under 72 characters, catchy, and include key destination or offer
+- The content must feel natural, high-conviction, and easy to scan
+- Include relevant keywords for local SEO
+- Include a clear call-to-action
+- Match the exact offer, destination, or visual context from uploaded media — describe what you see in images
+- Never invent details not visible or mentioned
+- End content with 3 to 5 focused local-search hashtags
+- Keep hashtags at the end`;
 
     const keywordsStr =
       keywords.length > 0 ? `Include these keywords: ${keywords.join(', ')}` : '';
@@ -226,12 +228,14 @@ Generate an engaging Google Business Profile post that:
             .join('\n')}`
         : '';
 
-    const userPrompt = `Generate a GBP post for this business:
+    const imageCount = imageMedia.length;
+    const userPrompt = `Generate a GBP post as JSON (title + content) for this business:
 ${businessContext}
-${options?.title ? `Post title/context: ${options.title}` : ''}
+${options?.title ? `Post topic hint: ${options.title}` : ''}
 ${keywordsStr}
-${media.length > 0 ? 'Use the uploaded post media as the primary creative context for the caption.' : ''}
-${mediaNotes}`.trim();
+${imageCount > 0 ? `There are ${imageCount} image(s) attached. Study each image carefully and describe what you see, then use those visual details to create the post content.` : ''}
+${mediaNotes}
+Respond ONLY with valid JSON. No explanation.`.trim();
 
     const userContent: Array<Record<string, unknown>> = [
       {
@@ -262,20 +266,41 @@ ${mediaNotes}`.trim();
         },
       ],
       temperature: 0.7,
-      max_tokens: 200,
+      max_tokens: 400,
     });
 
-    const generated = response.choices[0]?.message?.content || '';
-    return ensureGBPSeoFormatting(
-      generated,
+    const raw = response.choices[0]?.message?.content || '{}';
+    let parsed: { title?: string; content?: string };
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      const titleMatch = raw.match(/"title"\s*:\s*"([^"]+)"/);
+      const contentMatch = raw.match(/"content"\s*:\s*"([^"]+)"/s);
+      parsed = {
+        title: titleMatch?.[1] || inferTitleFromContent(raw, options?.title),
+        content: contentMatch?.[1] || raw,
+      };
+    }
+
+    const title = (parsed.title || inferTitleFromContent(parsed.content, options?.title)).trim().slice(0, 72);
+    const content = ensureGBPSeoFormatting(
+      parsed.content || raw,
       businessContext,
       keywords,
-      options?.title
+      title
     );
+
+    return { title, content };
   } catch (error) {
     console.error('Error generating GBP post:', error);
     throw error;
   }
+}
+
+function inferTitleFromContent(content?: string, fallback?: string): string {
+  const clean = (content || '').replace(/#\S+/g, '').trim();
+  const firstSentence = clean.split(/[.!?\n]/)[0]?.trim() || fallback || 'GBP Post';
+  return firstSentence.length > 72 ? `${firstSentence.slice(0, 69)}...` : firstSentence;
 }
 
 export async function generateGBPKeywordSuggestions(
