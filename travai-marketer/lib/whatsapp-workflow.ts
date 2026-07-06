@@ -241,29 +241,36 @@ function detectPostPackageAction(raw: string): string | null {
 function parseCallbackTime(raw: string): string | null {
   const corrected = autoCorrect(raw);
 
+  // Pattern 1: Keyword-prefixed time ("callback at 5pm tomorrow", "call me tomorrow at 3pm")
   const explicit = pick(
     /\b(?:callback|call me|call back|preferred time|available at|prefer|anytime|any time)\s*[:\-]?\s*([a-zA-Z0-9 :/-]{3,40})/i,
     corrected
   );
   if (explicit) return explicit;
 
-  // Day + optional time: "Today at 5 PM", "Tomorrow morning", "Saturday afternoon"
+  // Pattern 2: Time + day combined ("5pm tomorrow", "5 PM on Saturday", "10:30 AM on monday")
+  const timeThenDay = corrected.match(
+    /\b(\d{1,2}(?::\d{2})?\s*(?:am|pm)\s+on\s+(?:today|tomorrow|tonight|this\s+(?:morning|afternoon|evening|week|weekend)|monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b/i
+  );
+  if (timeThenDay) return timeThenDay[1].trim();
+  const timeThenBareDay = corrected.match(
+    /\b(\d{1,2}(?::\d{2})?\s*(?:am|pm)\s+(?:today|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b/i
+  );
+  if (timeThenBareDay) return timeThenBareDay[1].trim();
+
+  // Pattern 3: Just a time ("5 PM", "10:30 AM", "5pm")
+  const justTime = corrected.match(/\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i);
+  if (justTime) return justTime[1].trim();
+
+  // Pattern 4: Day + optional time ("Today at 5 PM", "Tomorrow morning", "Saturday afternoon")
   const timeExpr = corrected.match(
     /\b(today|tomorrow|tonight|this\s+(?:morning|afternoon|evening|week|weekend)|monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+at\s+[\d:]+\s*(?:am|pm)?|\s+(?:morning|afternoon|evening|night|noon))?\b/i
   );
   if (timeExpr) return timeExpr[0].trim();
 
-  // Just a time: "5 PM", "10:30 AM", "5pm"
-  const justTime = corrected.match(/\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i);
-  if (justTime) return justTime[0].trim();
-
-  // "anytime", "asap", "as soon as possible", "earliest"
-  if (/\b(anytime|any time|convenient|whenever)\b/i.test(corrected)) {
-    return 'at your convenience';
-  }
-  if (/\b(asap|earliest)\b/i.test(corrected)) {
-    return 'at the earliest convenient time';
-  }
+  // Pattern 5: "anytime", "asap"
+  if (/\b(anytime|any time|convenient|whenever)\b/i.test(corrected)) return 'at your convenience';
+  if (/\b(asap|earliest)\b/i.test(corrected)) return 'at the earliest convenient time';
 
   return null;
 }
@@ -541,7 +548,28 @@ function parseGeneralSlots(
   if (email) slots.email = email;
 
   const phone = pick(/\b(\+?\d[\d\s-]{7,14}\d)\b/, raw);
-  if (phone) slots.phone = phone.replace(/\s+/g, '');
+  if (phone) {
+    slots.phone = phone.replace(/\s+/g, '');
+
+    // When phone is found but NO name yet, try to extract name from the word
+    // immediately before the phone number. Handles non-comma input like
+    // "John +911234567890 5pm tomorrow" where "John" wouldn't match the
+    // "i am / my name is" prefix regex.
+    if (!slots.name) {
+      const rawNormalized = raw.replace(/\s+/g, ' ');
+      const phoneClean = slots.phone;
+      const phoneIdx = rawNormalized.indexOf(phoneClean);
+      if (phoneIdx > 0) {
+        const beforePhone = rawNormalized.slice(0, phoneIdx).trim().split(/\s+/).pop() || '';
+        if (
+          /^[A-Z][a-zA-Z]{1,20}$/.test(beforePhone) &&
+          !NON_CITY_WORDS.has(normalize(beforePhone))
+        ) {
+          slots.name = beforePhone;
+        }
+      }
+    }
+  }
 
   if (!slots.name) {
     const name = pick(/\b(?:name|full name|i am|i'm|my name is)\s*[:\-]?\s*([a-zA-Z .'-]{2,40})/i, raw);
@@ -896,9 +924,9 @@ export function resolveWorkflowState(args: {
   // SAFETY: Prevent lead bleed from skipping collect_lead.
   // If the current message sets post_package_action AND no lead has been
   // explicitly provided AFTER the last post_package_action in session history,
-  // clear any accidentally accumulated lead slots so the bot always asks fresh.
-  // Exception: if the current message itself provides callback_time (or name/phone/email),
-  // preserve those — the user is giving both a callback request AND the details in one go.
+  // clear only post-PPA accumulated lead slots so the bot asks fresh.
+  // Pre-PPA lead slots (e.g. "My name is John" said before "arrange callback")
+  // are preserved — they were legitimately provided by the user.
   const currentMsgPpa = currentMessageSlots.post_package_action;
   if (currentMsgPpa) {
     const currentMsgProvidesLead = Boolean(
@@ -916,10 +944,28 @@ export function resolveWorkflowState(args: {
         return Boolean(p.name || p.phone || p.callback_time);
       });
       if (!leadProvidedAfterPpa) {
-        delete slots.name;
-        delete slots.phone;
-        delete slots.email;
-        delete slots.callback_time;
+        // Determine which lead slots were set in pre-PPA messages (from session history
+        // BEFORE the first PPA anchor). Those are legitimate user-provided data and
+        // must NOT be cleared. Only clear slots that were NOT set pre-PPA.
+        const firstPpaIdx = (() => {
+          for (let i = 0; i < sessionMessages.length; i++) {
+            const p = parseGeneralSlots(sessionMessages[i], intent, {});
+            if (p.post_package_action) return i;
+          }
+          return -1;
+        })();
+        const prePpaSlots = new Set<string>();
+        if (firstPpaIdx > 0) {
+          for (let i = 0; i < firstPpaIdx; i++) {
+            const p = parseGeneralSlots(sessionMessages[i], intent, {});
+            for (const k of LEAD_SLOT_KEYS) {
+              if (p[k]) prePpaSlots.add(k);
+            }
+          }
+        }
+        for (const k of LEAD_SLOT_KEYS) {
+          if (!prePpaSlots.has(k)) delete (slots as Record<string, string>)[k];
+        }
       }
     }
   }
@@ -983,20 +1029,28 @@ export function resolveWorkflowState(args: {
 
   // Callback fallback: treat the entire short message as callback time when
   // all lead info is collected but callback_time is still missing.
-  // Handles freeform responses like "evening tomorrow" or "5 pm on saturday".
+  // Handles freeform responses like "evening tomorrow" or "5 pm on saturday"
+  // or even just "evening" / "night" / "afternoon".
+  // NOTE: isCallbackActionOnly guard was REMOVED because it blocked messages
+  // that contain BOTH "callback" keyword AND a time (e.g. "I want a callback at 5pm").
+  // parseCallbackTime already returns null for pure "I want a callback" (no time),
+  // so the guard was redundant and actively harmful.
   if (preStage === 'ask_callback' && !slots.callback_time) {
     const msg = args.userMessage.trim();
     const msgL = normalize(msg);
     if (msg && msg.length <= 60) {
       const parsedCallbackTime = parseCallbackTime(msg);
-      const isCallbackActionOnly =
-        slots.post_package_action === 'arrange_callback' &&
-        /\b(arrange\s*callback|callback|call\s*back|call me)\b/i.test(msgL);
-      // Only use whole message if it doesn't look like a new service request
       const looksLikeNewIntent =
         detectWorkflowIntent(msg) !== 'unknown' || isGreetingLike(msg);
-      if (!looksLikeNewIntent && !isCallbackActionOnly && parsedCallbackTime) {
+      if (!looksLikeNewIntent && parsedCallbackTime) {
         slots.callback_time = parsedCallbackTime;
+      } else if (!looksLikeNewIntent && !parsedCallbackTime && msgL.length <= 20 && !msgL.match(/\d/)) {
+        // Last-chance fallback: short plain-text like "evening", "night", "afternoon"
+        const timeWords = /\b(morning|afternoon|evening|night|midnight|noon|today|tomorrow|tonight|weekend|weekday|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+        const match = msg.match(timeWords);
+        if (match && msg.replace(timeWords, '').trim().length <= 5) {
+          slots.callback_time = match[0];
+        }
       }
     }
   }
