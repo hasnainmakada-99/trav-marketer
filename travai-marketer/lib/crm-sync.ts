@@ -13,6 +13,7 @@ import {
   normalizePhoneForMatch,
   type CrmLeadStatus,
 } from '@/lib/crm';
+import { sendLeadNotificationEmail } from '@/lib/email';
 
 type ConversationDoc = {
   $id: string;
@@ -298,6 +299,13 @@ export async function syncLeadStatusesFromConversations(teamId: string): Promise
           updatedAt: now,
         });
         created += 1;
+        sendLeadNotificationEmail({
+          name: name === phone ? null : name,
+          phone,
+          source: 'whatsapp',
+          notes,
+          email,
+        });
       } catch {
         skipped += 1;
       }

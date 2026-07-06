@@ -25,7 +25,7 @@ import {
   mergeLeadStatus,
 } from '@/lib/crm';
 import { extractCustomerNameCandidate } from '@/lib/contact-identity';
-import { sendCallbackEmails } from '@/lib/email';
+import { sendCallbackEmails, sendLeadNotificationEmail } from '@/lib/email';
 import {
   enforceSafeUrlsInReply,
   getBotRoutePolicyPromptBlock,
@@ -525,6 +525,14 @@ async function saveLead(params: {
       createdAt: now,
       updatedAt: now,
     }).catch(() => {});
+    sendLeadNotificationEmail({
+      name,
+      phone,
+      source: 'whatsapp',
+      notes: nextNotes,
+      email,
+      serviceInterest: intent || null,
+    });
     return { leadId: null, status: resolvedStatus, existed: false as const };
   }
 }

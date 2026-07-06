@@ -92,3 +92,61 @@ export async function sendCallbackEmails(params: {
 
   return { sent: true as const };
 }
+
+export async function sendLeadNotificationEmail(params: {
+  name?: string | null;
+  phone: string;
+  source: string;
+  notes?: string | null;
+  email?: string | null;
+  serviceInterest?: string | null;
+}) {
+  const transporter = buildTransport();
+  const from = (process.env.SMTP_FROM || process.env.SMTP_USER || process.env.GMAIL_APP_EMAIL || '').trim();
+  const notifyTo = (process.env.CALLBACK_NOTIFY_TO || process.env.GMAIL_APP_EMAIL || '').trim();
+
+  if (!transporter || !from || !notifyTo) {
+    console.warn('[LeadEmail] Missing SMTP config, cannot send lead notification');
+    return;
+  }
+
+  const name = params.name?.trim() || 'Unknown';
+  const phone = params.phone;
+  const source = params.source || 'unknown';
+  const serviceLine = params.serviceInterest?.trim()
+    ? `Service Interest: ${params.serviceInterest.trim()}`
+    : null;
+  const emailLine = params.email?.trim()
+    ? `Email: ${params.email.trim()}`
+    : null;
+  const notesLine = params.notes?.trim()
+    ? `Notes: ${params.notes.trim()}`
+    : null;
+  const timestamp = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+  try {
+    await transporter.sendMail({
+      from,
+      to: notifyTo,
+      subject: `New Lead: ${name} — ${source}`,
+      text: [
+        `A new lead has been captured.`,
+        '',
+        `Name: ${name}`,
+        `Phone: ${phone}`,
+        `Source: ${source}`,
+        emailLine,
+        serviceLine,
+        notesLine,
+        '',
+        `Time: ${timestamp} IST`,
+        '',
+        `---`,
+        `TravAI Notification`,
+      ].filter(Boolean).join('\n'),
+    });
+    console.log(`[LeadEmail] Notification sent for ${phone} (${source})`);
+  } catch (err) {
+    console.error('[LeadEmail] Failed to send notification:', err instanceof Error ? err.message : err);
+  }
+}

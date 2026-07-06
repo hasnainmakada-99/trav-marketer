@@ -4,6 +4,7 @@ import { listDocuments, createDocument, updateDocument } from '@/lib/appwrite';
 import { queryLocalDocuments } from '@/lib/local-crm-cache';
 import { buildBestLeadPreview, humanizeLeadNotes } from '@/lib/message-preview';
 import { syncLeadStatusesFromConversations } from '@/lib/crm-sync';
+import { sendLeadNotificationEmail } from '@/lib/email';
 import {
   CRM_STATUS_ORDER,
   buildPhoneVariants,
@@ -93,6 +94,14 @@ export async function POST(request: NextRequest) {
       lastContactedAt: now,
       createdAt: now,
       updatedAt: now,
+    });
+    sendLeadNotificationEmail({
+      name: body.name?.trim(),
+      phone: normalizedPhone,
+      source: body.source || 'walk_in',
+      notes: body.notes || null,
+      email: body.email?.trim() || null,
+      serviceInterest: body.serviceInterest || null,
     });
     return NextResponse.json({ lead }, { status: 201 });
   } catch (err) {

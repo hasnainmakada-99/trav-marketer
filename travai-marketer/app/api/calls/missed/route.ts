@@ -3,6 +3,7 @@ import { sendYCloudTextMessage } from '@/lib/whatsapp-ycloud';
 import { createDocument, listDocuments } from '@/lib/appwrite';
 import { Query } from 'node-appwrite';
 import { canSendToPhoneForFree } from '@/lib/whatsapp-free-tier';
+import { sendLeadNotificationEmail } from '@/lib/email';
 
 async function findOrCreateCustomer(phone: string, teamId: string) {
   const normalizedPhone = phone.replace(/[^\d]/g, '');
@@ -45,6 +46,12 @@ async function handleMissedCall(phone: string, teamId: string, callerName?: stri
       notes: 'Missed call — auto-follow-up sent via WhatsApp',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+    });
+    sendLeadNotificationEmail({
+      name: callerName || customer.name || null,
+      phone: normalizedPhone,
+      source: 'missed_call',
+      notes: 'Missed call — auto-follow-up sent via WhatsApp',
     });
   }
 
