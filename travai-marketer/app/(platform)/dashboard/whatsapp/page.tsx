@@ -33,6 +33,7 @@ interface Conversation {
   lastType: 'incoming' | 'outgoing';
   unreadCount: number;
   crmStatus: CrmLeadStatus;
+  source?: string | null;
 }
 
 interface Message {
@@ -183,9 +184,7 @@ function InboxTab({
   onFocusConsumed: () => void;
 }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [statusCounts, setStatusCounts] = useState<Record<CrmLeadStatus, number>>({
-    new_lead: 0, normal_conversation: 0, connected: 0, converted: 0, closed: 0,
-  });
+  const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
   const [thread, setThread] = useState<Message[]>([]);
@@ -216,10 +215,16 @@ function InboxTab({
 
   useEffect(() => { selectedPhoneRef.current = selectedPhone; }, [selectedPhone]);
 
+  const [crmSynced, setCrmSynced] = useState(false);
+
   const loadConversations = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent ?? false;
     if (!silent) setLoading(true);
     try {
+      if (!crmSynced) {
+        fetch('/api/leads/backfill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teamId: TEAM_ID }) }).catch(() => {});
+        setCrmSynced(true);
+      }
       const response = await fetch(conversationListUrl(), { cache: 'no-store' });
       const data = await response.json();
       const nextConversations = (data.conversations || []) as Conversation[];
@@ -404,10 +409,15 @@ function InboxTab({
                         <h2 className="truncate text-xl font-semibold text-slate-950">
                           {threadInfo?.name || selectedConversation?.name || 'WhatsApp contact'}
                         </h2>
-                        <StatusBadge status={threadInfo?.crmStatus || selectedConversation?.crmStatus || 'normal_conversation'} />
+                        <StatusBadge status={threadInfo?.crmStatus || selectedConversation?.crmStatus || 'new'} />
                       </div>
                       <p className="mt-1 truncate text-sm text-slate-500">{selectedPhone}</p>
-                      {threadInfo?.email && <p className="truncate text-xs text-slate-400">{threadInfo.email}</p>}
+                      <div className="flex flex-wrap gap-2 text-xs text-slate-400">
+                        {threadInfo?.email && <span>{threadInfo.email}</span>}
+                        {selectedConversation?.source && selectedConversation.source !== 'whatsapp' && (
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 font-medium text-slate-500">{selectedConversation.source}</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">

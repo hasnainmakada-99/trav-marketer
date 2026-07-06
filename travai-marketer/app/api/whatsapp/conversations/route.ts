@@ -101,6 +101,7 @@ function resolveContact(phone: string, maps: ReturnType<typeof buildContactMaps>
     }),
     email: customer?.email || lead?.email || null,
     status: coerceLeadStatus(lead?.status),
+    source: lead?.source || null,
     notes: humanizeLeadNotes(lead?.notes || null),
   };
 }
@@ -185,14 +186,15 @@ export async function GET(request: NextRequest) {
       string,
       {
         phone: string;
+        name: string;
+        email: string | null;
+        crmStatus: CrmLeadStatus;
+        source: string | null;
         lastMessage: string;
         lastTimestamp: string;
         lastType: 'incoming' | 'outgoing';
         unreadCount: number;
         awaitingReply: boolean;
-        crmStatus: CrmLeadStatus;
-        name: string;
-        email: string | null;
       }
     >();
 
@@ -212,6 +214,7 @@ export async function GET(request: NextRequest) {
           name: contact.displayName,
           email: contact.email,
           crmStatus: contact.status,
+          source: contact.source,
           lastMessage: formatPreview(message.message, message.messageType),
           lastTimestamp: ts,
           lastType: isIncoming ? 'incoming' : 'outgoing',
@@ -225,12 +228,36 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // Merge leads without any WhatsApp conversation into the inbox
+    const leadDocs = (leadResult.documents || []) as unknown as LeadDoc[];
+    for (const lead of leadDocs) {
+      if (!lead.phone) continue;
+      const phoneKey = normalizePhoneForMatch(lead.phone) || lead.phone;
+      if (byPhone.has(phoneKey)) continue;
+
+      const customer = contactMaps.customerByPhone.get(phoneKey);
+      const leadName = lead.name || lead.phone;
+      byPhone.set(phoneKey, {
+        phone: lead.phone,
+        name: customer?.name || leadName,
+        email: customer?.email || lead.email || null,
+        crmStatus: coerceLeadStatus(lead.status),
+        source: lead.source || 'unknown',
+        lastMessage: 'No messages yet',
+        lastTimestamp: lead.updatedAt || lead.createdAt || new Date().toISOString(),
+        lastType: 'outgoing',
+        unreadCount: 0,
+        awaitingReply: false,
+      });
+    }
+
     const conversations = Array.from(byPhone.values())
       .map((conversation) => ({
         phone: conversation.phone,
         name: conversation.name,
         email: conversation.email,
         crmStatus: conversation.crmStatus,
+        source: conversation.source,
         lastMessage: conversation.lastMessage,
         lastTimestamp: conversation.lastTimestamp,
         lastType: conversation.lastType,
