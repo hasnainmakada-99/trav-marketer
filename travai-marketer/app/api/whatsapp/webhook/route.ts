@@ -1458,7 +1458,7 @@ async function generateAndSendResponse(
       return;
     }
 
-    const stageDraftReply = null; // AI stages only (show_packages, confirmed, unknown)
+    const stageDraftReply = null;
 
     // Call AI with workflow-aware system prompt
     const shouldUseKnowledge = shouldLoadAppwriteKnowledge({
@@ -1643,10 +1643,10 @@ GLOBAL RULES:
         response = enforceSafeUrlsInReply(response);
       } catch (err) {
         console.error('[WhatsApp] OpenAI reply failed:', err);
-        response = stageDraftReply || 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
+        response = stageDraftReply || 'Thanks for your message! Let me check with our team and get back to you with the details. 😊';
       }
     } else {
-      response = stageDraftReply || 'Welcome to Traventions! Thanks for your message. Our team will get back to you shortly.';
+      response = stageDraftReply || 'Thanks for your message! Let me check with our team and get back to you with the details. 😊';
     }
 
     // --- ANTI-HALLUCINATION VALIDATION LAYER ---
