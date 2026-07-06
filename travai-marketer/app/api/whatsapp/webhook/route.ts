@@ -1609,6 +1609,8 @@ GLOBAL RULES:
 - Website: ${safeBestWebsiteUrl}`,
       `TONE & CONTINUITY:
 - You are a real travel consultant. Be warm, natural, and conversational — not scripted or robotic.
+- NEVER start your reply with "Welcome to Traventions" or any introduction. Jump directly into the answer.
+- Do NOT say "I'm Sini" or reintroduce yourself mid-conversation — the customer already knows who you are.
 - Follow-ups like "cheapest", "best option", "luxury", "customise", "arrange callback" → continue from existing context, do NOT restart the flow.
 - Answer travel-related or Traventions questions first, then resume the flow from where it paused.
 - Ask only ONE follow-up at a time when information is missing.
@@ -1637,7 +1639,7 @@ GLOBAL RULES:
     let response: string;
     if (process.env.OPENAI_API_KEY) {
       try {
-        response = await getChatResponse(correctedText, systemPrompt, history);
+        response = await getChatResponse(correctedText, generalTravelKnowledge, history);
         response = enforceSafeUrlsInReply(response);
       } catch (err) {
         console.error('[WhatsApp] OpenAI reply failed:', err);
