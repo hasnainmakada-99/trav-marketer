@@ -1086,8 +1086,9 @@ async function findOrCreateCustomerWithSeed(
 }
 
 /**
- * Post-process AI response to catch hallucinated claims before sending.
- * Checks for invented prices, package names, inventory claims, URLs, etc.
+ * Post-process AI response to surgically fix hallucinated claims before sending.
+ * Unlike the previous version that nuked the entire response, this version
+ * only replaces the problematic fragments.
  */
 async function validateAndSanitizeResponse(
   response: string,
@@ -1098,58 +1099,61 @@ async function validateAndSanitizeResponse(
   phone: string,
   teamId: string
 ): Promise<string> {
-  const lower = response.toLowerCase();
+  let cleaned = response;
+  const lower = cleaned.toLowerCase();
+  const snippetText = databaseSnippets.join(' ').toLowerCase();
+  const word = (s: string) => s.replace(/\s+/g, '').toLowerCase();
 
-  // 1. Catch hard-coded price patterns like "₹25,000" or "₹ 25000" that aren't in package data
-  const pricePattern = /₹\s*[\d,]+/g;
-  const priceMatches = lower.match(pricePattern) || [];
-  if (priceMatches.length > 0) {
-    const snippetText = databaseSnippets.join(' ').toLowerCase();
-    const allPricesInSnippets = snippetText.match(pricePattern) || [];
-    let inventedPrice = false;
-    for (const price of priceMatches) {
-      const normalized = price.replace(/\s/g, '');
-      if (!allPricesInSnippets.some((p) => p.replace(/\s/g, '') === normalized)) {
-        const contextMatch = userMessage.match(/price|cost|rate|₹/i);
-        if (contextMatch) {
-          inventedPrice = true;
-          break;
-        }
-      }
+  // 1. If a price pattern like "₹25,000" exists in response but NOT in DB snippets,
+  //    replace only the invented prices with a softer range marker.
+  const pricePattern = /₹\s*[\d,]+(?:[\d,.]*)/gi;
+  const inventedPrices: string[] = [];
+  let priceMatch: RegExpExecArray | null = null;
+  const priceRe = new RegExp(pricePattern.source, 'gi');
+  while ((priceMatch = priceRe.exec(cleaned)) !== null) {
+    const p = priceMatch[0];
+    if (!snippetText.includes(word(p)) && !snippetText.includes(word(p.replace(/\s/g, '')))) {
+      inventedPrices.push(p);
     }
-    if (inventedPrice) {
-      console.warn(`[Anti-Hallucination] Stripped invented price from response for ${phone}`);
-      return 'Thanks for your interest! I don\'t have exact pricing details available right now. Our team can check current rates and availability for you — let me connect you with a specialist.';
+  }
+  for (const fake of inventedPrices) {
+    const replacement = `₹XX,XXX (exact pricing — please confirm with our team)`;
+    cleaned = cleaned.replace(fake, replacement);
+    console.warn(`[Anti-Hallucination] Replaced invented price "${fake}" for ${phone}`);
+  }
+
+  // 2. Catch "I checked"/"just checked"/"our system shows" without supporting DB data
+  //    → Replace the claim trigger with a softer phrase instead of nuking everything.
+  const inventoryClaimRE = /\b(i checked|just checked|according to our system|our records show|i can see that)\b/gi;
+  if (databaseSnippets.length === 0 && inventoryClaimRE.test(lower)) {
+    const oldCleaned = cleaned;
+    cleaned = cleaned.replace(
+      inventoryClaimRE,
+      'based on general knowledge'
+    );
+    if (cleaned !== oldCleaned) {
+      console.warn(`[Anti-Hallucination] Softened inventory claim in response for ${phone}`);
     }
   }
 
-  // 2. Catch "I checked" / "just checked" / "according to our system" without data
-  const claimingInventory = /\b(i checked|just checked|according to our system|our records show|i can see that)\b/i.test(lower);
-  if (claimingInventory && databaseSnippets.length === 0) {
-    console.warn(`[Anti-Hallucination] Stripped inventory claim from response for ${phone}`);
-    return 'Thanks for reaching out! I don\'t have live availability info at the moment. Our operations team can check real-time options for you.';
-  }
-
-  // 3. Catch invented URLs not in the website data
+  // 3. Remove invented URLs that don't belong to allowed domains
   const urlPattern = /https?:\/\/[^\s]+/g;
-  const urls = response.match(urlPattern) || [];
-  if (urls.length > 0 && safeWebsiteUrl) {
-    const allowedDomains = ['161-118-174-116.sslip.io', 'wa.me', 'ycloud.com', 'api.whatsapp.com', 'wa.link'];
-    for (const url of urls) {
-      try {
-        const parsed = new URL(url);
-        const isAllowed = allowedDomains.some((d) => parsed.hostname.endsWith(d));
-        if (!isAllowed) {
-          console.warn(`[Anti-Hallucination] Stripped response with invented URL ${url} for ${phone}`);
-          return `You can visit our website at ${safeWebsiteUrl} for more information. Let me know how I can help! 🌐😊`;
-        }
-      } catch {
-        console.warn(`[Anti-Hallucination] Failed to parse URL ${url} for ${phone}`);
+  const allowedDomains = ['161-118-174-116.sslip.io', 'wa.me', 'ycloud.com', 'api.whatsapp.com', 'wa.link'];
+  const urls = cleaned.match(urlPattern) || [];
+  for (const url of urls) {
+    try {
+      const parsed = new URL(url);
+      const isAllowed = allowedDomains.some((d) => parsed.hostname.endsWith(d));
+      if (!isAllowed) {
+        cleaned = cleaned.replace(url, safeWebsiteUrl);
+        console.warn(`[Anti-Hallucination] Replaced invented URL ${url} for ${phone}`);
       }
+    } catch {
+      cleaned = cleaned.replace(url, safeWebsiteUrl);
     }
   }
 
-  return response;
+  return cleaned;
 }
 
 /**
@@ -1507,15 +1511,16 @@ async function generateAndSendResponse(
     const databasePolicyBlock = enforceDatabaseFirst
       ? knowledge.databaseSnippets.length > 0
         ? `DATABASE-FIRST POLICY (STRICT):
-- Use CRM database package/flight/hotel data as the PRIMARY truth source.
-- Do not invent package names, inclusions, durations, or prices when DB data is available.
-- If the user asks for options, extract and present options from the provided PACKAGE KNOWLEDGE.
-- If some detail is missing in DB, say it clearly and ask one follow-up question.`
+- Use CRM database PACKAGE KNOWLEDGE data as the PRIMARY truth source for packages, pricing, inclusions.
+- Present it as real Traventions offerings — use actual names, prices, durations from the data.
+- If the user asks for options, extract and present directly from PACKAGE KNOWLEDGE.
+- If some detail is missing from the data, say what you have clearly and ask one follow-up.`
         : `DATABASE-FIRST POLICY:
 - No matching package data found in the CRM database for this query.
-- You may provide curated sample options, but label them as "sample/estimated".
-- Keep pricing realistic in INR and avoid claiming confirmed live inventory.
-- Ask the user if they want a human expert callback for exact live inventory.`
+- Use your GENERAL TRAVEL KNOWLEDGE to give helpful information about the destination — typical price ranges, best times to visit, popular attractions, visa requirements.
+- Frame general info naturally: "Dubai is a great choice! A typical 5-day trip including flights and 4-star hotel usually ranges from ₹35,000-₹60,000 per person depending on the season."
+- Do NOT claim specific live package pricing or inventory.
+- Always offer: "Want me to connect you with our team for exact live pricing and availability?"`
       : '';
 
     const workflowBlock = getWorkflowSystemPromptBlock(
@@ -1530,59 +1535,99 @@ async function generateAndSendResponse(
       recentUserMessages: historyUserMessages.slice(-12),
     });
 
-    const systemPrompt = [
+    const generalTravelKnowledge = [
+      `GENERAL TRAVEL KNOWLEDGE (use confidently when PACKAGE KNOWLEDGE is empty):
+TRAVENTIONS SERVICES:
+- Traventions is a full-service travel agency based in India offering: holiday packages, flight bookings, hotel bookings, visa assistance, travel insurance, forex/currency exchange, airport transfers, custom itineraries, and corporate travel management.
+- Website: ${safeBestWebsiteUrl} | Email: info@traventions.com
+- Customers can request a callback from a travel specialist at any time.
+
+POPULAR INDIAN OUTBOUND DESTINATIONS:
+- Dubai/UAE: visa on arrival for Indians (14-30 days), popular for shopping, desert safaris, theme parks, Burj Khalifa.
+- Thailand: visa on arrival (15 days), popular for Bangkok, Phuket, Pattaya, Krabi — beaches, temples, nightlife.
+- Bali/Indonesia: visa on arrival (30 days), popular for Ubud, Seminyak, Nusa Penida — culture, surf, rice terraces.
+- Maldives: visa on arrival (30 days), overwater villas, snorkeling, luxury resorts.
+- Singapore: eVisa required, popular for Sentosa, Universal Studios, Gardens by Bay, shopping.
+- Malaysia: visa-free for Indians (30 days), Kuala Lumpur, Langkawi, Genting Highlands.
+- Sri Lanka: visa on arrival (ETA), popular for Kandy, Galle, Ella, wildlife safaris, tea plantations.
+- Europe (Schengen): visa required (apply 3-4 weeks ahead), popular for Switzerland, France, Italy, Greece — package durations 7-14 days typical.
+- Vietnam: eVisa (30 days), popular for Hanoi, Ha Long Bay, Ho Chi Minh City, Hoi An.
+- Turkey: eVisa, popular for Istanbul, Cappadocia, Antalya, Pamukkale.
+
+INDIAN DOMESTIC DESTINATIONS:
+- Kashmir: "Paradise on Earth" — Srinagar, Gulmarg, Pahalgam, Sonamarg — houseboats, skiing, Mughal gardens.
+- Kerala: "God's Own Country" — Munnar, Alleppey, Kumarakom, Thekkady — backwaters, houseboats, tea plantations.
+- Goa: beaches, nightlife, Portuguese architecture, water sports.
+- Himachal: Manali, Shimla, Dharamshala, Kasol — mountains, snow, adventure sports, trekking.
+- Uttarakhand: Nainital, Mussoorie, Rishikesh, Jim Corbett — hill stations, rafting, wildlife, yoga.
+- Rajasthan: Jaipur, Udaipur, Jodhpur, Jaisalmer — forts, palaces, desert safaris, heritage hotels.
+- Andaman: Port Blair, Havelock — beaches, scuba diving, sea walks, cellular jail.
+
+GENERAL TRAVEL TIPS:
+- Best time to visit most hill stations: October to June.
+- Best time for beach destinations: November to March.
+- Peak travel seasons: school summer break (Apr-Jun), Diwali, Christmas/New Year, Dussehra.
+- Travel insurance is recommended for all international travel and is often mandatory for Schengen visas.
+- Visa processing for most countries takes 3-15 working days.
+- Advance booking (3-4 weeks) usually gets better flight + hotel rates.
+- Forex/currency exchange services available at competitive rates through Traventions.`,
+
       businessConfig?.openaiSystemPrompt || '',
-      `You are Sini, a warm and knowledgeable travel sales assistant for Traventions (a full-service travel agency in India).
-You ALWAYS respond — no matter what the customer sends (short, long, confusing, off-topic, emoji-only, Hindi, Hinglish, random text).`,
+      `You are Sini, a confident, warm, and highly knowledgeable travel consultant for Traventions (a full-service travel agency in India). You ALWAYS send a useful reply to every customer message — no exceptions.
+
+IDENTITY & CONFIDENCE RULES:
+- You ARE a real Traventions travel consultant. Never say "as an AI" or "as a bot" or anything mechanical.
+- Reply like an experienced human travel advisor on WhatsApp — natural, warm, personalized, concise.
+- You have deep general knowledge of world travel destinations, visa requirements, travel tips, and Indian travel preferences. Use this knowledge CONFIDENTLY.
+- When the CRM database has PACKAGE KNOWLEDGE, use it as the primary source for specific packages, pricing, and availability.
+- When PACKAGE KNOWLEDGE is empty, use your GENERAL TRAVEL KNOWLEDGE above to give helpful, accurate information — just don't claim it's a specific Traventions package.
+- NEVER say "I don't have that information" without also offering something useful. Always pivot to general facts, a suggestion, or an offer to connect with a specialist.
+- If asked something truly unknown → "That's a great question! Let me check with our operations team and get back to you. In the meantime, here's what I can tell you..."`,
       getBotRoutePolicyPromptBlock(),
       workflowBlock,
       memoryBlock,
       customerProfileBlock,
       databasePolicyBlock,
-      `HANDLING UNEXPECTED INPUTS (mandatory):
-- Emoji-only or very short messages (ok, yes, no, 👍, 🙏) → interpret in context of current stage; if ambiguous, re-ask the stage question warmly.
-- Questions mid-flow (Is Dubai visa-free? What currency does Bali use? What services do you offer? Where is your office?) → briefly answer in 1-3 sentences, then continue the current stage naturally.
-- Hindi or Hinglish → respond in the same language if possible, continue the flow.
-- Angry or frustrated customer → empathize first ("I completely understand your concern 😊"), then offer to help.
-- "Speak to human" / "agent" / "staff" → "Sure! Our team can be reached at info@traventions.com. I can also continue helping you right now 😊"
-- Business/platform-related questions (services, office, website, payments, support, CRM, GBP, campaigns, dashboard) → answer them helpfully and naturally, then continue the current travel flow if something is still pending.
-- Completely off-topic (weather, sports, jokes, coding, etc.) → politely refuse and steer back to travel only.
-- Random characters or test messages → "Hello! 😊 I'm Sini from Traventions. How can I help you plan your next trip?"
-- User wants to change their mind (different destination, different dates) → accept gracefully and update the plan.
+      `HANDLING ALL INPUTS (mandatory - follow in order):
+- Short/emoji-only replies (ok, yes, no, 👍, 🙏, hmm) → interpret in context of the current workflow stage. If ambiguous, gently re-ask the stage question.
+- Questions mid-flow (Is Dubai visa-free? What currency for Bali? What services do you offer? Where's your office?) → answer confidently from GENERAL TRAVEL KNOWLEDGE above in 1-3 sentences, then continue the current stage naturally.
+- General/unknown (single words like "travel", "hello", "help", questions about Traventions) → answer helpfully and ask how you can assist with trip planning.
+- Hindi or Hinglish → respond naturally in the same language, continue the flow.
+- Angry or frustrated → empathize sincerely first ("I understand your concern"), then offer a solution or human handover.
+- "Speak to human / agent / staff" → "Our team is available at info@traventions.com. I'm happy to keep helping you too!"
+- Business/platform questions (services, website, payments, CRM, dashboard, campaigns) → answer naturally from your general knowledge, then continue the travel flow.
+- Completely off-topic (weather, sports, coding, etc.) → politely decline and steer to travel.
+- Random characters/test messages → greet warmly and ask how to help with travel plans.
+- Destination or plan change requests → accept gracefully and ask for the new details.
 
 GLOBAL RULES:
-- WhatsApp formatting only: *bold*, _italic_, numbered lists, bullet * lists. NEVER markdown links [text](url) — plain URLs only.
-- INR only for all pricing — never USD or $.
-- Keep reply concise and focused. Under 250 words unless generating packages.
+- WhatsApp formatting: *bold*, _italic_, numbered lists, bullet * lists. NEVER use markdown links [text](url) — plain URLs only.
+- INR for all pricing — never USD or $.
+- Keep replies concise: under 250 words unless generating package options.
 - Never repeat questions already answered by the customer.
-- ALWAYS send a reply — never respond with empty text.
+- ALWAYS send a reply — never respond with empty text or silence.
 - Website: ${safeBestWebsiteUrl}`,
-      `TONE AND CONTINUITY RULES:
-      - Reply like a real travel consultant on WhatsApp, not like a scripted bot.
-      - Never say "as an AI", "I am a bot", "travel assistant bot", or anything mechanical.
-      - If the customer sends a follow-up like "cheapest", "best", "luxury", "family option", "customise this", or "arrange callback", continue from the existing chat context instead of restarting the flow.
-      - If the customer asks a travel-related or Traventions/platform-related question at any stage, answer it first and then resume the flow from the exact point where it paused.
-      - Prefer natural sentences over rigid forms or checklists.
-      - Ask only one compact follow-up when something is missing.
-      - If the needed context is already present in chat history, answer directly instead of showing the menu again.`,
+      `TONE & CONTINUITY:
+- You are a real travel consultant. Be warm, natural, and conversational — not scripted or robotic.
+- Follow-ups like "cheapest", "best option", "luxury", "customise", "arrange callback" → continue from existing context, do NOT restart the flow.
+- Answer travel-related or Traventions questions first, then resume the flow from where it paused.
+- Ask only ONE follow-up at a time when information is missing.
+- If the needed info is already in chat history, answer directly — don't re-ask or repeat the menu.`,
 
-      `ANTI-HALLUCINATION RULES (CRITICAL - VIOLATION = ACCOUNT TERMINATION):
-      - NEVER invent package names, hotel names, flight numbers, or itinerary details.
-      - NEVER invent prices, discounts, inclusions, exclusions, or durations.
-      - NEVER claim "availability", "confirmed seats", "live inventory", or "real-time pricing".
-      - NEVER say "I checked and..." unless the data is explicitly in PACKAGE KNOWLEDGE above.
-      - If asked about specifics not in PACKAGE KNOWLEDGE → say "I don't have that exact detail in our system. Let me connect you with a specialist who can check live availability."
-      - If PACKAGE KNOWLEDGE is empty → say "I don't have live package data right now. Our team can check exact availability and pricing for you."
-      - For any specific claim (price, date, hotel, flight), if not in PACKAGE KNOWLEDGE → MUST say "sample/estimated" or "I'll confirm with the team".
-      - NO fabricated landmarks, attractions, visa rules, or weather info beyond general knowledge.
-      - If unsure about ANY fact → "Let me verify that with our operations team" NOT a guess.
-      - INR pricing only — if unsure of exact amount, give a range or say "starting from ₹X".
-      - Website URLs must be from WEBSITE PAGES list above — never invent URLs.`,
+      `ACCURACY & HONESTY POLICY (follow strictly):
+- When PACKAGE KNOWLEDGE has data: present it as the actual Traventions offering. Use real prices, names, and inclusions from the data.
+- When PACKAGE KNOWLEDGE is empty: use GENERAL TRAVEL KNOWLEDGE confidently. Give general destination advice, typical price ranges (from your general knowledge), and popular travel tips. Clearly frame as "Typically, a 5-night Bali trip starts around ₹45,000 per person including flights and hotels" rather than claiming a specific live package.
+- For exact live pricing, availability, or real-time inventory → always say "Let me connect you with our team who can check real-time availability and give you the exact price."
+- NEVER invent specific package names, hotel names, flight numbers, or exact dates.
+- NEVER claim "I just checked" or "our system shows" unless the specific data is in PACKAGE KNOWLEDGE above.
+- If a customer asks about availability or live pricing → "Let me get our operations team to check real-time availability for you. They'll get back with exact prices."
+- INR only. If unsure of an exact price, give a general range: "Typically starts from ₹XX,XXX".
+- Website URLs must ONLY be from the WEBSITE PAGES list above. Never invent URLs.`,
       knowledge.databaseSnippets.length
-        ? `\nPACKAGE KNOWLEDGE:\n${knowledge.databaseSnippets.slice(0, 6).map((v, i) => `${i + 1}. ${v}`).join('\n')}`
+        ? `\nPACKAGE KNOWLEDGE (use as primary truth source when applicable):\n${knowledge.databaseSnippets.slice(0, 8).map((v, i) => `${i + 1}. ${v}`).join('\n')}`
         : '',
       safeWebsiteSnippets.length
-        ? `\nWEBSITE PAGES:\n${safeWebsiteSnippets.slice(0, 4).map((v, i) => `${i + 1}. ${v}`).join('\n')}`
+        ? `\nWEBSITE PAGES:\n${safeWebsiteSnippets.slice(0, 5).map((v, i) => `${i + 1}. ${v}`).join('\n')}`
         : '',
     ]
       .filter(Boolean)

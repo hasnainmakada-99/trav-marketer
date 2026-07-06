@@ -127,8 +127,8 @@ export async function getChatResponse(
     const response = await getOpenAI().chat.completions.create({
       model,
       messages,
-      temperature: 0.7,
-      max_tokens: 500,
+      temperature: 0.3,
+      max_tokens: 700,
     });
 
     return response.choices[0]?.message?.content || '';
@@ -531,11 +531,13 @@ export async function preprocessMessage(
         {
           role: 'system',
           content: `You are a travel-assistant pre-processor. Do exactly two things:
-1. SPELL-CHECK: Fix ONLY misspelled words, one word at a time. Do NOT add new words, do NOT reorder words, do NOT restructure the sentence, do NOT infer missing context or destinations. Only correct spelling. Examples: "fligths"→"flights", "exlcusive"→"exclusive", "Bangalroe"→"Bangalore", "Banglore"→"Bangalore", "persomalized"→"personalized", "Elusive"→"Exclusive". If a word is correct, leave it unchanged. If no errors, return as-is.
-2. CLASSIFY INTENT into one of: inquiry | complaint | booking | followup | spam | other
+1. SPELL-CHECK: Fix ONLY misspelled words, one word at a time. Do NOT add new words, do NOT reorder words, do NOT restructure the sentence, do NOT infer missing context or destinations. Only correct spelling. Examples: "fligths"→"flights", "exlcusive"→"exclusive", "Bangalroe"→"Bangalore", "Banglore"→"Bangalore", "persomalized"→"personalized", "Elusive"→"Exclusive". If a word is correct, leave it unchanged. If no errors, return the original text exactly as-is — do NOT expand, rephrase, or add any words.
+2. CLASSIFY INTENT into one of: inquiry | complaint | booking | followup | greeting | spam | other
+
+CRITICAL: If the message has no spelling errors, corrected must be EXACTLY the original message — not modified, not expanded, not rephrased. No exceptions.
 
 Reply with ONLY valid JSON on a single line:
-{"corrected":"<fixed message>","intent":"<category>"}`,
+{"corrected":"<fixed message, or identical to original if no errors>","intent":"<category>"}`,
         },
         {
           role: 'user',
