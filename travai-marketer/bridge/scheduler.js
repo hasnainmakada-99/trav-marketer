@@ -12,7 +12,7 @@
 
 const dotenv = require('dotenv');
 const { Client, Databases, Query } = require('node-appwrite');
-const PocketBase = require('pocketbase');
+const { default: PocketBase } = require('pocketbase');
 
 dotenv.config();
 
