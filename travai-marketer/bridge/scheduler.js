@@ -724,12 +724,92 @@ async function runUpsellJob() {
   }
 }
 
+async function runStalledConversationJob() {
+  console.log('[Scheduler] Running stalled conversation nudge job...');
+  const stallHours = Number(process.env.WA_STALL_NUDGE_HOURS || '3');
+  const staleCutoff = new Date(Date.now() - stallHours * 60 * 60 * 1000).toISOString();
+  const oneHourAgo = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+
+  try {
+    if (APP_DATA_BACKEND !== 'pocketbase') {
+      console.log('[Scheduler] Stalled conversation nudge only supports PocketBase');
+      return;
+    }
+    const pb = await getPocketBaseClient();
+    const result = await pb.collection('conversations').getFullList({
+      filter:
+        `teamId = "${escapeFilterValue(TEAM_ID)}" && ` +
+        `sentBy = "ai" && ` +
+        `createdAt <= "${escapeFilterValue(staleCutoff)}" && ` +
+        `createdAt >= "${escapeFilterValue(oneHourAgo)}"`,
+      sort: '-createdAt',
+    });
+
+    // Group by phone, get latest AI message per phone
+    const latestPerPhone = new Map();
+    for (const msg of result) {
+      const phone = msg.phone;
+      if (!phone || latestPerPhone.has(phone)) continue;
+      const existing = latestPerPhone.get(phone);
+      if (!existing || msg.createdAt > existing.createdAt) {
+        latestPerPhone.set(phone, msg);
+      }
+    }
+
+    let sent = 0;
+    for (const phone of latestPerPhone.keys()) {
+      const canSend = await hasRecentCustomerMessage(phone);
+      if (!canSend) {
+        console.log(`[Scheduler] Skipping stall nudge to ${phone} — no recent inbound (would be paid)`);
+        continue;
+      }
+
+      // Check if a nudge was already sent in the last 2 hours (avoid spam)
+      const recentNudges = await pb.collection('conversations').getList(1, 1, {
+        filter:
+          `phone = "${escapeFilterValue(phone)}" && ` +
+          `sentBy = "ai" && ` +
+          `message = "nudge:stalled" && ` +
+          `createdAt > "${escapeFilterValue(new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString())}"`,
+      });
+      if (recentNudges.totalItems > 0) {
+        console.log(`[Scheduler] Skipping stall nudge to ${phone} — already nudged recently`);
+        continue;
+      }
+
+      const msg =
+        `Hey there! 😊 Just checking in — still thinking about your trip? No rush, just reply when you're ready and I'll be happy to help! 🌍✈️`;
+      const ok = await sendWhatsApp(phone, msg);
+      if (ok) {
+        sent++;
+        // Store the nudge in conversations for dedup tracking
+        await pb.collection('conversations').create({
+          teamId: TEAM_ID,
+          phone,
+          role: 'assistant',
+          message: 'nudge:stalled',
+          messageType: 'text',
+          sentBy: 'ai',
+          deliveryStatus: 'sent',
+          createdAt: new Date().toISOString(),
+        }).catch(() => {});
+        console.log(`[Scheduler] Stalled nudge sent to ${phone}`);
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    console.log(`[Scheduler] Stalled conversation job done. Sent: ${sent}/${latestPerPhone.size}`);
+  } catch (err) {
+    console.error('[Scheduler] Stalled conversation job error:', err?.message);
+  }
+}
+
 function isMonday() {
   return new Date().getDay() === 1;
 }
 
 console.log('[Scheduler] Started. Checking every minute for scheduled jobs...');
-console.log(`[Scheduler] Follow-up: 10:00 | Review: 11:00 | Payment reminder: 12:00 | Renewal: 13:00 | Upsell: 14:00 | Campaign: 18:00 | GBP post: 09:00 Mon`);
+console.log(`[Scheduler] Follow-up: 10:00 | Review: 11:00 | Payment reminder: 12:00 | Renewal: 13:00 | Upsell: 14:00 | Campaign: 18:00 | GPB post: 09:00 Mon | Stalled nudge: 15:00`);
 console.log(`[Scheduler] Target: ${TEAM_ID} | App: ${APP_URL}`);
 
 // Run immediately on startup to catch missed jobs (e.g. server was down)
@@ -752,6 +832,9 @@ setInterval(async () => {
   if (hhmm === '14:00') {
     await runUpsellJob().catch(err => console.error('[Scheduler] Upsell error:', err?.message));
   }
+  if (hhmm === '15:00') {
+    await runStalledConversationJob().catch(err => console.error('[Scheduler] Stalled conversation error:', err?.message));
+  }
   if (hhmm === '18:00') {
     await runCampaignDispatchJob().catch(err => console.error('[Scheduler] Dispatch error:', err?.message));
   }
@@ -771,4 +854,5 @@ module.exports = {
   runPaymentReminderJob,
   runRenewalReminderJob,
   runUpsellJob,
+  runStalledConversationJob,
 };
