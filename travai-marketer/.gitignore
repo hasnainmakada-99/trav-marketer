@@ -50,6 +50,9 @@ tmp-*.log
 # vercel
 .vercel
 
+# pocketbase local data
+pb_data/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

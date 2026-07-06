@@ -10,9 +10,9 @@
  * Usage: pm2 start bridge/scheduler.js --name travai-scheduler
  */
 
-import dotenv from 'dotenv';
-import { Client, Databases, Query } from 'node-appwrite';
-import PocketBase from 'pocketbase';
+const dotenv = require('dotenv');
+const { Client, Databases, Query } = require('node-appwrite');
+const PocketBase = require('pocketbase');
 
 dotenv.config();
 
@@ -272,6 +272,80 @@ async function runCampaignDispatchJob() {
   }
 }
 
+async function listConvertedLeadsForReview() {
+  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  if (APP_DATA_BACKEND === 'pocketbase') {
+    const pb = await getPocketBaseClient();
+    return await pb.collection('leads').getFullList({
+      filter:
+        `teamId = "${escapeFilterValue(TEAM_ID)}" && ` +
+        `status = "converted" && ` +
+        `(reviewRequestSentAt = null || reviewRequestSentAt = "") && ` +
+        `updatedAt >= "${escapeFilterValue(sevenDaysAgo)}" && ` +
+        `updatedAt <= "${escapeFilterValue(twoDaysAgo)}"`,
+      sort: '-updatedAt',
+    });
+  }
+
+  const result = await db.listDocuments(APPWRITE_DATABASE_ID, 'leads', [
+    Query.equal('teamId', TEAM_ID),
+    Query.equal('status', 'converted'),
+    Query.isNull('reviewRequestSentAt'),
+    Query.lessThanEqual('updatedAt', twoDaysAgo),
+    Query.greaterThanEqual('updatedAt', sevenDaysAgo),
+    Query.limit(50),
+  ]);
+  return result.documents;
+}
+
+async function runReviewRequestJob() {
+  console.log('[Scheduler] Running review request job...');
+  const reviewLink = process.env.GOOGLE_REVIEW_LINK || 'https://www.google.com/search?q=Traventions+India+Pvt+Ltd+Reviews';
+
+  try {
+    const leads = (await listConvertedLeadsForReview()).slice(0, 30);
+    console.log(`[Scheduler] Found ${leads.length} converted leads to request reviews from`);
+
+    let sent = 0;
+    for (const lead of leads) {
+      const name = lead.name ? ` ${lead.name.split(' ')[0]}` : '';
+      const phone = lead.phone || lead.phoneNumber;
+      if (!phone) continue;
+
+      const msg = `Hi${name}! 🙏 We hope you had a great experience with Traventions.\n\nCould you take a moment to share your feedback? Your review helps us serve you and others better! ⭐⭐⭐⭐⭐\n\n${reviewLink}\n\nThank you for choosing us! ❤️\n_Traventions — Your Travel Partner_`;
+
+      const ok = await sendWhatsApp(phone, msg);
+      if (ok) {
+        sent++;
+        const leadId = lead.id || lead.$id;
+        try {
+          if (APP_DATA_BACKEND === 'pocketbase') {
+            const pb = await getPocketBaseClient();
+            await pb.collection('leads').update(leadId, {
+              reviewRequestSentAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            });
+          } else {
+            await db.updateDocument(APPWRITE_DATABASE_ID, 'leads', leadId, {
+              reviewRequestSentAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        } catch (updateErr) {
+          console.error(`[Scheduler] Failed to mark review request sent for lead ${leadId}:`, updateErr?.message);
+        }
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    console.log(`[Scheduler] Review request job done. Sent: ${sent}/${leads.length}`);
+  } catch (err) {
+    console.error('[Scheduler] Review request job error:', err?.message);
+  }
+}
+
 function getHHMM() {
   const now = new Date();
   return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
@@ -346,7 +420,7 @@ function isMonday() {
 }
 
 console.log('[Scheduler] Started. Checking every minute for scheduled jobs...');
-console.log(`[Scheduler] Follow-up job: 10:00 daily | Campaign dispatch: 18:00 daily | GBP post: 09:00 Mon`);
+console.log(`[Scheduler] Follow-up job: 10:00 daily | Review request: 11:00 daily | Campaign dispatch: 18:00 daily | GBP post: 09:00 Mon`);
 console.log(`[Scheduler] Target: ${TEAM_ID} | App: ${APP_URL}`);
 
 // Run immediately on startup to catch missed jobs (e.g. server was down)
@@ -356,6 +430,9 @@ setInterval(async () => {
   const hhmm = getHHMM();
   if (hhmm === '10:00') {
     await runFollowUpJob().catch(err => console.error('[Scheduler] Follow-up error:', err?.message));
+  }
+  if (hhmm === '11:00') {
+    await runReviewRequestJob().catch(err => console.error('[Scheduler] Review request error:', err?.message));
   }
   if (hhmm === '18:00') {
     await runCampaignDispatchJob().catch(err => console.error('[Scheduler] Dispatch error:', err?.message));
@@ -367,3 +444,10 @@ setInterval(async () => {
 
 process.on('SIGINT', () => { console.log('[Scheduler] Stopping...'); process.exit(0); });
 process.on('SIGTERM', () => { console.log('[Scheduler] Stopping...'); process.exit(0); });
+
+module.exports = {
+  runFollowUpJob,
+  runCampaignDispatchJob,
+  runReviewRequestJob,
+  runWeeklyGbpPostJob,
+};

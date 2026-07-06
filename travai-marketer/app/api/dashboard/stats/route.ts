@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
     }
 
     const readDocuments = refresh ? listDocuments : queryLocalDocuments;
-    const [leadsAll, campaignsSent, reviewsReplied, recentConvos, customers] =
+    const [leadsAll, campaignsSent, reviewsReplied, recentConvos, customers, transactions] =
       await Promise.allSettled([
         readDocuments('leads', [Query.equal('teamId', teamId), Query.limit(150)]),
         readDocuments('campaigns', [
@@ -57,6 +57,7 @@ export async function GET(request: NextRequest) {
           Query.limit(80),
         ]),
         readDocuments('customers', [Query.equal('teamId', teamId), Query.limit(150)]),
+        readDocuments('transactions', [Query.equal('teamId', teamId), Query.limit(200)]),
       ]);
 
     const get = (result: PromiseSettledResult<{ total?: number; documents?: unknown[] }>) =>
@@ -179,6 +180,31 @@ export async function GET(request: NextRequest) {
       }),
     }));
 
+    const transactionDocs = (get(transactions).documents || []) as Array<{
+      amount?: number;
+      status?: string;
+      date?: string;
+      service?: string;
+      customerName?: string | null;
+    }>;
+
+    let totalRevenue = 0;
+    let monthlyRevenue = 0;
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    const revenueByService: Record<string, number> = {};
+
+    for (const tx of transactionDocs) {
+      if (tx.status === 'completed' || !tx.status) {
+        const amount = Number(tx.amount) || 0;
+        totalRevenue += amount;
+        if (tx.date && tx.date.startsWith(currentMonth)) {
+          monthlyRevenue += amount;
+        }
+        const service = tx.service || 'General';
+        revenueByService[service] = (revenueByService[service] || 0) + amount;
+      }
+    }
+
     const payload = {
       totalLeads: normalizedLeads.length,
       activeConversations: activeConversationCount,
@@ -188,6 +214,12 @@ export async function GET(request: NextRequest) {
       statusOrder: CRM_STATUS_ORDER,
       recentConversations: recentConversationDocs,
       recentLeads: recentLeadDocs,
+      revenue: {
+        total: totalRevenue,
+        monthly: monthlyRevenue,
+        byService: revenueByService,
+        transactionCount: transactionDocs.length,
+      },
     };
 
     statsCache.set(teamId, {

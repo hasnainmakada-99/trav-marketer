@@ -25,6 +25,12 @@ interface Stats {
   recentLeads: Array<{
     $id: string; name?: string; phone?: string; status?: CrmLeadStatus; $createdAt?: string; createdAt?: string;
   }>;
+  revenue?: {
+    total: number;
+    monthly: number;
+    byService: Record<string, number>;
+    transactionCount: number;
+  };
 }
 
 interface KnowledgeStatus {
@@ -242,6 +248,8 @@ export default function DashboardPage() {
           { label: 'Active Chats', value: stats?.activeConversations, sub: 'Messages in last 24h', href: '/dashboard/whatsapp', color: 'from-emerald-500 to-teal-500' },
           { label: 'Campaigns Sent', value: stats?.campaignsSent, sub: 'Broadcasts delivered', href: '/dashboard/campaigns', color: 'from-amber-500 to-orange-500' },
           { label: 'Reviews Replied', value: stats?.reviewsReplied, sub: 'Google reviews with AI', href: '/dashboard/gbp', color: 'from-violet-500 to-fuchsia-500' },
+          { label: 'Total Revenue', value: stats?.revenue ? `$${stats.revenue.total.toLocaleString()}` : undefined, sub: `${stats?.revenue?.transactionCount ?? 0} transactions`, href: '#', color: 'from-emerald-600 to-green-500' },
+          { label: 'Monthly Revenue', value: stats?.revenue ? `$${stats.revenue.monthly.toLocaleString()}` : undefined, sub: 'Current month', href: '#', color: 'from-teal-500 to-cyan-500' },
         ].map((card) => (
           <button
             key={card.label}
