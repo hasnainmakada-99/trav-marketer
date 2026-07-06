@@ -60,8 +60,37 @@ select {
 
 input::placeholder,
 textarea::placeholder {
-  color: #9ca3af !important; /* gray-400 */
+  color: #cbd5e1 !important;
   opacity: 1 !important;
+  font-style: italic !important;
+  font-weight: 300 !important;
+}
+
+/* All buttons and interactive controls get a hand cursor */
+button,
+[role="button"],
+[type="button"],
+[type="submit"],
+[type="reset"],
+a,
+select,
+label:has(input[type="checkbox"]),
+label:has(input[type="radio"]) {
+  cursor: pointer;
+}
+
+/* Keep default cursor on disabled and on native input/textarea areas */
+button:disabled,
+[role="button"]:disabled,
+[type="button"]:disabled,
+[type="submit"]:disabled {
+  cursor: not-allowed;
+}
+
+input,
+textarea,
+select[multiple] {
+  cursor: text;
 }
 
 /* Chrome/Edge autofill keeps yellow background — override it */

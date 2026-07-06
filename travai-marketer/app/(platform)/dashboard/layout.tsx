@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { account, getCurrentUser } from '@/lib/appwrite-client';
 import { canAccess, useRole, type StaffRole } from '@/lib/use-role';
+import { ToastContainer } from '@/components/ui/toast';
 
 const SIDEBAR_STORAGE_KEY = 'travai.dashboard.sidebar.collapsed';
 
@@ -376,6 +377,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           {children}
         </main>
       </div>
+      <ToastContainer />
     </div>
   );
 }
