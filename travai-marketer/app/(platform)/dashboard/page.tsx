@@ -60,6 +60,9 @@ export default function DashboardPage() {
   const [knowledgeStatus, setKnowledgeStatus] = useState<KnowledgeStatus | null>(null);
   const [knowledgeLoading, setKnowledgeLoading] = useState(false);
   const [knowledgeSyncing, setKnowledgeSyncing] = useState(false);
+  const [showDashboardMissedCall, setShowDashboardMissedCall] = useState(false);
+  const [dashMissedForm, setDashMissedForm] = useState({ phone: '', name: '' });
+  const [dashMissedSaving, setDashMissedSaving] = useState(false);
 
   const loadStats = useCallback(async (options?: { silent?: boolean; forceFresh?: boolean }) => {
     const silent = options?.silent ?? false;
@@ -102,6 +105,24 @@ export default function DashboardPage() {
       setKnowledgeSyncing(false);
     }
   }, []);
+
+  const handleDashboardMissedCall = useCallback(async () => {
+    const phone = dashMissedForm.phone.replace(/[^\d+]/g, '');
+    if (!phone || phone.length < 8) { showToast({ message: 'Valid phone number required', type: 'error' }); return; }
+    setDashMissedSaving(true);
+    try {
+      const res = await fetch('/api/calls/missed', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, name: dashMissedForm.name || undefined, teamId: TEAM_ID }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed');
+      showToast({ message: 'Missed call logged — WhatsApp follow-up sent', type: 'success' });
+      setShowDashboardMissedCall(false);
+      setDashMissedForm({ phone: '', name: '' });
+    } catch (e) { showToast({ message: e instanceof Error ? e.message : 'Failed', type: 'error' }); }
+    finally { setDashMissedSaving(false); }
+  }, [dashMissedForm, TEAM_ID]);
 
   useEffect(() => {
     const init = async () => {
@@ -171,6 +192,15 @@ export default function DashboardPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
               </svg>
               {knowledgeSyncing ? 'Training AI...' : 'Train AI knowledge'}
+            </button>
+            <button
+              onClick={() => setShowDashboardMissedCall(true)}
+              className="inline-flex items-center gap-2 rounded-2xl border border-amber-200 bg-amber-50/20 px-5 py-3 text-sm font-semibold text-amber-200 backdrop-blur transition hover:bg-amber-400/20"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 5.25h18M3 12h18M3 18.25h18" />
+              </svg>
+              Log Missed Call
             </button>
             <button
               onClick={() => void loadStats({ forceFresh: true })}
@@ -397,6 +427,38 @@ export default function DashboardPage() {
           </div>
         </div>
       </Card>
+
+      {/* Log missed call modal */}
+      {showDashboardMissedCall && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 backdrop-blur-sm" onClick={() => setShowDashboardMissedCall(false)}>
+          <div className="mx-4 w-full max-w-md rounded-[32px] border border-slate-200 bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-xl font-semibold text-slate-950">Log Missed Call</h2>
+            <p className="mt-1 text-sm text-slate-500">Enter the caller's details and we'll send a WhatsApp follow-up.</p>
+            <div className="mt-5 space-y-4">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">Phone number *</label>
+                <input value={dashMissedForm.phone} onChange={(e) => setDashMissedForm({ ...dashMissedForm, phone: e.target.value })} placeholder="919876543210"
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100" />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">Caller name (optional)</label>
+                <input value={dashMissedForm.name} onChange={(e) => setDashMissedForm({ ...dashMissedForm, name: e.target.value })} placeholder="Customer name"
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100" />
+              </div>
+              <div className="flex gap-3">
+                <button onClick={() => setShowDashboardMissedCall(false)}
+                  className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+                  Cancel
+                </button>
+                <button onClick={() => void handleDashboardMissedCall()} disabled={dashMissedSaving}
+                  className="flex-1 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-50">
+                  {dashMissedSaving ? 'Logging...' : 'Log & Follow Up'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -12,6 +12,7 @@ import { Avatar } from '@/components/ui/avatar';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { Badge } from '@/components/ui/badge';
 import { Modal } from '@/components/ui/modal';
+import { Button } from '@/components/ui/button';
 import { showToast } from '@/components/ui/toast';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
@@ -201,6 +202,14 @@ function InboxTab({
   const [contactSaving, setContactSaving] = useState(false);
   const [contactsText, setContactsText] = useState('');
   const [importingContacts, setImportingContacts] = useState(false);
+  const [showPurchases, setShowPurchases] = useState(false);
+  const [purchasePhone, setPurchasePhone] = useState<string | null>(null);
+  const [waPurchases, setWaPurchases] = useState<Array<{ $id: string; amount: number; service?: string; date?: string; status?: string; customerName?: string | null }>>([]);
+  const [waPurchasesLoading, setWaPurchasesLoading] = useState(false);
+  const [showWaAddPurchase, setShowWaAddPurchase] = useState(false);
+  const [waPurchaseForm, setWaPurchaseForm] = useState({ service: '', amount: '', date: new Date().toISOString().slice(0, 10), status: 'completed' });
+  const [waPurchaseSaving, setWaPurchaseSaving] = useState(false);
+
   const threadRef = useRef<HTMLDivElement>(null);
   const previousUnreadRef = useRef(0);
   const selectedPhoneRef = useRef<string | null>(null);
@@ -306,6 +315,38 @@ function InboxTab({
     } finally { setContactSaving(false); }
   };
 
+  const loadPurchases = async (phone: string) => {
+    setWaPurchasesLoading(true);
+    try {
+      const res = await fetch(`/api/transactions?teamId=${encodeURIComponent(TEAM_ID)}&limit=50`);
+      const data = await res.json();
+      const all = (data.documents || []) as Array<{ $id: string; amount: number; service?: string; date?: string; status?: string; customerName?: string | null; phone?: string }>;
+      setWaPurchases(all.filter(tx => tx.phone?.includes(phone.replace(/[^\d]/g, '')) || tx.customerName?.toLowerCase().includes(phone.toLowerCase())));
+    } catch { setWaPurchases([]); }
+    finally { setWaPurchasesLoading(false); }
+  };
+
+  const handleWaAddPurchase = async () => {
+    if (!purchasePhone || !waPurchaseForm.amount) { showToast({ message: 'Amount is required', type: 'error' }); return; }
+    setWaPurchaseSaving(true);
+    try {
+      const res = await fetch('/api/transactions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teamId: TEAM_ID, customerName: threadInfo?.name || selectedConversation?.name || purchasePhone,
+          phone: purchasePhone, service: waPurchaseForm.service,
+          amount: Number(waPurchaseForm.amount), date: waPurchaseForm.date, status: waPurchaseForm.status,
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to save purchase');
+      showToast({ message: 'Purchase recorded', type: 'success' });
+      setShowWaAddPurchase(false);
+      setWaPurchaseForm({ service: '', amount: '', date: new Date().toISOString().slice(0, 10), status: 'completed' });
+      await loadPurchases(purchasePhone);
+    } catch (e) { showToast({ message: e instanceof Error ? e.message : 'Failed', type: 'error' }); }
+    finally { setWaPurchaseSaving(false); }
+  };
+
   const handleImportContacts = async () => {
     if (!contactsText.trim()) return;
     setImportingContacts(true);
@@ -364,6 +405,9 @@ function InboxTab({
                   <div className="flex flex-wrap gap-2">
                     <button onClick={() => setShowEditContact(true)} className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
                       Edit contact
+                    </button>
+                    <button onClick={() => { setShowPurchases(true); setPurchasePhone(selectedPhone); void loadPurchases(selectedPhone); }} className="rounded-2xl border border-teal-200 bg-teal-50 px-4 py-2 text-sm font-semibold text-teal-700 transition hover:bg-teal-100">
+                      Purchases
                     </button>
                     <a href={`https://wa.me/${selectedPhone}`} target="_blank" rel="noreferrer"
                       className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100">
@@ -572,6 +616,75 @@ function InboxTab({
               className="w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50">
               {importingContacts ? 'Importing...' : 'Import contacts'}
             </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Purchases modal */}
+      {showPurchases && purchasePhone && (
+        <Modal title={`Purchases — ${threadInfo?.name || purchasePhone}`} onClose={() => setShowPurchases(false)} size="lg">
+          <div className="flex flex-col gap-4" style={{ maxHeight: '70vh' }}>
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-slate-500">{waPurchases.length} transaction{waPurchases.length !== 1 ? 's' : ''}</p>
+              <Button onClick={() => setShowWaAddPurchase(true)}>Add Purchase</Button>
+            </div>
+            <div className="flex-1 space-y-3 overflow-y-auto">
+              {waPurchasesLoading ? (
+                <LoadingSpinner />
+              ) : waPurchases.length === 0 ? (
+                <div className="py-12 text-center text-sm text-slate-400">No purchases recorded yet.</div>
+              ) : (
+                waPurchases.map((tx) => (
+                  <div key={tx.$id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <p className="text-lg font-semibold text-slate-950">INR {Number(tx.amount).toLocaleString('en-IN')}</p>
+                        {tx.service && <p className="text-sm text-slate-600">{tx.service}</p>}
+                      </div>
+                      <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                        tx.status === 'completed' ? 'bg-emerald-100 text-emerald-700' :
+                        tx.status === 'refunded' ? 'bg-rose-100 text-rose-700' :
+                        'bg-amber-100 text-amber-700'
+                      }`}>{tx.status || 'completed'}</span>
+                    </div>
+                    {tx.date && <p className="mt-2 text-xs text-slate-400">{new Date(tx.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</p>}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Add purchase modal */}
+      {showWaAddPurchase && (
+        <Modal title="Add Purchase" onClose={() => setShowWaAddPurchase(false)}>
+          <div className="space-y-4">
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Service</label>
+              <input value={waPurchaseForm.service} onChange={(e) => setWaPurchaseForm({ ...waPurchaseForm, service: e.target.value })} placeholder="Goa package, Bali trip..."
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100" />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Amount (INR) *</label>
+              <input value={waPurchaseForm.amount} onChange={(e) => setWaPurchaseForm({ ...waPurchaseForm, amount: e.target.value })} type="number" placeholder="35000"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100" />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Date</label>
+              <input value={waPurchaseForm.date} onChange={(e) => setWaPurchaseForm({ ...waPurchaseForm, date: e.target.value })} type="date"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100" />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Status</label>
+              <select value={waPurchaseForm.status} onChange={(e) => setWaPurchaseForm({ ...waPurchaseForm, status: e.target.value })}
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100">
+                <option value="completed">Completed</option>
+                <option value="pending">Pending</option>
+                <option value="refunded">Refunded</option>
+              </select>
+            </div>
+            <Button onClick={handleWaAddPurchase} loading={waPurchaseSaving} className="w-full">Save Purchase</Button>
           </div>
         </Modal>
       )}

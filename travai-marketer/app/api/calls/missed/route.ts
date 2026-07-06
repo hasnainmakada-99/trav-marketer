@@ -84,17 +84,12 @@ async function handleMissedCall(phone: string, teamId: string, callerName?: stri
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const callerPhone = body.From || body.phone || body.caller || '';
-    const callerName = body.CallerName || body.name || null;
+    const callerPhone = body.phone || '';
+    const callerName = body.name || null;
     const teamId = body.teamId || process.env.NEXT_PUBLIC_DEFAULT_TEAM_ID || 'traventions-client-2026-gbp';
-    const callStatus = body.CallStatus || body.status || '';
 
     if (!callerPhone) {
       return NextResponse.json({ error: 'Missing caller phone number' }, { status: 400 });
-    }
-
-    if (callStatus && callStatus !== 'no-answer' && callStatus !== 'busy' && callStatus !== 'failed' && callStatus !== '') {
-      return NextResponse.json({ status: 'ignored', reason: `Call status ${callStatus} — not a missed call` });
     }
 
     await handleMissedCall(callerPhone, teamId, callerName || undefined);

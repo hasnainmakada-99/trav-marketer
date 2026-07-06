@@ -149,6 +149,17 @@ export default function LeadsPage() {
   const [threadInfo, setThreadInfo] = useState<ThreadResponse | null>(null);
   const [threadLoading, setThreadLoading] = useState(false);
 
+  const [purchaseLead, setPurchaseLead] = useState<Lead | null>(null);
+  const [purchases, setPurchases] = useState<Array<{ $id: string; amount: number; service?: string; date?: string; status?: string; customerName?: string | null }>>([]);
+  const [purchasesLoading, setPurchasesLoading] = useState(false);
+  const [showAddPurchase, setShowAddPurchase] = useState(false);
+  const [purchaseForm, setPurchaseForm] = useState({ service: '', amount: '', date: new Date().toISOString().slice(0, 10), status: 'completed' });
+  const [purchaseSaving, setPurchaseSaving] = useState(false);
+
+  const [showLogMissedCall, setShowLogMissedCall] = useState(false);
+  const [missedCallForm, setMissedCallForm] = useState({ phone: '', name: '' });
+  const [missedCallSaving, setMissedCallSaving] = useState(false);
+
   useEffect(() => {
     getCurrentUser().then((user) => { if (!user) router.push('/login'); });
   }, [router]);
@@ -292,6 +303,57 @@ export default function LeadsPage() {
     }
   }
 
+  async function loadPurchases(phone: string) {
+    setPurchasesLoading(true);
+    try {
+      const res = await fetch(`/api/transactions?teamId=${encodeURIComponent(TEAM_ID)}&limit=50`);
+      const data = await res.json();
+      const all = (data.documents || []) as Array<{ $id: string; amount: number; service?: string; date?: string; status?: string; customerName?: string | null; phone?: string }>;
+      setPurchases(all.filter(tx => tx.phone?.includes(phone.replace(/[^\d]/g, '')) || tx.customerName?.toLowerCase().includes(phone.toLowerCase())));
+    } catch { setPurchases([]); }
+    finally { setPurchasesLoading(false); }
+  }
+
+  async function handleAddPurchase() {
+    if (!purchaseLead || !purchaseForm.amount) { showToast({ message: 'Amount is required', type: 'error' }); return; }
+    setPurchaseSaving(true);
+    try {
+      const res = await fetch('/api/transactions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teamId: TEAM_ID, customerName: purchaseLead.name || getLeadDisplayName(purchaseLead),
+          phone: purchaseLead.phone, service: purchaseForm.service,
+          amount: Number(purchaseForm.amount), date: purchaseForm.date, status: purchaseForm.status,
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to save purchase');
+      showToast({ message: 'Purchase recorded', type: 'success' });
+      setShowAddPurchase(false);
+      setPurchaseForm({ service: '', amount: '', date: new Date().toISOString().slice(0, 10), status: 'completed' });
+      await loadPurchases(purchaseLead.phone);
+    } catch (e) { showToast({ message: e instanceof Error ? e.message : 'Failed', type: 'error' }); }
+    finally { setPurchaseSaving(false); }
+  }
+
+  async function handleLogMissedCall() {
+    const phone = missedCallForm.phone.replace(/[^\d+]/g, '');
+    if (!phone || phone.length < 8) { showToast({ message: 'Valid phone number required', type: 'error' }); return; }
+    setMissedCallSaving(true);
+    try {
+      const res = await fetch('/api/calls/missed', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, name: missedCallForm.name || undefined, teamId: TEAM_ID }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed');
+      showToast({ message: 'Missed call logged — WhatsApp follow-up sent', type: 'success' });
+      setShowLogMissedCall(false);
+      setMissedCallForm({ phone: '', name: '' });
+      await fetchLeads();
+    } catch (e) { showToast({ message: e instanceof Error ? e.message : 'Failed', type: 'error' }); }
+    finally { setMissedCallSaving(false); }
+  }
+
   return (
     <>
       <div className="min-h-full space-y-5 p-4 sm:p-6 xl:p-8">
@@ -311,6 +373,7 @@ export default function LeadsPage() {
                   {syncResult.firstError ? `Sync issue` : `Synced ${syncResult.created} new / ${syncResult.updated} updated`}
                 </span>
               )}
+              <Button variant="secondary" size="sm" onClick={() => setShowLogMissedCall(true)}>Log Missed Call</Button>
               <Button variant="secondary" size="sm" onClick={syncFromWhatsApp} loading={syncing}>Sync from WhatsApp</Button>
               <Button size="sm" onClick={() => setShowAddLead(true)}>Add walk-in lead</Button>
               <Button variant="secondary" size="sm" onClick={() => fetchLeads(false, { refreshStatuses: true })}>Refresh</Button>
@@ -422,6 +485,10 @@ export default function LeadsPage() {
                         <button onClick={() => { setInvoiceLead(lead); setInvoiceForm({ service: '', amount: '', date: new Date().toISOString().slice(0, 10), notes: '' }); }}
                           className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">
                           Send invoice
+                        </button>
+                        <button onClick={() => { setPurchaseLead(lead); void loadPurchases(lead.phone); }}
+                          className="rounded-full bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-700 ring-1 ring-teal-200 transition hover:bg-teal-100">
+                          Purchases
                         </button>
                       </div>
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -556,6 +623,94 @@ export default function LeadsPage() {
                 })
               )}
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Purchases modal */}
+      {purchaseLead && (
+        <Modal title={`Purchases — ${getLeadDisplayName(purchaseLead)}`} onClose={() => setPurchaseLead(null)} size="lg">
+          <div className="flex flex-col gap-4" style={{ maxHeight: '70vh' }}>
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-slate-500">{purchases.length} transaction{purchases.length !== 1 ? 's' : ''}</p>
+              <Button size="sm" onClick={() => setShowAddPurchase(true)}>Add Purchase</Button>
+            </div>
+            <div className="flex-1 space-y-3 overflow-y-auto">
+              {purchasesLoading ? (
+                <LoadingSpinner />
+              ) : purchases.length === 0 ? (
+                <div className="py-12 text-center text-sm text-slate-400">No purchases recorded yet.</div>
+              ) : (
+                purchases.map((tx) => (
+                  <div key={tx.$id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <p className="text-lg font-semibold text-slate-950">INR {Number(tx.amount).toLocaleString('en-IN')}</p>
+                        {tx.service && <p className="text-sm text-slate-600">{tx.service}</p>}
+                      </div>
+                      <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                        tx.status === 'completed' ? 'bg-emerald-100 text-emerald-700' :
+                        tx.status === 'refunded' ? 'bg-rose-100 text-rose-700' :
+                        'bg-amber-100 text-amber-700'
+                      }`}>{tx.status || 'completed'}</span>
+                    </div>
+                    {tx.date && <p className="mt-2 text-xs text-slate-400">{new Date(tx.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</p>}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Add purchase modal */}
+      {showAddPurchase && (
+        <Modal title="Add Purchase" onClose={() => setShowAddPurchase(false)}>
+          <div className="space-y-4">
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Service</label>
+              <input value={purchaseForm.service} onChange={(e) => setPurchaseForm({ ...purchaseForm, service: e.target.value })} placeholder="Goa package, Bali trip..."
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100" />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Amount (INR) *</label>
+              <input value={purchaseForm.amount} onChange={(e) => setPurchaseForm({ ...purchaseForm, amount: e.target.value })} type="number" placeholder="35000"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100" />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Date</label>
+              <input value={purchaseForm.date} onChange={(e) => setPurchaseForm({ ...purchaseForm, date: e.target.value })} type="date"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100" />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Status</label>
+              <select value={purchaseForm.status} onChange={(e) => setPurchaseForm({ ...purchaseForm, status: e.target.value })}
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100">
+                <option value="completed">Completed</option>
+                <option value="pending">Pending</option>
+                <option value="refunded">Refunded</option>
+              </select>
+            </div>
+            <Button onClick={handleAddPurchase} loading={purchaseSaving} className="w-full">Save Purchase</Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Log missed call modal */}
+      {showLogMissedCall && (
+        <Modal title="Log Missed Call" onClose={() => setShowLogMissedCall(false)}>
+          <div className="space-y-4">
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Phone number *</label>
+              <input value={missedCallForm.phone} onChange={(e) => setMissedCallForm({ ...missedCallForm, phone: e.target.value })} placeholder="919876543210"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100" />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Caller name (optional)</label>
+              <input value={missedCallForm.name} onChange={(e) => setMissedCallForm({ ...missedCallForm, name: e.target.value })} placeholder="Customer name"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-100" />
+            </div>
+            <Button onClick={handleLogMissedCall} loading={missedCallSaving} className="w-full">Log & Send WhatsApp Follow-Up</Button>
           </div>
         </Modal>
       )}
