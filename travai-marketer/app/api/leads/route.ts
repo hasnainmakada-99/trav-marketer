@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Query } from 'node-appwrite';
-import { listDocuments, createDocument } from '@/lib/appwrite';
+import { listDocuments, createDocument, updateDocument } from '@/lib/appwrite';
 import { queryLocalDocuments } from '@/lib/local-crm-cache';
 import { buildBestLeadPreview, humanizeLeadNotes } from '@/lib/message-preview';
 import { syncLeadStatusesFromConversations } from '@/lib/crm-sync';
@@ -58,8 +58,9 @@ export async function POST(request: NextRequest) {
     if (!phone || phone.length < 8) {
       return NextResponse.json({ error: 'Valid phone number is required' }, { status: 400 });
     }
+    const normalizedPhone = phone.replace(/[^\d]/g, '');
     const existing = await listDocuments('leads', [
-      Query.equal('phone', phone),
+      Query.equal('phone', normalizedPhone),
       Query.equal('teamId', body.teamId || TEAM_ID),
       Query.limit(1),
     ]);
@@ -83,7 +84,7 @@ export async function POST(request: NextRequest) {
 
     const lead = await createDocument('leads', {
       teamId: body.teamId || TEAM_ID,
-      phone,
+      phone: normalizedPhone,
       name: body.name?.trim() || null,
       email: body.email?.trim() || null,
       notes,

@@ -1507,12 +1507,12 @@ async function generateAndSendResponse(
     const databasePolicyBlock = enforceDatabaseFirst
       ? knowledge.databaseSnippets.length > 0
         ? `DATABASE-FIRST POLICY (STRICT):
-- Use Appwrite package/flight/hotel data as the PRIMARY truth source.
+- Use CRM database package/flight/hotel data as the PRIMARY truth source.
 - Do not invent package names, inclusions, durations, or prices when DB data is available.
 - If the user asks for options, extract and present options from the provided PACKAGE KNOWLEDGE.
 - If some detail is missing in DB, say it clearly and ask one follow-up question.`
         : `DATABASE-FIRST POLICY:
-- No matching package data found in Appwrite for this query.
+- No matching package data found in the CRM database for this query.
 - You may provide curated sample options, but label them as "sample/estimated".
 - Keep pricing realistic in INR and avoid claiming confirmed live inventory.
 - Ask the user if they want a human expert callback for exact live inventory.`

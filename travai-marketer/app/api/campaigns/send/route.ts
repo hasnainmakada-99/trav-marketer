@@ -70,18 +70,19 @@ export async function POST(request: NextRequest) {
 
     const sendResult = await sendResponse.json();
 
-    if (!sendResult.success) {
+    if (!sendResponse.ok && sendResult.failed === recipients.length) {
       return NextResponse.json(
-        { error: 'Failed to send campaign' },
+        { error: 'Campaign completely failed — no messages could be sent' },
         { status: 400 }
       );
     }
 
-    // Update campaign status
+    const campaignStatus = sendResult.failed > 0 ? 'partial' : 'sent';
+
     await updateDocument('campaigns', campaignId, {
-      status: 'sent',
+      status: campaignStatus,
       sentAt: new Date().toISOString(),
-      totalSent: sendResult.sent,
+      totalSent: sendResult.sent || 0,
     });
 
     return NextResponse.json(
@@ -89,8 +90,9 @@ export async function POST(request: NextRequest) {
         success: true,
         campaignId,
         totalRecipients: recipients.length,
-        sent: sendResult.sent,
-        failed: sendResult.failed,
+        sent: sendResult.sent || 0,
+        failed: sendResult.failed || 0,
+        status: campaignStatus,
         timestamp: new Date().toISOString(),
       },
       { status: 200 }

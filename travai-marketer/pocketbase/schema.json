@@ -85,6 +85,7 @@
         { "name": "value", "type": "number", "required": false },
         { "name": "notes", "type": "text", "required": false, "max": 20000 },
         { "name": "lastContactedAt", "type": "date", "required": false },
+        { "name": "reviewRequestSentAt", "type": "date", "required": false },
         { "name": "createdAt", "type": "date", "required": false },
         { "name": "updatedAt", "type": "date", "required": false }
       ],
@@ -94,6 +95,26 @@
         "CREATE INDEX idx_leads_team_phone ON leads (teamId, phone)",
         "CREATE INDEX idx_leads_team_createdAt ON leads (teamId, createdAt)",
         "CREATE INDEX idx_leads_assignedTo ON leads (assignedTo)"
+      ]
+    },
+    {
+      "name": "transactions",
+      "type": "base",
+      "fields": [
+        { "name": "teamId", "type": "text", "required": true, "max": 256 },
+        { "name": "customerId", "type": "text", "required": false, "max": 32 },
+        { "name": "customerName", "type": "text", "required": false, "max": 256 },
+        { "name": "service", "type": "text", "required": false, "max": 256 },
+        { "name": "amount", "type": "number", "required": false },
+        { "name": "date", "type": "text", "required": false, "max": 32 },
+        { "name": "status", "type": "text", "required": false, "max": 64 },
+        { "name": "notes", "type": "text", "required": false, "max": 20000 },
+        { "name": "createdAt", "type": "date", "required": false },
+        { "name": "updatedAt", "type": "date", "required": false }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_transactions_teamId ON transactions (teamId)",
+        "CREATE INDEX idx_transactions_customerId ON transactions (customerId)"
       ]
     },
     {
