@@ -793,6 +793,12 @@ async function processIncomingMessage(
         createdAt: new Date().toISOString(),
       });
     }
+
+    // Track campaign replies — if this customer received a campaign recently, count reply
+    if (text && !existingInbound) {
+      trackCampaignReply(phone, teamId).catch(() => {});
+    }
+
     markInboundProcessed(dedupeKey);
 
     if (!text) {
@@ -903,6 +909,55 @@ async function processIncomingMessage(
 }
 
 /**
+ * Track when a customer replies after receiving a campaign message.
+ * Increments the campaign's totalReplied counter (once per customer per campaign).
+ */
+async function trackCampaignReply(phone: string, teamId: string) {
+  try {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const logs = await listDocuments('campaign_logs', [
+      Query.equal('phone', phone),
+      Query.equal('teamId', teamId),
+      Query.greaterThan('sentAt', sevenDaysAgo),
+      Query.orderDesc('sentAt'),
+      Query.limit(5),
+    ]);
+
+    for (const log of logs.documents) {
+      if (log.campaignId && log.status !== 'replied') {
+        await updateDocument('campaign_logs', log.$id, {
+          status: 'replied',
+          updatedAt: new Date().toISOString(),
+        });
+        const campaignDocs = await listDocuments('campaigns', [
+          Query.equal('$id', log.campaignId),
+          Query.limit(1),
+        ]);
+        if (campaignDocs.documents.length > 0) {
+          const campaign = campaignDocs.documents[0];
+          const alreadyReplied = (campaign.totalReplied || 0);
+          // Check if this phone already counted as a reply for this campaign
+          const existingReplies = await listDocuments('campaign_logs', [
+            Query.equal('campaignId', log.campaignId),
+            Query.equal('phone', phone),
+            Query.equal('status', 'replied'),
+            Query.limit(2),
+          ]);
+          if (existingReplies.documents.length <= 1) {
+            await updateDocument('campaigns', log.campaignId, {
+              totalReplied: alreadyReplied + 1,
+            });
+          }
+        }
+        break; // Only track the most recent campaign
+      }
+    }
+  } catch (error) {
+    console.error('[Campaign Reply] Error tracking reply:', error);
+  }
+}
+
+/**
  * Process a message status update (delivery, read, failed)
  */
 async function processMessageStatus(
@@ -932,6 +987,53 @@ async function processMessageStatus(
       await updateDocument('conversations', convo.$id, {
         deliveryStatus: msgStatus,
       });
+    }
+
+    // Also update campaign_logs and campaign aggregates
+    if (msgStatus === 'delivered' || msgStatus === 'read' || msgStatus === 'failed') {
+      const logs = await readCachedDocuments('campaign_logs', [
+        Query.equal('metaMessageId', messageId),
+        Query.limit(1),
+      ]);
+
+      if (logs.documents.length > 0) {
+        const log = logs.documents[0];
+        const oldStatus = log.status || 'sent';
+
+        if (oldStatus !== msgStatus) {
+          await updateDocument('campaign_logs', log.$id, {
+            status: msgStatus,
+            updatedAt: new Date().toISOString(),
+          });
+
+          // Update campaign aggregate counters
+          if (log.campaignId) {
+            const campaign = await readCachedDocuments('campaigns', [
+              Query.equal('$id', log.campaignId),
+              Query.limit(1),
+            ]);
+            if (campaign.documents.length > 0) {
+              const c = campaign.documents[0];
+              const updates: Record<string, number> = {};
+
+              if (msgStatus === 'delivered' && oldStatus === 'sent') {
+                updates.totalDelivered = (c.totalDelivered || 0) + 1;
+              }
+              if (msgStatus === 'read' && oldStatus !== 'read') {
+                updates.totalRead = (c.totalRead || 0) + 1;
+                // If transitioning from sent directly to read, also count as delivered
+                if (oldStatus === 'sent') {
+                  updates.totalDelivered = (c.totalDelivered || 0) + 1;
+                }
+              }
+
+              if (Object.keys(updates).length > 0) {
+                await updateDocument('campaigns', log.campaignId, updates);
+              }
+            }
+          }
+        }
+      }
     }
   } catch (error) {
     console.error('[WhatsApp] Error processing status:', error);

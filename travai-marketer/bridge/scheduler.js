@@ -5,6 +5,7 @@
  * Jobs:
  *   10:00 AM — Follow-up WhatsApp to inactive leads (no contact in 3+ days)
  *   18:00 PM — Dispatch campaigns whose scheduledAt has passed
+ *   09:00 AM (Monday) — Auto-publish weekly SEO-optimised GBP post
  *
  * Usage: pm2 start bridge/scheduler.js --name travai-scheduler
  */
@@ -160,6 +161,22 @@ async function sendWhatsApp(phone, message) {
   }
 }
 
+function getFollowUpStage(lastContactedAt) {
+  const daysSinceContact = (Date.now() - new Date(lastContactedAt).getTime()) / (24 * 60 * 60 * 1000);
+  if (daysSinceContact >= 14) return 3;
+  if (daysSinceContact >= 7) return 2;
+  return 1;
+}
+
+const FOLLOW_UP_MESSAGES = {
+  1: (name) =>
+    `Hi${name}! 😊 This is Traventions — just checking in to see if you're still planning your trip.\n\nWe have some exciting travel deals right now. Reply to this message or type *1* to explore holiday packages.\n\n_Traventions — Your Travel Partner_ 🌍`,
+  2: (name) =>
+    `Hi${name}! 👋 It's been a while since we last spoke.\n\nWe're running some *exclusive summer offers* and wanted to make sure you don't miss out! 🏖️✨\n\nReply *1* to see our best deals or *2* to speak with a travel expert.\n\n_Traventions — Your Travel Partner_ 🌍`,
+  3: (name) =>
+    `Hi${name}! This will be our last message — we don't want to bother you if the timing isn't right.\n\nIf you're still planning a trip, reply *1* now and we'll send you our best offers. Otherwise, you can always reach us anytime at Traventions. 🙏\n\n_Traventions — Your Travel Partner_ 🌍`,
+};
+
 async function runFollowUpJob() {
   console.log('[Scheduler] Running follow-up job...');
   const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
@@ -169,20 +186,52 @@ async function runFollowUpJob() {
     console.log(`[Scheduler] Found ${leads.length} inactive leads to follow up`);
 
     let sent = 0;
+    let closed = 0;
     for (const lead of leads) {
+      const lastContacted = lead.lastContactedAt || lead.createdAt || new Date().toISOString();
+      const stage = getFollowUpStage(lastContacted);
       const name = lead.name ? ` ${lead.name.split(' ')[0]}` : '';
-      const msg = `Hi${name}! 😊 This is Traventions — just checking in to see if you're still planning your trip.\n\nWe have some exciting travel deals right now. Reply to this message or type *1* to explore holiday packages.\n\n_Traventions — Your Travel Partner_ 🌍`;
-      const ok = await sendWhatsApp(lead.phone, msg);
+      const msg = FOLLOW_UP_MESSAGES[stage](name);
+      const phone = lead.phone || lead.phoneNumber;
+
+      if (!phone) {
+        console.warn(`[Scheduler] Lead ${lead.id || lead.$id} has no phone, skipping`);
+        continue;
+      }
+
+      const ok = await sendWhatsApp(phone, msg);
       if (ok) {
         sent++;
         const leadId = lead.id || lead.$id;
         await touchLeadLastContact(leadId, new Date().toISOString()).catch(() => {});
+
+        // Stage 3: auto-close lead after final follow-up
+        if (stage === 3) {
+          try {
+            if (APP_DATA_BACKEND === 'pocketbase') {
+              const pb = await getPocketBaseClient();
+              await pb.collection('leads').update(leadId, {
+                status: 'closed',
+                updatedAt: new Date().toISOString(),
+              });
+            } else {
+              await db.updateDocument(APPWRITE_DATABASE_ID, 'leads', leadId, {
+                status: 'closed',
+                updatedAt: new Date().toISOString(),
+              });
+            }
+            closed++;
+            console.log(`[Scheduler] Auto-closed lead ${leadId} after final follow-up`);
+          } catch (closeErr) {
+            console.error(`[Scheduler] Failed to auto-close lead ${leadId}:`, closeErr?.message);
+          }
+        }
       }
       // Small delay to avoid rate limits
       await new Promise(r => setTimeout(r, 500));
     }
 
-    console.log(`[Scheduler] Follow-up job done. Sent: ${sent}/${leads.length}`);
+    console.log(`[Scheduler] Follow-up job done. Sent: ${sent}/${leads.length}, Auto-closed: ${closed}`);
   } catch (err) {
     console.error('[Scheduler] Follow-up job error:', err?.message);
   }
@@ -228,8 +277,76 @@ function getHHMM() {
   return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 }
 
+async function listGbpConnectedTeams() {
+  if (APP_DATA_BACKEND === 'pocketbase') {
+    const pb = await getPocketBaseClient();
+    return await pb.collection('business_configs').getFullList({
+      filter:
+        `googleLocationId != "" && googleAccessToken != "" && ` +
+        `googleLocationId != null && googleAccessToken != null`,
+      sort: '-createdAt',
+    });
+  }
+
+  const result = await db.listDocuments(APPWRITE_DATABASE_ID, 'business_configs', [
+    Query.notEqual('googleLocationId', ''),
+    Query.notEqual('googleAccessToken', ''),
+    Query.isNotNull('googleLocationId'),
+    Query.isNotNull('googleAccessToken'),
+    Query.limit(20),
+  ]);
+  return result.documents;
+}
+
+async function runWeeklyGbpPostJob() {
+  console.log('[Scheduler] Running weekly GBP post job...');
+  try {
+    const teams = (await listGbpConnectedTeams()).slice(0, 10);
+    console.log(`[Scheduler] Found ${teams.length} teams with active GBP connections`);
+
+    let posted = 0;
+    for (const team of teams) {
+      const teamId = team.teamId || team.id || team.$id;
+      const businessName = team.businessName || 'Business';
+      console.log(`[Scheduler] Generating weekly post for ${businessName} (${teamId})`);
+
+      try {
+        const res = await fetch(`${APP_URL}/api/gbp/posts`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            teamId,
+            createdBy: 'scheduler',
+            autoGenerate: true,
+            publishNow: true,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          posted++;
+          console.log(`[Scheduler] GBP post published for ${businessName}: "${data?.title || 'ok'}"`);
+        } else {
+          console.error(`[Scheduler] GBP post failed for ${businessName}:`, data?.error || res.statusText);
+        }
+      } catch (err) {
+        console.error(`[Scheduler] GBP post error for ${businessName}:`, err?.message);
+      }
+
+      await new Promise(r => setTimeout(r, 3000));
+    }
+
+    console.log(`[Scheduler] Weekly GBP post job done. Published: ${posted}/${teams.length}`);
+  } catch (err) {
+    console.error('[Scheduler] Weekly GBP post job error:', err?.message);
+  }
+}
+
+function isMonday() {
+  return new Date().getDay() === 1;
+}
+
 console.log('[Scheduler] Started. Checking every minute for scheduled jobs...');
-console.log(`[Scheduler] Follow-up job: 10:00 daily | Campaign dispatch: 18:00 daily`);
+console.log(`[Scheduler] Follow-up job: 10:00 daily | Campaign dispatch: 18:00 daily | GBP post: 09:00 Mon`);
 console.log(`[Scheduler] Target: ${TEAM_ID} | App: ${APP_URL}`);
 
 // Run immediately on startup to catch missed jobs (e.g. server was down)
@@ -242,6 +359,9 @@ setInterval(async () => {
   }
   if (hhmm === '18:00') {
     await runCampaignDispatchJob().catch(err => console.error('[Scheduler] Dispatch error:', err?.message));
+  }
+  if (hhmm === '09:00' && isMonday()) {
+    await runWeeklyGbpPostJob().catch(err => console.error('[Scheduler] GBP post error:', err?.message));
   }
 }, 60_000);
 
