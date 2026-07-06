@@ -134,6 +134,33 @@ async function listScheduledCampaigns(nowIso) {
   return result.documents;
 }
 
+async function hasRecentCustomerMessage(phone) {
+  const normalized = String(phone || '').replace(/[^\d]/g, '');
+  if (!normalized) return false;
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+  try {
+    if (APP_DATA_BACKEND === 'pocketbase') {
+      const pb = await getPocketBaseClient();
+      const result = await pb.collection('conversations').getList(1, 1, {
+        filter: `phone = "${escapeFilterValue(normalized)}" && role = "user" && createdAt > "${escapeFilterValue(cutoff)}"`,
+      });
+      return result.totalItems > 0;
+    }
+
+    const result = await db.listDocuments(APPWRITE_DATABASE_ID, 'conversations', [
+      Query.equal('phone', normalized),
+      Query.equal('role', 'user'),
+      Query.greaterThan('createdAt', cutoff),
+      Query.limit(1),
+    ]);
+    return result.total > 0;
+  } catch (err) {
+    console.error(`[Scheduler] Error checking recent customer message for ${normalized}:`, err?.message);
+    return false;
+  }
+}
+
 function toE164(phone) {
   return `+${String(phone || '').replace(/[^\d]/g, '')}`;
 }
@@ -196,6 +223,27 @@ async function runFollowUpJob() {
 
       if (!phone) {
         console.warn(`[Scheduler] Lead ${lead.id || lead.$id} has no phone, skipping`);
+        continue;
+      }
+
+      const canSend = await hasRecentCustomerMessage(phone);
+      if (!canSend) {
+        console.log(`[Scheduler] Skipping follow-up to ${phone} — no recent inbound (would be paid)`);
+        if (stage === 3) {
+          const leadId = lead.id || lead.$id;
+          try {
+            if (APP_DATA_BACKEND === 'pocketbase') {
+              const pb = await getPocketBaseClient();
+              await pb.collection('leads').update(leadId, { status: 'closed', updatedAt: new Date().toISOString() });
+            } else {
+              await db.updateDocument(APPWRITE_DATABASE_ID, 'leads', leadId, { status: 'closed', updatedAt: new Date().toISOString() });
+            }
+            closed++;
+            console.log(`[Scheduler] Auto-closed lead ${leadId} (paid skip, final stage)`);
+          } catch (closeErr) {
+            console.error(`[Scheduler] Failed to auto-close lead ${leadId}:`, closeErr?.message);
+          }
+        }
         continue;
       }
 
@@ -315,6 +363,12 @@ async function runReviewRequestJob() {
       if (!phone) continue;
 
       const msg = `Hi${name}! 🙏 We hope you had a great experience with Traventions.\n\nCould you take a moment to share your feedback? Your review helps us serve you and others better! ⭐⭐⭐⭐⭐\n\n${reviewLink}\n\nThank you for choosing us! ❤️\n_Traventions — Your Travel Partner_`;
+
+      const canSend = await hasRecentCustomerMessage(phone);
+      if (!canSend) {
+        console.log(`[Scheduler] Skipping review request to ${phone} — no recent inbound (would be paid)`);
+        continue;
+      }
 
       const ok = await sendWhatsApp(phone, msg);
       if (ok) {

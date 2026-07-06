@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { sendYCloudTextMessage } from '@/lib/whatsapp-ycloud';
 import { createDocument, listDocuments } from '@/lib/appwrite';
 import { Query } from 'node-appwrite';
+import { canSendToPhoneForFree } from '@/lib/whatsapp-free-tier';
 
 async function findOrCreateCustomer(phone: string, teamId: string) {
   const normalizedPhone = phone.replace(/[^\d]/g, '');
@@ -45,6 +46,12 @@ async function handleMissedCall(phone: string, teamId: string, callerName?: stri
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
+  }
+
+  const { free } = await canSendToPhoneForFree(normalizedPhone);
+  if (!free) {
+    console.log(`[MissedCall] Skipping WhatsApp to ${normalizedPhone} — no recent inbound (would be paid)`);
+    return;
   }
 
   const apiKey = (process.env.YCLOUD_API_KEY || '').trim();

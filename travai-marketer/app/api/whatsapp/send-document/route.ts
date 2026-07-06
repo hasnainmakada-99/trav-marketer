@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sendYCloudDocumentMessage } from '@/lib/whatsapp-ycloud';
 import { createDocument } from '@/lib/appwrite';
+import { canSendToPhoneForFree } from '@/lib/whatsapp-free-tier';
 
 export async function POST(request: NextRequest) {
   try {
@@ -17,6 +18,14 @@ export async function POST(request: NextRequest) {
     }
     if (!documentUrl) {
       return NextResponse.json({ error: 'Missing required field: documentUrl' }, { status: 400 });
+    }
+
+    const { free, reason } = await canSendToPhoneForFree(normalizedPhone);
+    if (!free) {
+      return NextResponse.json(
+        { error: `Cannot send: ${reason}. Only customers who messaged you in the last 24h receive free document sends.` },
+        { status: 402 }
+      );
     }
 
     const result = await sendYCloudDocumentMessage({

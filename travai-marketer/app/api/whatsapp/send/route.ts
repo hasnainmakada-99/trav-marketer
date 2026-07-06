@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sendYCloudTextMessage } from '@/lib/whatsapp-ycloud';
 import { createDocument, getDocument, updateDocument } from '@/lib/appwrite';
+import { canSendToPhoneForFree } from '@/lib/whatsapp-free-tier';
 
 function parseButtons(raw: unknown): string[] {
   if (Array.isArray(raw)) {
@@ -144,6 +145,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const { free, reason } = await canSendToPhoneForFree(normalizedPhone);
+    if (!free) {
+      return NextResponse.json(
+        { error: `Cannot send: ${reason}. Only customers who messaged you in the last 24h receive free WhatsApp messages.` },
+        { status: 402 }
+      );
+    }
+
     const ycloudResult = await sendTextViaYCloud(normalizedPhone, outboundMessage);
 
     try {
@@ -228,6 +237,13 @@ export async function PUT(request: NextRequest) {
       }
 
       try {
+        const { free } = await canSendToPhoneForFree(normalizedPhone);
+        if (!free) {
+          results.failed++;
+          results.errors.push({ phone: normalizedPhone, error: 'No recent inbound — would be paid, skipped' });
+          continue;
+        }
+
         const sendResult = await sendTextViaYCloud(normalizedPhone, normalizedMessage);
         results.sent++;
 
