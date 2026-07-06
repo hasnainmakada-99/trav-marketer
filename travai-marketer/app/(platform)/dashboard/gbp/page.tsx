@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getCurrentUser } from '@/lib/appwrite-client';
 
@@ -319,11 +319,13 @@ function GbpPageInner() {
     }
   }, [teamId]);
 
-  const loadReviews = useCallback(async () => {
+  const loadReviews = useCallback(async (syncFromGoogle = false) => {
     if (!teamId) return;
     setReviewsLoading(true);
     try {
-      const res = await fetch(`/api/gbp/reviews?teamId=${encodeURIComponent(teamId)}&limit=50`);
+      const res = await fetch(
+        `/api/gbp/reviews?teamId=${encodeURIComponent(teamId)}&limit=50${syncFromGoogle ? '&syncFromGoogle=true' : ''}`
+      );
       if (res.ok) {
         const data = await res.json();
         setReviews(data.documents || []);
@@ -333,8 +335,10 @@ function GbpPageInner() {
     }
   }, [teamId]);
 
+  const initialSyncDone = useRef(false);
+
   useEffect(() => {
-    if (!connected || !teamId) return;
+    if (!connected || !teamId || !hasLocation) return;
     if (tab === 'posts') {
       loadPosts();
     }
@@ -342,6 +346,13 @@ function GbpPageInner() {
       loadReviews();
     }
   }, [connected, loadPosts, loadReviews, tab, teamId]);
+
+  useEffect(() => {
+    if (!connected || !teamId || !hasLocation || initialSyncDone.current) return;
+    initialSyncDone.current = true;
+    loadPosts(true);
+    loadReviews(true);
+  }, [connected, hasLocation, loadPosts, loadReviews, teamId]);
 
   const allLocations = useMemo(
     () => accounts.flatMap((account) => account.locations.map((location) => ({ ...location, accountName: account.accountName }))),
