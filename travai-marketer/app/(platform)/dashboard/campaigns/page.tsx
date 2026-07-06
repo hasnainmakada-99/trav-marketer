@@ -59,6 +59,8 @@ export default function CampaignsPage() {
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  const [statusFilter, setStatusFilter] = useState<CampaignStatus | 'all'>('all');
+
   const [form, setForm] = useState({ title: '', message: '', segment: 'all', scheduledAt: '' });
   const [creating, setCreating] = useState(false);
 
@@ -78,6 +80,24 @@ export default function CampaignsPage() {
     getCurrentUser().then((u) => { if (!u) { router.push('/login'); return; } setCurrentUserId((u as { $id?: string }).$id || ''); });
     queueMicrotask(() => void loadCampaigns());
   }, [router, loadCampaigns]);
+
+  const filteredCampaigns = statusFilter === 'all' ? campaigns : campaigns.filter(c => c.status === statusFilter);
+
+  const summary = (() => {
+    const total = campaigns.length;
+    const sent = campaigns.reduce((s, c) => s + (c.totalSent || 0), 0);
+    const withSent = campaigns.filter(c => (c.totalSent || 0) > 0);
+    const withDelivered = campaigns.filter(c => (c.totalDelivered || 0) > 0);
+    const avgDelivery = withSent.length
+      ? withSent.reduce((s, c) => s + ((c.totalDelivered || 0) / (c.totalSent || 1)) * 100, 0) / withSent.length
+      : 0;
+    const avgRead = withDelivered.length
+      ? withDelivered.reduce((s, c) => s + ((c.totalRead || 0) / (c.totalDelivered || 1)) * 100, 0) / withDelivered.length
+      : 0;
+    return { total, sent, avgDelivery, avgRead };
+  })();
+
+  const FILTERS: (CampaignStatus | 'all')[] = ['all', 'draft', 'scheduled', 'sent', 'partial', 'failed'];
 
   const handleCreate = async () => {
     if (!form.title.trim() || !form.message.trim()) return;
@@ -147,16 +167,55 @@ export default function CampaignsPage() {
         </div>
       </Card>
 
+      {/* Summary bar */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-xs text-slate-500">Total Campaigns</p>
+          <p className="mt-1 text-2xl font-semibold text-slate-900">{summary.total}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-xs text-slate-500">Total Sent</p>
+          <p className="mt-1 text-2xl font-semibold text-slate-900">{summary.sent.toLocaleString('en-IN')}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-xs text-slate-500">Avg. Delivery Rate</p>
+          <p className={`mt-1 text-2xl font-semibold ${summary.avgDelivery >= 80 ? 'text-green-600' : summary.avgDelivery >= 50 ? 'text-amber-600' : 'text-red-600'}`}>
+            {summary.avgDelivery.toFixed(1)}%
+          </p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-xs text-slate-500">Avg. Read Rate</p>
+          <p className={`mt-1 text-2xl font-semibold ${summary.avgRead >= 60 ? 'text-green-600' : summary.avgRead >= 30 ? 'text-amber-600' : 'text-red-600'}`}>
+            {summary.avgRead.toFixed(1)}%
+          </p>
+        </div>
+      </div>
+
+      {/* Status filter tabs */}
+      <div className="flex flex-wrap gap-2">
+        {FILTERS.map((f) => (
+          <button key={f} onClick={() => setStatusFilter(f)}
+            className={`rounded-full px-4 py-1.5 text-xs font-medium transition ${
+              statusFilter === f
+                ? 'bg-indigo-600 text-white shadow-sm'
+                : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'
+            }`}>
+            {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)}
+          </button>
+        ))}
+      </div>
+
       {loading ? (
         <LoadingSpinner text="Loading campaigns..." />
-      ) : campaigns.length === 0 ? (
+      ) : filteredCampaigns.length === 0 ? (
         <Card>
-          <EmptyState title="No campaigns yet" description="Create your first campaign to reach customers on WhatsApp."
+          <EmptyState title={statusFilter === 'all' ? 'No campaigns yet' : `No ${statusFilter} campaigns`}
+            description="Create your first campaign to reach customers on WhatsApp."
             action={{ label: 'Create Campaign', onClick: () => setShowCreate(true) }} />
         </Card>
       ) : (
         <div className="space-y-3">
-          {campaigns.map((c) => (
+          {filteredCampaigns.map((c) => (
             <div key={c.$id} className="rounded-[28px] border border-slate-200 bg-white/90 p-4 shadow-lg shadow-slate-200/40 sm:p-5">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div className="min-w-0 flex-1">
@@ -172,6 +231,18 @@ export default function CampaignsPage() {
                       <span>Sent: <strong className="text-slate-800">{c.totalSent ?? 0}</strong></span>
                       <span>Delivered: <strong className="text-slate-800">{c.totalDelivered ?? 0}</strong></span>
                       <span>Read: <strong className="text-slate-800">{c.totalRead ?? 0}</strong></span>
+                      {(c.status === 'sent' || c.status === 'partial') && (() => {
+                        const deliveryRate = (c.totalDelivered || 0) / (c.totalSent || 1) * 100;
+                        const readRate = (c.totalRead || 0) / (c.totalDelivered || 1) * 100;
+                        const deliveryColor = deliveryRate >= 80 ? 'text-green-600' : deliveryRate >= 50 ? 'text-amber-600' : 'text-red-600';
+                        const readColor = readRate >= 60 ? 'text-green-600' : readRate >= 30 ? 'text-amber-600' : 'text-red-600';
+                        return (
+                          <>
+                            <span>Delivery: <strong className={deliveryColor}>{deliveryRate.toFixed(1)}%</strong></span>
+                            <span>Read: <strong className={readColor}>{readRate.toFixed(1)}%</strong></span>
+                          </>
+                        );
+                      })()}
                     </div>
                   )}
 

@@ -1,9 +1,9 @@
 export const CRM_STATUS_ORDER = [
-  'new_lead',
-  'normal_conversation',
-  'connected',
+  'new',
+  'contacted',
+  'qualified',
   'converted',
-  'closed',
+  'lost',
 ] as const;
 
 export type CrmLeadStatus = (typeof CRM_STATUS_ORDER)[number];
@@ -19,25 +19,25 @@ export const CRM_STATUS_META: Record<
     panel: string;
   }
 > = {
-  new_lead: {
-    label: 'New Lead',
+  new: {
+    label: 'New',
     shortLabel: 'New',
     dot: 'bg-sky-500',
     badge: 'bg-sky-100 text-sky-700 border border-sky-200',
     soft: 'bg-sky-50 text-sky-700',
     panel: 'from-sky-500 to-cyan-500',
   },
-  normal_conversation: {
-    label: 'Normal Conversation',
-    shortLabel: 'Normal',
+  contacted: {
+    label: 'Contacted',
+    shortLabel: 'Contacted',
     dot: 'bg-violet-500',
     badge: 'bg-violet-100 text-violet-700 border border-violet-200',
     soft: 'bg-violet-50 text-violet-700',
     panel: 'from-violet-500 to-fuchsia-500',
   },
-  connected: {
-    label: 'Connected',
-    shortLabel: 'Connected',
+  qualified: {
+    label: 'Qualified',
+    shortLabel: 'Qualified',
     dot: 'bg-amber-500',
     badge: 'bg-amber-100 text-amber-700 border border-amber-200',
     soft: 'bg-amber-50 text-amber-700',
@@ -51,9 +51,9 @@ export const CRM_STATUS_META: Record<
     soft: 'bg-emerald-50 text-emerald-700',
     panel: 'from-emerald-500 to-teal-500',
   },
-  closed: {
-    label: 'Closed',
-    shortLabel: 'Closed',
+  lost: {
+    label: 'Lost',
+    shortLabel: 'Lost',
     dot: 'bg-slate-500',
     badge: 'bg-slate-100 text-slate-700 border border-slate-200',
     soft: 'bg-slate-50 text-slate-700',
@@ -62,19 +62,21 @@ export const CRM_STATUS_META: Record<
 };
 
 const LEGACY_STATUS_MAP: Record<string, CrmLeadStatus> = {
-  new: 'new_lead',
-  contacted: 'connected',
+  new_lead: 'new',
+  normal_conversation: 'contacted',
+  connected: 'qualified',
   converted: 'converted',
-  closed: 'closed',
-  new_lead: 'new_lead',
-  normal_conversation: 'normal_conversation',
-  connected: 'connected',
+  closed: 'lost',
+  new: 'new',
+  contacted: 'contacted',
+  qualified: 'qualified',
+  lost: 'lost',
 };
 
 const CONVERTED_REGEX =
-  /\b(confirm|confirmed|proceed|proceeding|go ahead|book it|book now|continue booking|yes book|finalise|finalize|lock it|done with this|take this package)\b/i;
+  /\b(confirm|confirmed|proceed|proceeding|go ahead|book it|book now|continue booking|yes book|finalise|finalize|lock it|done with this|take this package|book|booking|purchase|buy|order|pay|payment|confirm booking|reserve)\b/i;
 const CLOSED_REGEX =
-  /\b(not interested|stop|cancel|cancelled|canceled|close this|close lead|no thanks|no thank you|drop this|end this|remove me)\b/i;
+  /\b(not interested|stop|cancel|cancelled|canceled|close this|no thanks|no thank you|drop|remove me|unsubscribe|leave me alone|not now|maybe later)\b/i;
 const CALLBACK_REGEX =
   /\b(arrange callback|callback|call me|call back|schedule a call|preferred time|talk to expert)\b/i;
 
@@ -101,7 +103,7 @@ export function buildPhoneVariants(input: string | null | undefined): string[] {
 
 export function coerceLeadStatus(input: string | null | undefined): CrmLeadStatus {
   const normalized = String(input || '').trim().toLowerCase();
-  return LEGACY_STATUS_MAP[normalized] || 'new_lead';
+  return LEGACY_STATUS_MAP[normalized] || 'new';
 }
 
 export function compareLeadStatus(a: string | null | undefined, b: string | null | undefined): number {
@@ -185,7 +187,7 @@ export function deriveLeadStatus(params: {
 }): CrmLeadStatus {
   const message = String(params.userMessage || '');
   if (isClosedIntent(message)) {
-    return 'closed';
+    return 'lost';
   }
   if (isConversionIntent(message)) {
     return 'converted';
@@ -204,15 +206,15 @@ export function deriveLeadStatus(params: {
     isCallbackIntent(message);
 
   if (stage === 'confirmed') {
-    return hasCallbackTime ? 'connected' : 'converted';
+    return hasCallbackTime ? 'qualified' : 'converted';
   }
   if (isCallbackFlow || hasLeadDetails) {
-    return 'connected';
+    return 'qualified';
   }
   if (params.isFirstLead) {
-    return 'new_lead';
+    return 'new';
   }
-  return mergeLeadStatus(params.existingStatus, 'normal_conversation');
+  return mergeLeadStatus(params.existingStatus, 'contacted');
 }
 
 export function buildStatusCounts(items: Array<{ status?: string | null }>): Record<CrmLeadStatus, number> {

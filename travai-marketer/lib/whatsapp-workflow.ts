@@ -27,6 +27,13 @@ export const PRIMARY_QUICK_MENU_OPTIONS = [
   'Hotels',
 ] as const;
 
+export const BROCHURE_URLS: Record<string, string> = {
+  'holiday_packages': 'https://traventions.com/brochures/holiday-packages.pdf',
+  'flight_bookings': 'https://traventions.com/brochures/flights.pdf',
+  'hotel_bookings': 'https://traventions.com/brochures/hotels.pdf',
+  'general': 'https://traventions.com/brochures/general.pdf',
+};
+
 export type WorkflowSlotMap = Partial<
   Record<
     | 'destination'
@@ -1029,6 +1036,22 @@ export function resolveWorkflowState(args: {
 
 // â”€â”€â”€ reply builders â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+export function getBrochureLink(intent: WorkflowIntent): string | null {
+  const map: Record<string, string> = {
+    plan_holiday: BROCHURE_URLS.holiday_packages,
+    flights: BROCHURE_URLS.flight_bookings,
+    hotels: BROCHURE_URLS.hotel_bookings,
+  };
+  return map[intent] || null;
+}
+
+export function buildBrochureOffer(intent: WorkflowIntent, name?: string | null): string {
+  const link = getBrochureLink(intent);
+  if (!link) return '';
+  const greeting = name ? `${name.split(' ')[0]}, ` : '';
+  return `\n\n📚 ${greeting}would you like me to send you our **brochure** with detailed options? Just reply *yes* and I'll share it right away!`;
+}
+
 const DESTINATION_TAGLINES: Record<string, string> = {
   thailand: 'perfect for beaches, nightlife, and relaxation',
   bali: 'a magical island paradise',
@@ -1181,7 +1204,7 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
       `${missingLeadLines.join('\n')}\n\n` +
       exampleBlock +
       'We will call you at the time that suits you best. 😊'
-    );
+    ) + buildBrochureOffer(intent, slots.name);
   }
 
   // ask_callback
@@ -1191,11 +1214,13 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
       `Thanks${name}. 🙏\n\n` +
       'What time would be convenient for your callback? ⏰\n\n' +
       'Example: Today at 5 PM 🌇 / Tomorrow Morning 🌅'
-    );
+    ) + buildBrochureOffer(intent, slots.name);
   }
 
   // â”€â”€ confirmed â€” AI handles both initial confirmation and YES/NO follow-up â”€â”€
   if (stage === 'confirmed') {
+    const brochureOffer = buildBrochureOffer(intent, slots.name);
+    if (brochureOffer) return brochureOffer;
     return null;
   }
 

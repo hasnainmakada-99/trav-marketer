@@ -186,6 +186,14 @@ function GbpPageInner() {
   const [mediaUploading, setMediaUploading] = useState(false);
   const [selectedMedia, setSelectedMedia] = useState<GbpPostMedia[]>([]);
   const [replyModal, setReplyModal] = useState<{ review: GbpReview; text: string; loading: boolean } | null>(null);
+  const [optimizeLoading, setOptimizeLoading] = useState(false);
+  const [showOptimizeModal, setShowOptimizeModal] = useState(false);
+  const [optimizeResult, setOptimizeResult] = useState<{
+    optimizedDescription: string;
+    keywords: string[];
+    businessName: string;
+  } | null>(null);
+  const [optimizeCopied, setOptimizeCopied] = useState(false);
   const [postForm, setPostForm] = useState({
     title: '',
     content: '',
@@ -359,6 +367,23 @@ function GbpPageInner() {
     }),
     [reviews]
   );
+
+  const performanceStats = useMemo(() => {
+    const totalPostsPublished = posts.filter((p) => p.status === 'posted').length;
+    const totalReviews = reviews.length;
+    const avgRating = reviews.length
+      ? (reviews.reduce((sum, r) => sum + (r.rating || 0), 0) / reviews.length).toFixed(1)
+      : '0.0';
+    const reviewsReplied = reviews.filter((r) => r.reply !== null && r.reply !== undefined).length;
+    return { totalPostsPublished, totalReviews, avgRating, reviewsReplied };
+  }, [posts, reviews]);
+
+  const weeklyPostTrend = useMemo(() => {
+    return posts
+      .filter((p) => p.status === 'posted' && p.postedAt)
+      .sort((a, b) => new Date(b.postedAt!).getTime() - new Date(a.postedAt!).getTime())
+      .slice(0, 6);
+  }, [posts]);
 
   const hashtagCount = useMemo(
     () => (postForm.content.match(/#[A-Za-z0-9_]+/g) || []).length,
@@ -669,6 +694,34 @@ function GbpPageInner() {
     }
   };
 
+  const handleOptimizeProfile = async () => {
+    if (!teamId) return;
+    setOptimizeLoading(true);
+    setShowOptimizeModal(true);
+    setOptimizeResult(null);
+    try {
+      const res = await fetch('/api/gbp/optimize-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ teamId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to optimize profile');
+      }
+      setOptimizeResult({
+        optimizedDescription: data.optimizedDescription,
+        keywords: data.keywords || [],
+        businessName: data.businessName,
+      });
+    } catch (error) {
+      flash(error instanceof Error ? error.message : 'Failed to optimize profile', false);
+      setShowOptimizeModal(false);
+    } finally {
+      setOptimizeLoading(false);
+    }
+  };
+
   if (!user || statusLoading) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center px-4">
@@ -798,19 +851,42 @@ function GbpPageInner() {
               </div>
             )}
 
-            <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              {[
-                { label: 'Total Posts', value: postStats.total, sub: `${postStats.live} live` },
-                { label: 'Draft Posts', value: postStats.drafts, sub: 'Awaiting publish' },
-                { label: 'Avg. Rating', value: reviewStats.avg, sub: 'out of 5 stars' },
-                { label: 'Pending Replies', value: reviewStats.pending, sub: 'Need response' },
-              ].map((card) => (
-                <div key={card.label} className="rounded-[26px] border border-slate-200 bg-white/90 p-4 shadow-sm shadow-slate-200/60">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{card.label}</p>
-                  <p className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">{card.value}</p>
-                  <p className="mt-1 text-xs text-slate-400">{card.sub}</p>
+            <div className="mb-5 space-y-5">
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                {[
+                  { label: 'Posts Published', value: performanceStats.totalPostsPublished, sub: 'Total live posts', color: 'from-sky-500 to-cyan-500' },
+                  { label: 'Total Reviews', value: performanceStats.totalReviews, sub: 'All customer reviews', color: 'from-emerald-500 to-teal-500' },
+                  { label: 'Average Rating', value: `${performanceStats.avgRating} ⭐`, sub: 'out of 5 stars', color: 'from-amber-500 to-orange-500' },
+                  { label: 'Reviews Replied', value: performanceStats.reviewsReplied, sub: 'Responded to customers', color: 'from-violet-500 to-fuchsia-500' },
+                ].map((card) => (
+                  <div key={card.label} className="group rounded-[28px] border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/60">
+                    <div className={`inline-flex rounded-2xl bg-gradient-to-br ${card.color} px-3 py-2 text-sm font-semibold text-white`}>
+                      {card.label}
+                    </div>
+                    <p className="mt-5 text-3xl font-semibold text-slate-950 sm:text-4xl">{card.value}</p>
+                    <p className="mt-1 text-sm text-slate-500">{card.sub}</p>
+                  </div>
+                ))}
+              </div>
+
+              {weeklyPostTrend.length > 0 && (
+                <div className="rounded-[28px] border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/60">
+                  <div className="inline-flex rounded-2xl bg-gradient-to-br from-pink-500 to-rose-500 px-3 py-2 text-sm font-semibold text-white">
+                    Weekly Post Trend
+                  </div>
+                  <div className="mt-5 space-y-3">
+                    {weeklyPostTrend.map((post) => (
+                      <div key={post.$id} className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-semibold text-slate-900 truncate">{post.title}</p>
+                          <p className="text-xs text-slate-400">{new Date(post.postedAt!).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</p>
+                        </div>
+                        <span className="rounded-full bg-green-50 px-2.5 py-1 text-xs font-semibold text-green-700">Posted</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              ))}
+              )}
             </div>
 
             <div className="mb-5 overflow-x-auto rounded-[24px] border border-slate-200 bg-white/90 p-1 shadow-sm shadow-slate-200/50">
@@ -847,6 +923,13 @@ function GbpPageInner() {
                       className="rounded-xl bg-slate-950 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800"
                     >
                       Create AI Post
+                    </button>
+                    <button
+                      onClick={handleOptimizeProfile}
+                      disabled={optimizeLoading}
+                      className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-100 disabled:opacity-50"
+                    >
+                      {optimizeLoading ? 'Optimizing...' : 'Optimize Profile'}
                     </button>
                   </div>
                 </div>
@@ -1400,6 +1483,83 @@ function GbpPageInner() {
               >
                 {postSubmitting ? 'Saving...' : canPublishImmediately ? 'Publish Post' : 'Save Draft'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showOptimizeModal && (
+        <div className="fixed inset-0 z-50 bg-black/62 p-3 sm:p-5">
+          <div className="mx-auto flex h-full max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-[30px] border border-white/20 bg-white shadow-2xl shadow-slate-950/30">
+            <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+              <h2 className="text-lg font-semibold tracking-tight text-slate-950">Optimize GBP Profile</h2>
+              <button
+                onClick={() => { setShowOptimizeModal(false); setOptimizeCopied(false); }}
+                className="rounded-xl px-3 py-2 text-sm font-medium text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+              {optimizeLoading && !optimizeResult && (
+                <div className="flex flex-col items-center justify-center py-16">
+                  <div className="inline-block h-10 w-10 animate-spin rounded-full border-b-2 border-indigo-600" />
+                  <p className="mt-4 text-sm text-slate-500">Generating optimized profile with AI...</p>
+                </div>
+              )}
+
+              {optimizeResult && (
+                <div className="space-y-6">
+                  {optimizeResult.businessName && (
+                    <p className="text-sm font-semibold text-slate-700">
+                      For: <span className="text-slate-950">{optimizeResult.businessName}</span>
+                    </p>
+                  )}
+
+                  <div className="rounded-[22px] border border-slate-200 bg-slate-50/80 p-5">
+                    <div className="mb-3 flex items-center justify-between">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Optimized Description</p>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(optimizeResult.optimizedDescription);
+                          setOptimizeCopied(true);
+                          setTimeout(() => setOptimizeCopied(false), 2000);
+                        }}
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                      >
+                        {optimizeCopied ? 'Copied!' : 'Copy'}
+                      </button>
+                    </div>
+                    <p className="whitespace-pre-wrap text-sm leading-7 text-slate-700">{optimizeResult.optimizedDescription}</p>
+                  </div>
+
+                  <div className="rounded-[22px] border border-slate-200 bg-white p-5">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Recommended Keywords</p>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {optimizeResult.keywords.map((keyword, index) => (
+                        <span
+                          key={`keyword-${index}`}
+                          className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700"
+                        >
+                          {keyword}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-sky-100 bg-sky-50 px-5 py-4 text-sm text-sky-800">
+                    Copy this description to your Google Business Profile for better SEO ranking
+                  </div>
+
+                  <button
+                    onClick={() => { setShowOptimizeModal(false); setOptimizeCopied(false); }}
+                    className="w-full rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-slate-800"
+                  >
+                    Done
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>

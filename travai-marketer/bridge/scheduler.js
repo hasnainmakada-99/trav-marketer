@@ -469,12 +469,267 @@ async function runWeeklyGbpPostJob() {
   }
 }
 
+async function listPendingTransactions(sinceDate, untilDate) {
+  if (APP_DATA_BACKEND === 'pocketbase') {
+    const pb = await getPocketBaseClient();
+    return await pb.collection('transactions').getFullList({
+      filter:
+        `status = "pending" && ` +
+        `createdAt >= "${escapeFilterValue(sinceDate)}" && ` +
+        `createdAt <= "${escapeFilterValue(untilDate)}"`,
+      sort: '-createdAt',
+    });
+  }
+  const result = await db.listDocuments(APPWRITE_DATABASE_ID, 'transactions', [
+    Query.equal('status', 'pending'),
+    Query.greaterThanEqual('createdAt', sinceDate),
+    Query.lessThanEqual('createdAt', untilDate),
+    Query.limit(100),
+  ]);
+  return result.documents;
+}
+
+async function lookupCustomerName(customerId, phone) {
+  try {
+    if (APP_DATA_BACKEND === 'pocketbase') {
+      const pb = await getPocketBaseClient();
+      if (customerId) {
+        try {
+          const cust = await pb.collection('customers').getOne(customerId);
+          if (cust?.name) return cust.name;
+        } catch {}
+      }
+      if (phone) {
+        const normalized = String(phone).replace(/[^\d]/g, '');
+        const result = await pb.collection('customers').getFullList({
+          filter: `phone = "${escapeFilterValue(normalized)}"`,
+          limit: 1,
+        });
+        if (result.length > 0 && result[0].name) return result[0].name;
+      }
+      return null;
+    }
+    if (customerId) {
+      try {
+        const cust = await db.getDocument(APPWRITE_DATABASE_ID, 'customers', customerId);
+        if (cust?.name) return cust.name;
+      } catch {}
+    }
+    if (phone) {
+      const normalized = String(phone).replace(/[^\d]/g, '');
+      const result = await db.listDocuments(APPWRITE_DATABASE_ID, 'customers', [
+        Query.equal('phone', normalized),
+        Query.limit(1),
+      ]);
+      if (result.documents.length > 0 && result.documents[0].name) return result.documents[0].name;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function runPaymentReminderJob() {
+  console.log('[Scheduler] Running payment reminder job...');
+  const now = Date.now();
+  const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const twoDaysAgo = new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString();
+  try {
+    const txs = (await listPendingTransactions(twoDaysAgo, sevenDaysAgo)).slice(0, 50);
+    console.log(`[Scheduler] Found ${txs.length} pending transactions for reminder`);
+    let sent = 0;
+    for (const tx of txs) {
+      const phone = tx.phone || tx.customerPhone;
+      const customerId = tx.customerId;
+      if (!phone) {
+        console.warn(`[Scheduler] Transaction ${tx.id || tx.$id} has no phone, skipping`);
+        continue;
+      }
+      const name = await lookupCustomerName(customerId, phone) || 'there';
+      const amount = tx.amount || tx.total || '—';
+      const service = tx.service || tx.serviceName || 'service';
+      const msg = `Hi ${name}! 💳 Quick reminder — your payment of ₹${amount} for ${service} is still pending.\n\nPlease complete it at your earliest convenience so we can confirm your booking.\n\nReply *1* to pay now or *2* to speak with us.\n\n_Traventions — Your Travel Partner_`;
+      const canSend = await hasRecentCustomerMessage(phone);
+      if (!canSend) {
+        console.log(`[Scheduler] Skipping payment reminder to ${phone} — no recent inbound (would be paid)`);
+        continue;
+      }
+      const ok = await sendWhatsApp(phone, msg);
+      if (ok) {
+        sent++;
+        const txId = tx.id || tx.$id;
+        try {
+          if (APP_DATA_BACKEND === 'pocketbase') {
+            const pb = await getPocketBaseClient();
+            await pb.collection('transactions').update(txId, { reminderSentAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+          } else {
+            await db.updateDocument(APPWRITE_DATABASE_ID, 'transactions', txId, { reminderSentAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+          }
+        } catch (updateErr) {
+          console.error(`[Scheduler] Failed to mark reminder sent for transaction ${txId}:`, updateErr?.message);
+        }
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+    console.log(`[Scheduler] Payment reminder job done. Sent: ${sent}/${txs.length}`);
+  } catch (err) {
+    console.error('[Scheduler] Payment reminder job error:', err?.message);
+  }
+}
+
+async function listRenewableTransactions(keywords, monthlyFrom, monthlyTo, annualFrom, annualTo) {
+  if (APP_DATA_BACKEND === 'pocketbase') {
+    const pb = await getPocketBaseClient();
+    const svcFilter = keywords.map(k => `service ~ "${escapeFilterValue(k)}"`).join(' || ');
+    const dateFilter = `((date >= "${escapeFilterValue(monthlyFrom)}" && date <= "${escapeFilterValue(monthlyTo)}") || (date >= "${escapeFilterValue(annualFrom)}" && date <= "${escapeFilterValue(annualTo)}"))`;
+    return await pb.collection('transactions').getFullList({
+      filter: `(${svcFilter}) && ${dateFilter}`,
+      sort: '-date',
+    });
+  }
+  const result = await db.listDocuments(APPWRITE_DATABASE_ID, 'transactions', [
+    Query.limit(200),
+  ]);
+  return result.documents.filter(d => {
+    const svc = (d.service || '').toLowerCase();
+    const matchesKeyword = keywords.some(k => svc.includes(k));
+    if (!matchesKeyword) return false;
+    const dDate = new Date(d.date || d.createdAt).getTime();
+    return (dDate >= new Date(monthlyFrom).getTime() && dDate <= new Date(monthlyTo).getTime()) ||
+           (dDate >= new Date(annualFrom).getTime() && dDate <= new Date(annualTo).getTime());
+  });
+}
+
+async function listRenewableLeads(keywords, monthlyFrom, monthlyTo, annualFrom, annualTo) {
+  if (APP_DATA_BACKEND === 'pocketbase') {
+    const pb = await getPocketBaseClient();
+    const notesFilter = keywords.map(k => `notes ~ "${escapeFilterValue(k)}"`).join(' || ');
+    const dateFilter = `((lastContactedAt >= "${escapeFilterValue(monthlyFrom)}" && lastContactedAt <= "${escapeFilterValue(monthlyTo)}") || (lastContactedAt >= "${escapeFilterValue(annualFrom)}" && lastContactedAt <= "${escapeFilterValue(annualTo)}"))`;
+    return await pb.collection('leads').getFullList({
+      filter: `(${notesFilter}) && ${dateFilter}`,
+      sort: '-lastContactedAt',
+    });
+  }
+  const result = await db.listDocuments(APPWRITE_DATABASE_ID, 'leads', [
+    Query.limit(200),
+  ]);
+  return result.documents.filter(d => {
+    const notes = (d.notes || '').toLowerCase();
+    const matchesKeyword = keywords.some(k => notes.includes(k));
+    if (!matchesKeyword) return false;
+    const dDate = new Date(d.lastContactedAt || d.createdAt).getTime();
+    return (dDate >= new Date(monthlyFrom).getTime() && dDate <= new Date(monthlyTo).getTime()) ||
+           (dDate >= new Date(annualFrom).getTime() && dDate <= new Date(annualTo).getTime());
+  });
+}
+
+async function runRenewalReminderJob() {
+  console.log('[Scheduler] Running renewal reminder job...');
+  const now = Date.now();
+  const monthlyFrom = new Date(now - 35 * 24 * 60 * 60 * 1000).toISOString();
+  const monthlyTo = new Date(now - 25 * 24 * 60 * 60 * 1000).toISOString();
+  const annualFrom = new Date(now - 365 * 24 * 60 * 60 * 1000).toISOString();
+  const annualTo = new Date(now - 340 * 24 * 60 * 60 * 1000).toISOString();
+  const keywords = ['membership', 'subscription', 'retainer', 'annual', 'yearly', 'monthly'];
+  try {
+    const txs = await listRenewableTransactions(keywords, monthlyFrom, monthlyTo, annualFrom, annualTo);
+    const leadDocs = await listRenewableLeads(keywords, monthlyFrom, monthlyTo, annualFrom, annualTo);
+    const items = [...txs, ...leadDocs];
+    console.log(`[Scheduler] Found ${items.length} renewable items for reminder`);
+    let sent = 0;
+    for (const item of items) {
+      const phone = item.phone || item.customerPhone || item.phoneNumber;
+      if (!phone) {
+        console.warn(`[Scheduler] Renewal item ${item.id || item.$id} has no phone, skipping`);
+        continue;
+      }
+      const itemName = item.name ? item.name.split(' ')[0] : null;
+      const name = itemName || await lookupCustomerName(item.customerId, phone) || 'there';
+      const service = item.service || item.serviceName || 'subscription';
+      const msg = `Hi ${name}! 🔄 Your ${service} is due for renewal!\n\nKeep enjoying uninterrupted benefits. Reply *1* to renew now or *2* to talk to us.\n\n_Traventions — Your Travel Partner_`;
+      const canSend = await hasRecentCustomerMessage(phone);
+      if (!canSend) {
+        console.log(`[Scheduler] Skipping renewal reminder to ${phone} — no recent inbound (would be paid)`);
+        continue;
+      }
+      const ok = await sendWhatsApp(phone, msg);
+      if (ok) sent++;
+      await new Promise(r => setTimeout(r, 500));
+    }
+    console.log(`[Scheduler] Renewal reminder job done. Sent: ${sent}/${items.length}`);
+  } catch (err) {
+    console.error('[Scheduler] Renewal reminder job error:', err?.message);
+  }
+}
+
+function getRecommendedService(previousService) {
+  const svc = (previousService || '').toLowerCase();
+  if (svc.includes('holiday') || svc.includes('package')) return 'Flight Booking';
+  if (svc.includes('flight') || svc.includes('air') || svc.includes('plane')) return 'Hotel Booking';
+  if (svc.includes('hotel') || svc.includes('stay') || svc.includes('accommodation')) return 'Holiday Package';
+  return 'Premium Holiday Package';
+}
+
+async function listCompletedTransactions(sinceDate) {
+  if (APP_DATA_BACKEND === 'pocketbase') {
+    const pb = await getPocketBaseClient();
+    return await pb.collection('transactions').getFullList({
+      filter: `status = "completed" && date >= "${escapeFilterValue(sinceDate)}"`,
+      sort: '-date',
+    });
+  }
+  const result = await db.listDocuments(APPWRITE_DATABASE_ID, 'transactions', [
+    Query.equal('status', 'completed'),
+    Query.greaterThanEqual('date', sinceDate),
+    Query.limit(200),
+  ]);
+  return result.documents;
+}
+
+async function runUpsellJob() {
+  console.log('[Scheduler] Running upsell job...');
+  const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+  try {
+    const txs = await listCompletedTransactions(ninetyDaysAgo);
+    const groups = {};
+    for (const tx of txs) {
+      const key = tx.customerId || tx.phone || tx.customerPhone;
+      if (!key) continue;
+      if (!groups[key]) groups[key] = { items: [], phone: tx.phone || tx.customerPhone, customerId: tx.customerId, name: tx.name || null };
+      groups[key].items.push(tx);
+    }
+    const candidates = Object.values(groups).filter(g => g.items.length >= 1 && g.items.length <= 2);
+    console.log(`[Scheduler] Found ${candidates.length} upsell candidates (${txs.length} total completed txs)`);
+    let sent = 0;
+    for (const candidate of candidates) {
+      const phone = candidate.phone;
+      if (!phone) continue;
+      const lastTx = candidate.items[candidate.items.length - 1];
+      const name = candidate.name || await lookupCustomerName(candidate.customerId, phone) || 'there';
+      const previousService = lastTx.service || lastTx.serviceName || 'service';
+      const recommendedService = getRecommendedService(previousService);
+      const msg = `Hi ${name}! 🎉 As a valued Traventions customer, we have an exclusive offer for you!\n\nYou loved ${previousService} — now try our ${recommendedService} at a special discount!\n\nReply *1* to learn more or *2* to call us.\n\n_Traventions — Your Travel Partner_`;
+      const canSend = await hasRecentCustomerMessage(phone);
+      if (!canSend) {
+        console.log(`[Scheduler] Skipping upsell to ${phone} — no recent inbound (would be paid)`);
+        continue;
+      }
+      const ok = await sendWhatsApp(phone, msg);
+      if (ok) sent++;
+      await new Promise(r => setTimeout(r, 500));
+    }
+    console.log(`[Scheduler] Upsell job done. Sent: ${sent}/${candidates.length}`);
+  } catch (err) {
+    console.error('[Scheduler] Upsell job error:', err?.message);
+  }
+}
+
 function isMonday() {
   return new Date().getDay() === 1;
 }
 
 console.log('[Scheduler] Started. Checking every minute for scheduled jobs...');
-console.log(`[Scheduler] Follow-up job: 10:00 daily | Review request: 11:00 daily | Campaign dispatch: 18:00 daily | GBP post: 09:00 Mon`);
+console.log(`[Scheduler] Follow-up: 10:00 | Review: 11:00 | Payment reminder: 12:00 | Renewal: 13:00 | Upsell: 14:00 | Campaign: 18:00 | GBP post: 09:00 Mon`);
 console.log(`[Scheduler] Target: ${TEAM_ID} | App: ${APP_URL}`);
 
 // Run immediately on startup to catch missed jobs (e.g. server was down)
@@ -487,6 +742,15 @@ setInterval(async () => {
   }
   if (hhmm === '11:00') {
     await runReviewRequestJob().catch(err => console.error('[Scheduler] Review request error:', err?.message));
+  }
+  if (hhmm === '12:00') {
+    await runPaymentReminderJob().catch(err => console.error('[Scheduler] Payment reminder error:', err?.message));
+  }
+  if (hhmm === '13:00') {
+    await runRenewalReminderJob().catch(err => console.error('[Scheduler] Renewal reminder error:', err?.message));
+  }
+  if (hhmm === '14:00') {
+    await runUpsellJob().catch(err => console.error('[Scheduler] Upsell error:', err?.message));
   }
   if (hhmm === '18:00') {
     await runCampaignDispatchJob().catch(err => console.error('[Scheduler] Dispatch error:', err?.message));
@@ -504,4 +768,7 @@ module.exports = {
   runCampaignDispatchJob,
   runReviewRequestJob,
   runWeeklyGbpPostJob,
+  runPaymentReminderJob,
+  runRenewalReminderJob,
+  runUpsellJob,
 };

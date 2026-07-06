@@ -153,6 +153,30 @@ export default function DashboardPage() {
     ? CRM_STATUS_ORDER.reduce((sum, status) => sum + (stats.leadsByStatus?.[status] || 0), 0)
     : 0;
 
+  const conversionMetrics = useMemo(() => {
+    if (!stats) return null;
+    const totalLeads = stats.totalLeads || 0;
+    const transactionCount = stats.revenue?.transactionCount || 0;
+    const totalRevenue = stats.revenue?.total || 0;
+    return {
+      conversionRate: totalLeads > 0 ? Math.round((transactionCount / totalLeads) * 100) : 0,
+      leadsInPipeline: totalLeads,
+      transactions: transactionCount,
+      revenuePerLead: totalLeads > 0 ? `\u20b9${(totalRevenue / totalLeads).toFixed(0)}` : '\u20b90',
+    };
+  }, [stats]);
+
+  async function downloadExport(type: string) {
+    const res = await fetch(`/api/export?type=${type}&format=csv&teamId=${TEAM_ID}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${type}-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   if (authLoading) return <LoadingSpinner text="Loading dashboard..." fullPage />;
 
   return (
@@ -297,6 +321,75 @@ export default function DashboardPage() {
           </button>
         ))}
       </div>
+
+      {/* Conversion Metrics */}
+      <Card>
+        <CardTitle label="Lead Conversion Metrics" title="Pipeline performance overview" />
+        <div className="mt-5 grid gap-4 sm:grid-cols-2 2xl:grid-cols-4">
+          {[
+            {
+              label: 'Conversion Rate',
+              value: conversionMetrics ? `${conversionMetrics.conversionRate}%` : (statsLoading ? '...' : '0%'),
+              sub: 'Transactions / Total Leads',
+              color: 'from-emerald-500 to-teal-500',
+            },
+            {
+              label: 'Leads in Pipeline',
+              value: conversionMetrics?.leadsInPipeline ?? (statsLoading ? '...' : 0),
+              sub: 'Total active leads',
+              color: 'from-sky-500 to-cyan-500',
+            },
+            {
+              label: 'Transactions / Deals',
+              value: conversionMetrics?.transactions ?? (statsLoading ? '...' : 0),
+              sub: 'Completed transactions',
+              color: 'from-amber-500 to-orange-500',
+            },
+            {
+              label: 'Revenue per Lead',
+              value: conversionMetrics?.revenuePerLead ?? (statsLoading ? '...' : '₹0'),
+              sub: 'Average value per lead',
+              color: 'from-violet-500 to-fuchsia-500',
+            },
+          ].map((card) => (
+            <div
+              key={card.label}
+              className="rounded-[28px] border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/60"
+            >
+              <div className={`inline-flex rounded-2xl bg-gradient-to-br ${card.color} px-3 py-2 text-sm font-semibold text-white`}>
+                {card.label}
+              </div>
+              <p className="mt-5 text-3xl font-semibold text-slate-950 sm:text-4xl">
+                {card.value}
+              </p>
+              <p className="mt-1 text-sm text-slate-500">{card.sub}</p>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* Data Export */}
+      <Card>
+        <CardTitle label="Export Data" title="Download your business data for backup or analysis" />
+        <div className="mt-5 flex flex-wrap gap-3">
+          {[
+            { label: 'Export Leads', type: 'leads' },
+            { label: 'Export Transactions', type: 'transactions' },
+            { label: 'Export Conversations', type: 'conversations' },
+          ].map((btn) => (
+            <button
+              key={btn.type}
+              onClick={() => void downloadExport(btn.type)}
+              className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 hover:shadow-md"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+              </svg>
+              {btn.label}
+            </button>
+          ))}
+        </div>
+      </Card>
 
       {/* Quick workspaces */}
       <Card>
