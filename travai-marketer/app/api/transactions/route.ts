@@ -8,14 +8,22 @@ export async function GET(request: NextRequest) {
     const teamId = searchParams.get('teamId');
     const customerId = searchParams.get('customerId');
     const limit = parseInt(searchParams.get('limit') || '50');
+    const startDate = searchParams.get('startDate');
+    const endDate = searchParams.get('endDate');
 
     if (!teamId) {
       return NextResponse.json({ error: 'Missing teamId' }, { status: 400 });
     }
 
-    const filters = [Query.equal('teamId', teamId), Query.orderDesc('createdAt'), Query.limit(limit)];
+    const filters = [Query.equal('teamId', teamId), Query.orderDesc('date'), Query.limit(limit)];
     if (customerId) {
       filters.push(Query.equal('customerId', customerId));
+    }
+    if (startDate) {
+      filters.push(Query.greaterThanEqual('date', startDate));
+    }
+    if (endDate) {
+      filters.push(Query.lessThanEqual('date', endDate));
     }
 
     const result = await listDocuments('transactions', filters);

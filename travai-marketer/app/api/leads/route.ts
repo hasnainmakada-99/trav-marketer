@@ -58,6 +58,23 @@ export async function POST(request: NextRequest) {
     if (!phone || phone.length < 8) {
       return NextResponse.json({ error: 'Valid phone number is required' }, { status: 400 });
     }
+    const existing = await listDocuments('leads', [
+      Query.equal('phone', phone),
+      Query.equal('teamId', body.teamId || TEAM_ID),
+      Query.limit(1),
+    ]);
+
+    if (existing.total > 0) {
+      const existingLead = existing.documents[0];
+      const updated = await updateDocument('leads', existingLead.$id, {
+        name: body.name?.trim() || existingLead.name,
+        email: body.email?.trim() || existingLead.email,
+        lastContactedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+      return NextResponse.json({ lead: updated, updated: true }, { status: 200 });
+    }
+
     const now = new Date().toISOString();
     const notes = [
       body.serviceInterest ? `Service Interest: ${body.serviceInterest}` : '',

@@ -264,6 +264,14 @@ function InboxTab({
   useEffect(() => { if (focusPhone) { setSelectedPhone(focusPhone); onFocusConsumed(); } }, [focusPhone, onFocusConsumed]);
   useEffect(() => { if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight; }, [thread]);
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadConversations({ silent: true });
+      if (selectedPhone) loadThread(selectedPhone, { silent: true });
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [loadConversations, loadThread, selectedPhone]);
+
   const filteredConversations = useMemo(() => {
     return conversations.filter((c) => {
       if (filter !== 'all' && c.crmStatus !== filter) return false;

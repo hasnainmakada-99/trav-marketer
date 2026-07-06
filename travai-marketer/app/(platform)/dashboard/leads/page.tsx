@@ -156,6 +156,21 @@ export default function LeadsPage() {
   const [purchaseForm, setPurchaseForm] = useState({ service: '', amount: '', date: new Date().toISOString().slice(0, 10), status: 'completed' });
   const [purchaseSaving, setPurchaseSaving] = useState(false);
 
+  const [editingNotes, setEditingNotes] = useState<string | null>(null);
+  const [editNotesText, setEditNotesText] = useState('');
+  const [savingNotes, setSavingNotes] = useState(false);
+
+  async function saveNotes(id: string, notes: string) {
+    setSavingNotes(true);
+    try {
+      await fetch(`/api/leads/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notes }) });
+      setLeads((prev) => prev.map((l) => (l.$id === id ? { ...l, notes } : l)));
+      setEditingNotes(null);
+      showToast({ message: 'Notes saved', type: 'success' });
+    } catch { showToast({ message: 'Failed to save notes', type: 'error' }); }
+    finally { setSavingNotes(false); }
+  }
+
   const [showLogMissedCall, setShowLogMissedCall] = useState(false);
   const [missedCallForm, setMissedCallForm] = useState({ phone: '', name: '' });
   const [missedCallSaving, setMissedCallSaving] = useState(false);
@@ -218,6 +233,7 @@ export default function LeadsPage() {
   }
 
   async function deleteLead(id: string) {
+    if (!window.confirm('Are you sure you want to delete this lead? This cannot be undone.')) return;
     setDeleting(id);
     try {
       await fetch(`/api/leads/${id}`, { method: 'DELETE' });
@@ -450,17 +466,43 @@ export default function LeadsPage() {
                     </div>
 
                     <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-                      {lead.notes ? (
-                        <button onClick={() => setExpandedNotes(expandedNotes === lead.$id ? null : lead.$id)} className="text-left">
-                          <span className={expandedNotes === lead.$id ? '' : 'line-clamp-3'}>{lead.notes}</span>
-                          {lead.notes.length > 120 && (
-                            <span className="ml-1 font-semibold text-emerald-700">
-                              {expandedNotes === lead.$id ? 'show less' : 'show more'}
-                            </span>
-                          )}
-                        </button>
+                      {editingNotes === lead.$id ? (
+                        <div className="flex flex-col gap-2">
+                          <textarea value={editNotesText} onChange={(e) => setEditNotesText(e.target.value)}
+                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-emerald-300"
+                            rows={3} autoFocus />
+                          <div className="flex gap-2">
+                            <button onClick={() => saveNotes(lead.$id, editNotesText)} disabled={savingNotes}
+                              className="rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-50">
+                              {savingNotes ? 'Saving...' : 'Save'}
+                            </button>
+                            <button onClick={() => setEditingNotes(null)}
+                              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50">
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
                       ) : (
-                        <span className="text-slate-400">No notes yet</span>
+                        <div className="group flex items-start justify-between gap-2">
+                          <div className="flex-1 text-left">
+                            {lead.notes ? (
+                              <button onClick={() => setExpandedNotes(expandedNotes === lead.$id ? null : lead.$id)} className="text-left">
+                                <span className={expandedNotes === lead.$id ? '' : 'line-clamp-3'}>{lead.notes}</span>
+                                {lead.notes.length > 120 && (
+                                  <span className="ml-1 font-semibold text-emerald-700">
+                                    {expandedNotes === lead.$id ? 'show less' : 'show more'}
+                                  </span>
+                                )}
+                              </button>
+                            ) : (
+                              <span className="text-slate-400">No notes yet</span>
+                            )}
+                          </div>
+                          <button onClick={() => { setEditNotesText(lead.notes || ''); setEditingNotes(lead.$id); }}
+                            className="shrink-0 rounded-lg px-2 py-1 text-xs text-slate-400 opacity-0 transition hover:bg-slate-200 group-hover:opacity-100">
+                            Edit
+                          </button>
+                        </div>
                       )}
                     </div>
 
