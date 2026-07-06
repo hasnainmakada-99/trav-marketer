@@ -511,6 +511,14 @@ async function saveLead(params: {
       lastContactedAt: now,
       updatedAt: now,
     }).catch(() => {});
+    sendLeadNotificationEmail({
+      name,
+      phone,
+      source: 'whatsapp',
+      notes: nextNotes,
+      email,
+      serviceInterest: intent || null,
+    });
     return { leadId: existingLead.$id, status: resolvedStatus, existed: true as const };
   } else {
     await createDocument('leads', {
