@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sendYCloudTextMessage } from '@/lib/whatsapp-ycloud';
-import { createDocument, listDocuments } from '@/lib/appwrite';
+import { createDocument, listDocuments, updateDocument } from '@/lib/appwrite';
 import { Query } from 'node-appwrite';
-import { canSendToPhoneForFree } from '@/lib/whatsapp-free-tier';
 import { sendLeadNotificationEmail } from '@/lib/email';
 
 async function findOrCreateCustomer(phone: string, teamId: string) {
@@ -27,16 +26,26 @@ async function findOrCreateCustomer(phone: string, teamId: string) {
 async function handleMissedCall(phone: string, teamId: string, callerName?: string) {
   const normalizedPhone = phone.replace(/[^\d]/g, '');
   const customer = await findOrCreateCustomer(normalizedPhone, teamId);
+  const now = new Date().toISOString();
 
+  // Look up ANY existing lead for this phone (not just source=missed_call)
   const leadData = await listDocuments('leads', [
     Query.equal('phone', normalizedPhone),
     Query.equal('teamId', teamId),
-    Query.equal('source', 'missed_call'),
     Query.limit(1),
   ]);
+  const existingLead = leadData.documents[0] as Record<string, any> | undefined;
 
-  if (leadData.documents.length === 0) {
-    await createDocument('leads', {
+  if (existingLead) {
+    await updateDocument('leads', existingLead.$id, {
+      notes: existingLead.notes
+        ? `${existingLead.notes}\nMissed call — ${now}`
+        : 'Missed call — auto-follow-up sent via WhatsApp',
+      lastContactedAt: now,
+      updatedAt: now,
+    }).catch(() => {});
+  } else {
+    const newLead = await createDocument('leads', {
       teamId,
       phone: normalizedPhone,
       customerId: customer.$id,
@@ -44,21 +53,17 @@ async function handleMissedCall(phone: string, teamId: string, callerName?: stri
       source: 'missed_call',
       status: 'new_lead',
       notes: 'Missed call — auto-follow-up sent via WhatsApp',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
-    sendLeadNotificationEmail({
-      name: callerName || customer.name || null,
-      phone: normalizedPhone,
-      source: 'missed_call',
-      notes: 'Missed call — auto-follow-up sent via WhatsApp',
-    });
-  }
-
-  const { free } = await canSendToPhoneForFree(normalizedPhone);
-  if (!free) {
-    console.log(`[MissedCall] Skipping WhatsApp to ${normalizedPhone} — no recent inbound (would be paid)`);
-    return;
+      createdAt: now,
+      updatedAt: now,
+    }).catch(() => null);
+    if (newLead) {
+      sendLeadNotificationEmail({
+        name: callerName || customer.name || null,
+        phone: normalizedPhone,
+        source: 'missed_call',
+        notes: 'Missed call — auto-follow-up sent via WhatsApp',
+      });
+    }
   }
 
   const apiKey = (process.env.YCLOUD_API_KEY || '').trim();
@@ -89,7 +94,7 @@ async function handleMissedCall(phone: string, teamId: string, callerName?: stri
       sentBy: 'ai',
       metaMessageId: result.messageId || null,
       deliveryStatus: 'sent',
-      createdAt: new Date().toISOString(),
+      createdAt: now,
     });
     console.log(`[MissedCall] WhatsApp sent to ${normalizedPhone}`);
   }
