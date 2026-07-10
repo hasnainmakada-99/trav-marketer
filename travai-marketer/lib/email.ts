@@ -145,7 +145,7 @@ export async function sendLeadNotificationEmail(params: {
         `TravAI Notification`,
       ].filter(Boolean).join('\n'),
     });
-    console.log(`[LeadEmail] Notification sent for ${phone} (${source})`);
+    console.log(`[LeadEmail] Notification sent to ${notifyTo} for ${phone} (${source})`);
   } catch (err) {
     console.error('[LeadEmail] Failed to send notification:', err instanceof Error ? err.message : err);
   }
