@@ -87,6 +87,7 @@
         { "name": "lastContactedAt", "type": "date", "required": false },
         { "name": "reviewRequestSentAt", "type": "date", "required": false },
         { "name": "emailNotifiedAt", "type": "date", "required": false },
+        { "name": "callbackNotifiedAt", "type": "date", "required": false },
         { "name": "createdAt", "type": "date", "required": false },
         { "name": "updatedAt", "type": "date", "required": false }
       ],

@@ -147,6 +147,20 @@ migrate((app) => {
       {
         "autogeneratePattern": "",
         "hidden": false,
+        "id": "text_callbacknotif",
+        "max": 0,
+        "min": 0,
+        "name": "callbackNotifiedAt",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": false,
+        "system": false,
+        "type": "text"
+      },
+      {
+        "autogeneratePattern": "",
+        "hidden": false,
         "id": "text2261412156",
         "max": 0,
         "min": 0,

@@ -1685,21 +1685,34 @@ GLOBAL RULES:
       !isConversionIntent(correctedText);
 
     if (hasCallbackTime && isFreshCallbackConfirmed) {
-      const emailResult = await sendCallbackEmails({
-        customerEmail: enrichedCustomerEmail,
-        customerName: enrichedCustomerName,
-        phone,
-        callbackTime: workflowState.slots.callback_time || '',
-        businessName: businessConfig?.businessName,
-        serviceSummary: buildServiceSummary(workflowState.intent, leadNotes),
-      }).catch((error) => {
-        console.warn('[WhatsApp] Callback email error:', error instanceof Error ? error.message : error);
-        return { sent: false, reason: 'exception' as const };
-      });
-      if (emailResult.sent) {
-        console.log(`[OK] Callback notification email sent for ${phone}`);
-      } else {
-        console.warn(`[WhatsApp] Callback email not sent: ${emailResult.reason}`);
+      // Dedup: only send the callback email ONCE per lead (avoid spam if the
+      // workflow re-confirms or the customer requests callback repeatedly).
+      const cbLead = await findLatestLead(resolvedTeamId, phone).catch(() => ({ documents: [] }));
+      const cbLeadDoc = cbLead.documents[0] as { $id?: string; callbackNotifiedAt?: string } | undefined;
+      const alreadySentCallback = Boolean(cbLeadDoc?.callbackNotifiedAt);
+
+      if (!alreadySentCallback && cbLeadDoc?.$id) {
+        const emailResult = await sendCallbackEmails({
+          customerEmail: enrichedCustomerEmail,
+          customerName: enrichedCustomerName,
+          phone,
+          callbackTime: workflowState.slots.callback_time || '',
+          businessName: businessConfig?.businessName,
+          serviceSummary: buildServiceSummary(workflowState.intent, leadNotes),
+        }).catch((error) => {
+          console.warn('[WhatsApp] Callback email error:', error instanceof Error ? error.message : error);
+          return { sent: false, reason: 'exception' as const };
+        });
+        if (emailResult.sent) {
+          await updateDocument('leads', cbLeadDoc.$id, {
+            callbackNotifiedAt: new Date().toISOString(),
+          }).catch(() => {});
+          console.log(`[OK] Callback notification email sent for ${phone}`);
+        } else {
+          console.warn(`[WhatsApp] Callback email not sent: ${emailResult.reason}`);
+        }
+      } else if (alreadySentCallback) {
+        console.log(`[WhatsApp] Callback email skipped for ${phone} — already notified once`);
       }
     }
 
