@@ -133,6 +133,20 @@ migrate((app) => {
       {
         "autogeneratePattern": "",
         "hidden": false,
+        "id": "text_emailnotif",
+        "max": 0,
+        "min": 0,
+        "name": "emailNotifiedAt",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": false,
+        "system": false,
+        "type": "text"
+      },
+      {
+        "autogeneratePattern": "",
+        "hidden": false,
         "id": "text2261412156",
         "max": 0,
         "min": 0,

@@ -13,7 +13,7 @@ import {
   normalizePhoneForMatch,
   type CrmLeadStatus,
 } from '@/lib/crm';
-import { sendLeadNotificationEmail } from '@/lib/email';
+import { sendLeadNotificationEmail, isLeadCaptured } from '@/lib/email';
 
 type ConversationDoc = {
   $id: string;
@@ -284,30 +284,35 @@ export async function syncLeadStatusesFromConversations(teamId: string): Promise
       } catch {
         skipped += 1;
       }
-    } else {
-      try {
-        await createDocument('leads', {
-          teamId,
-          phone,
-          name: name === phone ? null : name,
-          email,
-          source: 'whatsapp',
-          status: inferredStatus,
-          notes,
-          lastContactedAt,
-          createdAt: now,
-          updatedAt: now,
-        });
-        created += 1;
-        sendLeadNotificationEmail({
-          name: name === phone ? null : name,
-          phone,
-          source: 'whatsapp',
-          notes,
-          email,
-        });
-      } catch {
-        skipped += 1;
+      } else {
+        try {
+          const leadName = name === phone ? null : name;
+          const captured = isLeadCaptured({ name: leadName, email, notes, intent: inferredStatus });
+          const newLead = await createDocument('leads', {
+            teamId,
+            phone,
+            name: leadName,
+            email,
+            source: 'whatsapp',
+            status: inferredStatus,
+            notes,
+            lastContactedAt,
+            createdAt: now,
+            updatedAt: now,
+            emailNotifiedAt: captured ? now : null,
+          });
+          created += 1;
+          if (captured) {
+            sendLeadNotificationEmail({
+              name: leadName,
+              phone,
+              source: 'whatsapp',
+              notes,
+              email,
+            });
+          }
+        } catch {
+          skipped += 1;
       }
     }
   }

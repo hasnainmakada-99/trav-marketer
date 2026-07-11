@@ -93,6 +93,34 @@ export async function sendCallbackEmails(params: {
   return { sent: true as const };
 }
 
+/**
+ * Decides whether a lead is "substantially captured" and worth notifying about.
+ * A bare greeting ("Hi") or a phone number alone should NOT trigger an email.
+ * We only notify once the lead has a real identity or a concrete service intent.
+ */
+export function isLeadCaptured(lead: {
+  name?: string | null;
+  notes?: string | null;
+  intent?: string | null;
+  email?: string | null;
+}): boolean {
+  const name = (lead.name || '').trim();
+  const email = (lead.email || '').trim();
+  const notes = (lead.notes || '').trim();
+  const intent = (lead.intent || '').trim();
+
+  // Has a real name or email pulled from the conversation
+  if (name || email) return true;
+
+  // Has a concrete service intent (not just a greeting)
+  if (intent && intent !== 'greeting' && intent !== 'complaint') return true;
+
+  // Has meaningful notes beyond a placeholder greeting line
+  if (notes && notes.length > 15 && !/^whatsapp greeting received$/i.test(notes)) return true;
+
+  return false;
+}
+
 export async function sendLeadNotificationEmail(params: {
   name?: string | null;
   phone: string;

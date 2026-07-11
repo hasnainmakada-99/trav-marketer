@@ -86,6 +86,7 @@
         { "name": "notes", "type": "text", "required": false, "max": 20000 },
         { "name": "lastContactedAt", "type": "date", "required": false },
         { "name": "reviewRequestSentAt", "type": "date", "required": false },
+        { "name": "emailNotifiedAt", "type": "date", "required": false },
         { "name": "createdAt", "type": "date", "required": false },
         { "name": "updatedAt", "type": "date", "required": false }
       ],

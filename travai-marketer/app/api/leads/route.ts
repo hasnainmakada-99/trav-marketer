@@ -94,6 +94,7 @@ export async function POST(request: NextRequest) {
       lastContactedAt: now,
       createdAt: now,
       updatedAt: now,
+      emailNotifiedAt: now,
     });
     sendLeadNotificationEmail({
       name: body.name?.trim(),

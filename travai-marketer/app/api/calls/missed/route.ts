@@ -55,6 +55,7 @@ async function handleMissedCall(phone: string, teamId: string, callerName?: stri
       notes: 'Missed call — auto-follow-up sent via WhatsApp',
       createdAt: now,
       updatedAt: now,
+      emailNotifiedAt: now,
     }).catch(() => null);
     if (newLead) {
       sendLeadNotificationEmail({

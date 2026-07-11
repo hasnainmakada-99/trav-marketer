@@ -25,7 +25,7 @@ import {
   mergeLeadStatus,
 } from '@/lib/crm';
 import { extractCustomerNameCandidate } from '@/lib/contact-identity';
-import { sendCallbackEmails, sendLeadNotificationEmail } from '@/lib/email';
+import { sendCallbackEmails, sendLeadNotificationEmail, isLeadCaptured } from '@/lib/email';
 import {
   enforceSafeUrlsInReply,
   getBotRoutePolicyPromptBlock,
@@ -502,6 +502,7 @@ async function saveLead(params: {
   const resolvedStatus = mergeLeadStatus(existingLead?.status, status || 'new_lead');
   const nextNotes = notes || existingLead?.notes || (intent ? `Service interest: ${intent}` : null);
 
+  let leadId: string | null = existingLead?.$id || null;
   if (existingLead?.$id) {
     await updateDocument('leads', existingLead.$id, {
       name: name || undefined,
@@ -511,17 +512,8 @@ async function saveLead(params: {
       lastContactedAt: now,
       updatedAt: now,
     }).catch(() => {});
-    sendLeadNotificationEmail({
-      name,
-      phone,
-      source: 'whatsapp',
-      notes: nextNotes,
-      email,
-      serviceInterest: intent || null,
-    });
-    return { leadId: existingLead.$id, status: resolvedStatus, existed: true as const };
   } else {
-    await createDocument('leads', {
+    const created = (await createDocument('leads', {
       teamId,
       phone,
       name,
@@ -532,8 +524,16 @@ async function saveLead(params: {
       lastContactedAt: now,
       createdAt: now,
       updatedAt: now,
-    }).catch(() => {});
-    sendLeadNotificationEmail({
+    }).catch(() => null)) as { $id?: string } | null;
+    leadId = created?.$id || null;
+  }
+
+  // Intelligent notification: only email ONCE, and only after the lead is
+  // substantially captured (has a name / email / real intent). A bare greeting
+  // or phone number alone must not spam the inbox.
+  const alreadyNotified = (existingLead as { emailNotifiedAt?: string } | undefined)?.emailNotifiedAt;
+  if (leadId && !alreadyNotified && isLeadCaptured({ name, email, notes: nextNotes, intent })) {
+    await sendLeadNotificationEmail({
       name,
       phone,
       source: 'whatsapp',
@@ -541,8 +541,10 @@ async function saveLead(params: {
       email,
       serviceInterest: intent || null,
     });
-    return { leadId: null, status: resolvedStatus, existed: false as const };
+    await updateDocument('leads', leadId, { emailNotifiedAt: now }).catch(() => {});
   }
+
+  return { leadId: leadId || null, status: resolvedStatus, existed: Boolean(existingLead?.$id) };
 }
 
 async function findLatestLead(teamId: string, phone: string) {
