@@ -29,7 +29,8 @@ export function humanizeMessagePreview(
     direction?: 'incoming' | 'outgoing' | null;
   }
 ) {
-  const text = normalizeWhitespace(String(value || ''));
+  const raw = String(value || '');
+  const text = normalizeWhitespace(raw);
   const explicitMessageType = String(options?.messageType || '').trim().toLowerCase();
   const placeholderType = extractBracketPlaceholderType(text);
   const messageType = placeholderType || explicitMessageType;
@@ -62,7 +63,9 @@ export function humanizeMessagePreview(
     if (/^Greeting sent$/i.test(text)) {
       return 'Greeting sent';
     }
-    return text;
+    // Preserve original formatting (line breaks, bullets, markdown) for real
+    // message text — only trim outer whitespace.
+    return raw.trim();
   }
 
   if (messageType === 'image') return 'Photo attachment';
@@ -85,13 +88,14 @@ export function hasUsefulConversationText(value: string | null | undefined) {
 }
 
 export function humanizeLeadNotes(value: string | null | undefined) {
-  const text = normalizeWhitespace(String(value || ''));
+  const raw = String(value || '');
+  const text = normalizeWhitespace(raw);
   if (!text) return null;
   if (isWhatsAppMessageId(text)) return 'WhatsApp message received';
   if (isUnsupportedMessage(text)) return null;
   if (isAiReplyPlaceholder(text)) return 'AI reply sent';
   if (/^Greeting sent$/i.test(text)) return 'Greeting sent';
-  return text;
+  return raw.trim();
 }
 
 export function buildBestConversationPreview(

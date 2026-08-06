@@ -487,7 +487,9 @@ export default function LeadsPage() {
                           <div className="flex-1 text-left">
                             {lead.notes ? (
                               <button onClick={() => setExpandedNotes(expandedNotes === lead.$id ? null : lead.$id)} className="text-left">
-                                <span className={expandedNotes === lead.$id ? '' : 'line-clamp-3'}>{lead.notes}</span>
+                                <span className={expandedNotes === lead.$id ? 'whitespace-pre-wrap' : 'line-clamp-3 whitespace-pre-wrap'}>
+                                  {renderInlineMarkdown(lead.notes)}
+                                </span>
                                 {lead.notes.length > 120 && (
                                   <span className="ml-1 font-semibold text-emerald-700">
                                     {expandedNotes === lead.$id ? 'show less' : 'show more'}
@@ -508,10 +510,10 @@ export default function LeadsPage() {
 
                     <div className="mt-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                       <div className="flex flex-wrap items-center gap-2">
-                        {lead.status === 'new_lead' && (
-                          <button onClick={() => updateStatus(lead.$id, 'normal_conversation')} disabled={updating === lead.$id}
+                        {lead.status === 'new' && (
+                          <button onClick={() => updateStatus(lead.$id, 'contacted')} disabled={updating === lead.$id}
                             className="rounded-full bg-violet-100 px-3 py-1.5 text-xs font-semibold text-violet-700 transition hover:bg-violet-200 disabled:opacity-50">
-                            Move to Normal
+                            Move to Contacted
                           </button>
                         )}
                         {lead.status !== 'converted' && (

@@ -158,7 +158,7 @@ function inferLeadStatusFromHistory(history: LocalDocument[]): CrmLeadStatus {
     return aTs - bTs;
   });
 
-  let current: CrmLeadStatus = 'new_lead';
+  let current: CrmLeadStatus = 'new';
   let inboundCount = 0;
 
   for (const conversation of ordered) {
@@ -175,8 +175,8 @@ function inferLeadStatusFromHistory(history: LocalDocument[]): CrmLeadStatus {
     );
   }
 
-  if (current === 'new_lead' && inboundCount > 1) {
-    return 'normal_conversation';
+  if (current === 'new' && inboundCount > 1) {
+    return 'contacted';
   }
 
   return current;

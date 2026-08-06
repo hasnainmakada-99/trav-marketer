@@ -44,6 +44,10 @@ interface LeadDoc {
   notes?: string | null;
   source?: string | null;
   teamId?: string;
+  updatedAt?: string;
+  createdAt?: string;
+  $createdAt?: string;
+  $updatedAt?: string;
 }
 
 interface ThreadDoc {

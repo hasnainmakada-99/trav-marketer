@@ -278,10 +278,10 @@ Respond ONLY with valid JSON. No explanation.`.trim();
       parsed = JSON.parse(raw);
     } catch {
       const titleMatch = raw.match(/"title"\s*:\s*"([^"]+)"/);
-      const contentMatch = raw.match(/"content"\s*:\s*"([^"]+)"/s);
+      const contentMatch = raw.match(/"content"\s*:\s*"([^"]+)"/);
       parsed = {
         title: titleMatch?.[1] || inferTitleFromContent(raw, options?.title),
-        content: contentMatch?.[1] || raw,
+        content: contentMatch?.[1] || extractJsonStringField(raw, 'content'),
       };
     }
 
@@ -300,8 +300,13 @@ Respond ONLY with valid JSON. No explanation.`.trim();
   }
 }
 
-function inferTitleFromContent(content?: string, fallback?: string): string {
-  const clean = (content || '').replace(/#\S+/g, '').trim();
+function extractJsonStringField(raw: string, key: string): string {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = raw.match(new RegExp(`"${escaped}"\\s*:\\s*"([\\s\\S]*?)"(?=[,}\\s]|$)`, 'm'));
+  return match?.[1] || raw;
+}
+
+function inferTitleFromContent(content?: string, fallback?: string): string {  const clean = (content || '').replace(/#\S+/g, '').trim();
   const firstSentence = clean.split(/[.!?\n]/)[0]?.trim() || fallback || 'GBP Post';
   return firstSentence.length > 72 ? `${firstSentence.slice(0, 69)}...` : firstSentence;
 }

@@ -128,8 +128,8 @@ function inferLeadStatusFromHistory(
     resolvedStatus = mergeLeadStatus(resolvedStatus, nextStatus);
   }
 
-  if (resolvedStatus === 'new_lead' && sawIncoming && ordered.length > 1) {
-    return 'normal_conversation';
+  if (resolvedStatus === 'new' && sawIncoming && ordered.length > 1) {
+    return 'contacted';
   }
 
   return resolvedStatus;
