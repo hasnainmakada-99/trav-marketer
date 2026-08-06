@@ -1,3 +1,5 @@
+import { destinationBudgetHint } from '@/lib/travel-data';
+
 export type WorkflowIntent =
   | 'plan_holiday'
   | 'flights'
@@ -1549,12 +1551,16 @@ If the customer seems confused or off-topic -> gently redirect and re-ask the mi
 Keep it conversational, like a real travel consultant typing on WhatsApp.`;
 
   } else if (stage === 'show_packages') {
+    const budgetHint = slots?.destination ? destinationBudgetHint(slots.destination) : null;
+    const budgetLine = budgetHint
+      ? `BUDGET CONTEXT (typical per-person estimates — keep all INR figures within this band): ${budgetHint}\n`
+      : '';
     if (intent === 'flights') {
       const fromCity = slots?.from_city || 'the departure city';
       const toCity = slots?.to_city || 'the destination';
       const travelTime = slots?.travel_time || 'the travel date';
       const travellers = slots?.travellers || 'the given travellers';
-      task = `FLIGHT OPTIONS GENERATION - REQUIRED:
+      task = `${budgetLine}FLIGHT OPTIONS GENERATION - REQUIRED:
 Show 2 flight options from ${fromCity} to ${toCity} on ${travelTime} for ${travellers}.
 Format EXACTLY as:
 Option 1: Direct Flight
@@ -1576,7 +1582,7 @@ Use realistic INR pricing only. Never mention USD or $.`;
       const travelTime = slots?.travel_time || '';
       const nights = slots?.nights || '';
       const hotelPref = slots?.hotel_preference || '';
-      task = `HOTEL OPTIONS GENERATION - REQUIRED:
+      task = `${budgetLine}HOTEL OPTIONS GENERATION - REQUIRED:
 Show 3 hotel options in ${dest}${travellers ? ` for ${travellers}` : ''}${travelTime ? `, ${travelTime}` : ''}${nights ? `, ${nights} nights` : ''}${hotelPref ? ` (${hotelPref} preferred)` : ''}.
 Format EXACTLY as:
 [Hotel Name] | [Star Rating] | INR [realistic price per night] per night
@@ -1597,7 +1603,7 @@ Use realistic INR pricing only. Never mention USD or $.`;
       const travellers = slots?.travellers || '';
       const travelTime = slots?.travel_time || '';
       const departureCity = slots?.departure_city || '';
-      task = `PERSONALIZED PACKAGE GENERATION - REQUIRED:
+      task = `${budgetLine}PERSONALIZED PACKAGE GENERATION - REQUIRED:
 The customer wants a personalized holiday to ${dest} for ${travellers || 'the given travellers'}, ${travelTime || 'on the given dates'}, departing ${departureCity || 'from their city'}, ${nights} nights, ${hotelPref} hotels.
 Generate exactly 5 package options named: Classic Explorer, Scenic & Relaxation, Premium Experience, Budget Friendly, Luxury Touch.
 Format each as:
@@ -1618,7 +1624,7 @@ Use realistic INR pricing. Never mention USD or $.`;
       const travellers = slots?.travellers || '';
       const travelTime = slots?.travel_time || '';
       const departureCity = slots?.departure_city || '';
-      task = `EXCLUSIVE PACKAGE GENERATION - REQUIRED:
+      task = `${budgetLine}EXCLUSIVE PACKAGE GENERATION - REQUIRED:
 Show 3 exclusive holiday packages for ${dest}${travellers ? ` for ${travellers}` : ''}${travelTime ? `, ${travelTime}` : ''}${departureCity ? `, departing from ${departureCity}` : ''}, ${nights} nights.
 Format EXACTLY as:
 Package 1: Budget Deal

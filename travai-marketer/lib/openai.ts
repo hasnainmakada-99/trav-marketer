@@ -109,7 +109,8 @@ export async function getChatResponse(
   userMessage: string,
   systemPrompt: string,
   conversationHistory: Message[] = [],
-  model: string = getPreferredChatModel()
+  model: string = getPreferredChatModel(),
+  maxTokens: number = 700
 ): Promise<string> {
   try {
     const messages: Message[] = [
@@ -128,7 +129,7 @@ export async function getChatResponse(
       model,
       messages,
       temperature: 0.3,
-      max_tokens: 700,
+      max_tokens: maxTokens,
     });
 
     return response.choices[0]?.message?.content || '';

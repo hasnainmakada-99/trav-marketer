@@ -18,6 +18,13 @@ import { normalizeToWhatsAppMarkdown } from '@/lib/whatsapp-format';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { loadTravelKnowledge } from '@/lib/travel-knowledge';
 import {
+  buildDestinationKnowledgePrompt,
+  buildCurrencyPrompt,
+  visaQuickGuide,
+  getTrustedPriceTokens,
+  findDestination,
+} from '@/lib/travel-data';
+import {
   buildPhoneVariants,
   coerceLeadStatus,
   deriveLeadStatus,
@@ -1120,17 +1127,35 @@ async function validateAndSanitizeResponse(
   let cleaned = response;
   const lower = cleaned.toLowerCase();
   const snippetText = databaseSnippets.join(' ').toLowerCase();
-  const word = (s: string) => s.replace(/\s+/g, '').toLowerCase();
+  const digitsOf = (s: string) => s.replace(/[^0-9]/g, '');
+  const snippetDigits = digitsOf(snippetText);
 
-  // 1. If a price pattern like "₹25,000" exists in response but NOT in DB snippets,
-  //    replace only the invented prices with a softer range marker.
+  // Prices are considered "known"/safe to keep when they come from:
+  //  - the CRM database snippets, OR
+  //  - the curated DESTINATION KNOWLEDGE price bands (its min/max figures), OR
+  //  - the typical per-person budget band for the destination currently in context.
+  const trustedPriceSet = new Set(getTrustedPriceTokens());
+  const destinationProfile = workflowState.slots?.destination
+    ? findDestination(String(workflowState.slots.destination))
+    : undefined;
+
+  // 1. If a price pattern like "₹25,000" exists in response but isn't backed by a
+  //    trusted source, replace only the invented prices with a softer range marker.
   const pricePattern = /₹\s*[\d,]+(?:[\d,.]*)/gi;
   const inventedPrices: string[] = [];
   let priceMatch: RegExpExecArray | null = null;
   const priceRe = new RegExp(pricePattern.source, 'gi');
   while ((priceMatch = priceRe.exec(cleaned)) !== null) {
     const p = priceMatch[0];
-    if (!snippetText.includes(word(p)) && !snippetText.includes(word(p.replace(/\s/g, '')))) {
+    const num = digitsOf(p);
+    if (!num) continue;
+    const inSnippet = snippetDigits.includes(num);
+    const inCurated = trustedPriceSet.has(num);
+    const inBudgetBand =
+      destinationProfile &&
+      Number(num) >= destinationProfile.priceMin &&
+      Number(num) <= destinationProfile.priceMax;
+    if (!inSnippet && !inCurated && !inBudgetBand) {
       inventedPrices.push(p);
     }
   }
@@ -1560,26 +1585,11 @@ TRAVENTIONS SERVICES:
 - Website: ${safeBestWebsiteUrl} | Email: info@traventions.com
 - Customers can request a callback from a travel specialist at any time.
 
-POPULAR INDIAN OUTBOUND DESTINATIONS:
-- Dubai/UAE: visa on arrival for Indians (14-30 days), popular for shopping, desert safaris, theme parks, Burj Khalifa.
-- Thailand: visa on arrival (15 days), popular for Bangkok, Phuket, Pattaya, Krabi — beaches, temples, nightlife.
-- Bali/Indonesia: visa on arrival (30 days), popular for Ubud, Seminyak, Nusa Penida — culture, surf, rice terraces.
-- Maldives: visa on arrival (30 days), overwater villas, snorkeling, luxury resorts.
-- Singapore: eVisa required, popular for Sentosa, Universal Studios, Gardens by Bay, shopping.
-- Malaysia: visa-free for Indians (30 days), Kuala Lumpur, Langkawi, Genting Highlands.
-- Sri Lanka: visa on arrival (ETA), popular for Kandy, Galle, Ella, wildlife safaris, tea plantations.
-- Europe (Schengen): visa required (apply 3-4 weeks ahead), popular for Switzerland, France, Italy, Greece — package durations 7-14 days typical.
-- Vietnam: eVisa (30 days), popular for Hanoi, Ha Long Bay, Ho Chi Minh City, Hoi An.
-- Turkey: eVisa, popular for Istanbul, Cappadocia, Antalya, Pamukkale.
+${buildDestinationKnowledgePrompt()}
 
-INDIAN DOMESTIC DESTINATIONS:
-- Kashmir: "Paradise on Earth" — Srinagar, Gulmarg, Pahalgam, Sonamarg — houseboats, skiing, Mughal gardens.
-- Kerala: "God's Own Country" — Munnar, Alleppey, Kumarakom, Thekkady — backwaters, houseboats, tea plantations.
-- Goa: beaches, nightlife, Portuguese architecture, water sports.
-- Himachal: Manali, Shimla, Dharamshala, Kasol — mountains, snow, adventure sports, trekking.
-- Uttarakhand: Nainital, Mussoorie, Rishikesh, Jim Corbett — hill stations, rafting, wildlife, yoga.
-- Rajasthan: Jaipur, Udaipur, Jodhpur, Jaisalmer — forts, palaces, desert safaris, heritage hotels.
-- Andaman: Port Blair, Havelock — beaches, scuba diving, sea walks, cellular jail.
+${buildCurrencyPrompt()}
+
+${visaQuickGuide()}
 
 GENERAL TRAVEL TIPS:
 - Best time to visit most hill stations: October to June.
@@ -1588,7 +1598,9 @@ GENERAL TRAVEL TIPS:
 - Travel insurance is recommended for all international travel and is often mandatory for Schengen visas.
 - Visa processing for most countries takes 3-15 working days.
 - Advance booking (3-4 weeks) usually gets better flight + hotel rates.
-- Forex/currency exchange services available at competitive rates through Traventions.`,
+- Forex/currency exchange services available at competitive rates through Traventions.
+- Typical trip lengths: Dubai/Thailand/Bali 4-6 nights, Europe 7-14 nights, domestic hill stations 3-6 nights.
+- Budget figures in DESTINATION KNOWLEDGE are typical per-person estimates (air + hotels) and depend on season, hotel category and availability — present them as ranges, never as exact live quotes.`,
 
       businessConfig?.openaiSystemPrompt || '',
       `You are Sini, a confident, warm, and highly knowledgeable travel consultant for Traventions (a full-service travel agency in India). You ALWAYS send a useful reply to every customer message — no exceptions.
@@ -1608,7 +1620,10 @@ IDENTITY & CONFIDENCE RULES:
       databasePolicyBlock,
       `HANDLING ALL INPUTS (mandatory - follow in order):
 - Short/emoji-only replies (ok, yes, no, 👍, 🙏, hmm) → interpret in context of the current workflow stage. If ambiguous, gently re-ask the stage question.
-- Questions mid-flow (Is Dubai visa-free? What currency for Bali? What services do you offer? Where's your office?) → answer confidently from GENERAL TRAVEL KNOWLEDGE above in 1-3 sentences, then continue the current stage naturally.
+- Direct travel questions (visa, passport, currency, best time to visit, weather, flight duration, how many days recommended, what to do/see, typical budget for a destination, is it good for family/honeymoon/friends) → answer ACCURATELY and COMPLETELY from DESTINATION KNOWLEDGE above. Keep it useful: give the fact + a short bullet or two. Then, if you were mid-flow, gently resume the current stage. NEVER skip a direct travel question to push the flow.
+- Questions mid-flow (Is Dubai visa-free? What currency for Bali? What services do you offer? Where's your office?) → answer confidently from DESTINATION KNOWLEDGE / CURRENCY & FOREX above in 2-4 sentences, then continue the current stage naturally.
+- Vague trip requests ("we want a beach holiday", "suggest a honeymoon destination", "where should we go?") → recommend 2-3 suitable options from DESTINATION KNOWLEDGE based on their hints (budget, group type, season, interests), then ask which one they prefer and continue collecting details.
+- Budget questions ("how much for a honeymoon to Bali?", "what's the cost of a Dubai trip?") → give the typical per-person range from DESTINATION KNOWLEDGE, note it varies with season and hotel category, then ask the key details needed (dates, travellers, departure city) to prepare options.
 - General/unknown (single words like "travel", "hello", "help", questions about Traventions) → answer helpfully and ask how you can assist with trip planning.
 - Hindi or Hinglish → respond naturally in the same language, continue the flow.
 - Angry or frustrated → empathize sincerely first ("I understand your concern"), then offer a solution or human handover.
@@ -1635,14 +1650,15 @@ GLOBAL RULES:
 - If the needed info is already in chat history, answer directly — don't re-ask or repeat the menu.`,
 
       `ACCURACY & HONESTY POLICY (follow strictly):
+- Treat DESTINATION KNOWLEDGE above as FACTS: visa rules, best time to visit, currency, flight duration, recommended duration and typical budget bands for those destinations. State them confidently and accurately.
+- Budget figures are TYPICAL ESTIMATES. Always frame them as ranges ("typically ₹28,000–₹45,000 per person, depending on season and hotel") — never as a confirmed live quote.
+- When generating packages/flights/hotels, keep every INR figure WITHIN the destination's typical budget band from DESTINATION KNOWLEDGE. Lower end = 3-star/budget; higher end = 4-5 star/luxury.
 - When PACKAGE KNOWLEDGE has data: present it as the actual Traventions offering. Use real prices, names, and inclusions from the data.
-- When PACKAGE KNOWLEDGE is empty: use GENERAL TRAVEL KNOWLEDGE confidently. Give general destination advice, typical price ranges (from your general knowledge), and popular travel tips. Clearly frame as "Typically, a 5-night Bali trip starts around ₹45,000 per person including flights and hotels" rather than claiming a specific live package.
 - For exact live pricing, availability, or real-time inventory → always say "Let me connect you with our team who can check real-time availability and give you the exact price."
 - NEVER invent specific package names, hotel names, flight numbers, or exact dates.
 - NEVER claim "I just checked" or "our system shows" unless the specific data is in PACKAGE KNOWLEDGE above.
-- If a customer asks about availability or live pricing → "Let me get our operations team to check real-time availability for you. They'll get back with exact prices."
-- INR only. If unsure of an exact price, give a general range: "Typically starts from ₹XX,XXX".
-- Website URLs must ONLY be from the WEBSITE PAGES list above. Never invent URLs.`,
+- If the destination is NOT in DESTINATION KNOWLEDGE, do NOT invent specific INR figures — give general guidance and offer to connect the customer with our operations team for exact pricing.
+- INR only. Website URLs must ONLY be from the WEBSITE PAGES list above. Never invent URLs.`,
       knowledge.databaseSnippets.length
         ? `\nPACKAGE KNOWLEDGE (use as primary truth source when applicable):\n${knowledge.databaseSnippets.slice(0, 8).map((v, i) => `${i + 1}. ${v}`).join('\n')}`
         : '',
@@ -1657,7 +1673,13 @@ GLOBAL RULES:
     let response: string;
     if (process.env.OPENAI_API_KEY) {
       try {
-        response = await getChatResponse(correctedText, generalTravelKnowledge, history);
+        response = await getChatResponse(
+          correctedText,
+          generalTravelKnowledge,
+          history,
+          undefined,
+          workflowState.stage === 'show_packages' ? 1200 : 700
+        );
         response = enforceSafeUrlsInReply(response);
       } catch (err) {
         console.error('[WhatsApp] OpenAI reply failed:', err);
