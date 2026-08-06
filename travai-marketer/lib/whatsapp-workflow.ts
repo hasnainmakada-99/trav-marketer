@@ -1228,39 +1228,38 @@ export function buildWorkflowReply(state: WorkflowState): string | null {
 
   // collect_lead
   if (stage === 'collect_lead') {
-    const missingLeadLines = [
-      !slots.name ? '👤 - Full Name' : '',
-      !slots.phone ? '📞 - Contact Number' : '',
-      !slots.callback_time ? '⏰ - Preferred Callback Time' : '',
-    ].filter(Boolean);
+    const missing: string[] = [];
+    if (!slots.name) missing.push('your good name');
+    if (!slots.phone) missing.push('your contact number');
+    if (!slots.callback_time) missing.push('a convenient time for the call');
 
-    const capturedLeadLines = [
-      slots.name ? `✅ Name - ${slots.name}` : '',
-      slots.phone ? `✅ Contact Number - ${slots.phone}` : '',
-      slots.callback_time ? `✅ Callback Time - ${slots.callback_time}` : '',
-    ].filter(Boolean);
+    const capturedHint =
+      slots.name || slots.phone || slots.callback_time
+        ? ` (already noted: ${[
+            slots.name ? `name ${slots.name}` : '',
+            slots.phone ? `number ${slots.phone}` : '',
+            slots.callback_time ? `time ${slots.callback_time}` : '',
+          ].filter(Boolean).join(', ')})`
+        : '';
 
-    const exampleParts = [
-      !slots.name ? 'Rahul' : '',
-      !slots.phone ? '+91 9876543210' : '',
-      !slots.callback_time ? 'Today at 5 PM' : '',
-    ].filter(Boolean);
+    if (missing.length === 0) {
+      return (
+        `Perfect! I’m noting this down so our travel expert calls you right on time. 📝😊\n\n` +
+        buildBrochureOffer(intent, slots.name)
+      );
+    }
 
-    const capturedBlock = capturedLeadLines.length
-      ? `${capturedLeadLines.join('\n')}\n\n`
-      : '';
-    const exampleBlock = exampleParts.length
-      ? `Example: ${exampleParts.join(', ')}\n\n`
-      : '';
+    const ask =
+      missing.length === 1
+        ? `Just so our team knows who to ask for — could I have ${missing[0]}?`
+        : `Could I have ${missing.join(' and ')}?`;
 
     return (
-      'I can arrange a quick call from our travel expert. 📞🤝\n\n' +
-      'Please share the remaining details: 📝\n\n' +
-      capturedBlock +
-      `${missingLeadLines.join('\n')}\n\n` +
-      exampleBlock +
-      'We will call you at the time that suits you best. 😊'
-    ) + buildBrochureOffer(intent, slots.name);
+      `Fantastic! Let me line that up for you. 🎉\n\n` +
+      `${ask}${capturedHint}\n\n` +
+      `No need to format it perfectly — for example: "Rahul, +91 9876543210, today at 5 PM".\n\n` +
+      `We’ll call you at the time that suits you best. 😊`
+    );
   }
 
   // ask_callback
@@ -1646,14 +1645,15 @@ Use realistic INR pricing only. Never mention USD or $.`;
     }
 
   } else if (stage === 'collect_lead') {
-    task = `Ask the customer for the remaining lead details in one warm, natural message.
+    task = `The customer is ready to be called back. Capture the remaining lead details QUIETLY and NATURALLY — never announce that you are "collecting details" or "saving a lead", and never list missing fields as a bullet checklist.
 Required fields are only: Full Name, Phone Number, and Preferred Callback Time.
-Format example: "Rahul, +91 9876543210, Today at 5 PM"
-Do NOT ask for travel details, they are already collected.
-Already have: ${collected}.
-Tell them our travel expert will call at their preferred time.
-Do not sound like a form or checklist unless some details are still missing.
-If they ask any travel-related or Traventions/platform/business question, answer it briefly first, then return to the missing lead details.`;
+- First check the conversation history: the customer may have already shared their name, phone, or a preferred time in a previous message — never re-ask for anything already provided. Already have: ${collected}.
+- Weave each missing detail into a friendly conversational question, one at a time (name first, then phone, then time). Example: "By the way, may I know your good name, so our travel expert knows who to ask for?" — not "Please provide your name."
+- Confirm phone numbers back softly: "Just to confirm, is this the right number: +91 XXXXX? 🙂"
+- Do NOT say the word "lead", "form", "database", "CRM", or that their info is being recorded anywhere.
+- If they ask any travel-related or Traventions/platform/business question, answer it briefly first, then gently return to the missing detail.
+- Never ask for travel details — those are already collected.`;
+
 
   } else if (stage === 'ask_callback') {
     task = `Ask ONLY for the customer's preferred callback time.

@@ -71,6 +71,12 @@ const YCLOUD_WEBHOOK_SECRET = (process.env.YCLOUD_WEBHOOK_SECRET || '')
 const YCLOUD_ENFORCE_SIGNATURE = process.env.YCLOUD_ENFORCE_SIGNATURE === 'true';
 const RECENT_INBOUND_TTL_MS = 2 * 60 * 1000;
 const RECENT_AI_DUPLICATE_WINDOW_MS = 45 * 1000;
+const LEAD_EMAIL_LOCK_MS = 5 * 60 * 1000;
+const CALLBACK_EMAIL_LOCK_MS = 5 * 60 * 1000;
+// In-memory notification locks to guarantee a lead/callback is emailed only ONCE,
+// even if a DB flag write fails or two messages arrive in quick succession.
+const leadEmailLocks = new Map<string, number>();
+const callbackEmailLocks = new Map<string, number>();
 const CLASSIFY_TIMEOUT_MS = Number(process.env.WA_CLASSIFY_TIMEOUT_MS || '1200');
 const KNOWLEDGE_TIMEOUT_MS = Number(process.env.WA_KNOWLEDGE_TIMEOUT_MS || '1800');
 const TYPING_REFRESH_MS = Number(process.env.WA_TYPING_REFRESH_MS || '2200');
@@ -537,9 +543,15 @@ async function saveLead(params: {
 
   // Intelligent notification: only email ONCE, and only after the lead is
   // substantially captured (has a name / email / real intent). A bare greeting
-  // or phone number alone must not spam the inbox.
-  const alreadyNotified = (existingLead as { emailNotifiedAt?: string } | undefined)?.emailNotifiedAt;
-  if (leadId && !alreadyNotified && isLeadCaptured({ name, email, notes: nextNotes, intent })) {
+  // or phone number alone must not spam the inbox. The in-memory lock
+  // (leadEmailLocks) is a second safety net so a duplicate email can never be
+  // sent to the client even if two webhooks race or the DB flag fails to persist.
+  const alreadyNotified = Boolean((existingLead as { emailNotifiedAt?: string } | undefined)?.emailNotifiedAt);
+  const lockKey = `${teamId}:${phone}`;
+  const lockExpiry = leadEmailLocks.get(lockKey);
+  const lockHeld = typeof lockExpiry === 'number' && lockExpiry > Date.now();
+  if (leadId && !alreadyNotified && !lockHeld && isLeadCaptured({ name, email, notes: nextNotes, intent })) {
+    leadEmailLocks.set(lockKey, Date.now() + LEAD_EMAIL_LOCK_MS);
     await sendLeadNotificationEmail({
       name,
       phone,
@@ -549,6 +561,7 @@ async function saveLead(params: {
       serviceInterest: intent || null,
     });
     await updateDocument('leads', leadId, { emailNotifiedAt: now }).catch(() => {});
+    leadEmailLocks.delete(lockKey);
   }
 
   return { leadId: leadId || null, status: resolvedStatus, existed: Boolean(existingLead?.$id) };
@@ -1712,8 +1725,12 @@ GLOBAL RULES:
       const cbLead = await findLatestLead(resolvedTeamId, phone).catch(() => ({ documents: [] }));
       const cbLeadDoc = cbLead.documents[0] as { $id?: string; callbackNotifiedAt?: string } | undefined;
       const alreadySentCallback = Boolean(cbLeadDoc?.callbackNotifiedAt);
+      const cbLockKey = `${resolvedTeamId}:${phone}`;
+      const cbLockExpiry = callbackEmailLocks.get(cbLockKey);
+      const cbLockHeld = typeof cbLockExpiry === 'number' && cbLockExpiry > Date.now();
 
-      if (!alreadySentCallback && cbLeadDoc?.$id) {
+      if (!alreadySentCallback && !cbLockHeld && cbLeadDoc?.$id) {
+        callbackEmailLocks.set(cbLockKey, Date.now() + CALLBACK_EMAIL_LOCK_MS);
         const emailResult = await sendCallbackEmails({
           customerEmail: enrichedCustomerEmail,
           customerName: enrichedCustomerName,
@@ -1733,8 +1750,11 @@ GLOBAL RULES:
         } else {
           console.warn(`[WhatsApp] Callback email not sent: ${emailResult.reason}`);
         }
+        callbackEmailLocks.delete(cbLockKey);
       } else if (alreadySentCallback) {
         console.log(`[WhatsApp] Callback email skipped for ${phone} — already notified once`);
+      } else if (cbLockHeld) {
+        console.log(`[WhatsApp] Callback email skipped for ${phone} — in-flight lock held`);
       }
     }
 
