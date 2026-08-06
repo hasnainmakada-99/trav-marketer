@@ -303,6 +303,89 @@
         "CREATE INDEX idx_website_knowledge_team_active ON website_knowledge (teamId, isActive)",
         "CREATE INDEX idx_website_knowledge_hash ON website_knowledge (contentHash)"
       ]
+    },
+    {
+      "name": "destinations",
+      "type": "base",
+      "fields": [
+        { "name": "appwriteId", "type": "text", "required": false, "max": 255 },
+        { "name": "teamId", "type": "text", "required": true, "max": 256 },
+        { "name": "slug", "type": "text", "required": true, "max": 128 },
+        { "name": "name", "type": "text", "required": true, "max": 256 },
+        { "name": "destination", "type": "text", "required": false, "max": 256 },
+        { "name": "country", "type": "text", "required": false, "max": 128 },
+        { "name": "category", "type": "text", "required": false, "max": 64 },
+        { "name": "visa", "type": "text", "required": false, "max": 1024 },
+        { "name": "bestTime", "type": "text", "required": false, "max": 1024 },
+        { "name": "currency", "type": "text", "required": false, "max": 128 },
+        { "name": "duration", "type": "text", "required": false, "max": 256 },
+        { "name": "price", "type": "text", "required": false, "max": 512 },
+        { "name": "goodFor", "type": "text", "required": false, "max": 512 },
+        { "name": "highlights", "type": "text", "required": false, "max": 8000 },
+        { "name": "description", "type": "text", "required": false, "max": 20000 },
+        { "name": "tags", "type": "json", "required": false },
+        { "name": "isActive", "type": "bool", "required": false },
+        { "name": "createdAt", "type": "date", "required": false },
+        { "name": "updatedAt", "type": "date", "required": false }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_destinations_appwriteId ON destinations (appwriteId)",
+        "CREATE INDEX idx_destinations_team_slug ON destinations (teamId, slug)",
+        "CREATE INDEX idx_destinations_team_name ON destinations (teamId, name)"
+      ]
+    },
+    {
+      "name": "itineraries",
+      "type": "base",
+      "fields": [
+        { "name": "appwriteId", "type": "text", "required": false, "max": 255 },
+        { "name": "teamId", "type": "text", "required": true, "max": 256 },
+        { "name": "slug", "type": "text", "required": true, "max": 128 },
+        { "name": "destination", "type": "text", "required": true, "max": 256 },
+        { "name": "title", "type": "text", "required": true, "max": 512 },
+        { "name": "days", "type": "number", "required": false },
+        { "name": "nights", "type": "number", "required": false },
+        { "name": "hotelCategory", "type": "text", "required": false, "max": 64 },
+        { "name": "price", "type": "text", "required": false, "max": 512 },
+        { "name": "inclusions", "type": "text", "required": false, "max": 4000 },
+        { "name": "exclusions", "type": "text", "required": false, "max": 4000 },
+        { "name": "highlights", "type": "text", "required": false, "max": 4000 },
+        { "name": "itinerary", "type": "text", "required": false, "max": 20000 },
+        { "name": "description", "type": "text", "required": false, "max": 8000 },
+        { "name": "tags", "type": "json", "required": false },
+        { "name": "isActive", "type": "bool", "required": false },
+        { "name": "createdAt", "type": "date", "required": false },
+        { "name": "updatedAt", "type": "date", "required": false }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_itineraries_appwriteId ON itineraries (appwriteId)",
+        "CREATE INDEX idx_itineraries_team_slug ON itineraries (teamId, slug)",
+        "CREATE INDEX idx_itineraries_team_destination ON itineraries (teamId, destination)"
+      ]
+    },
+    {
+      "name": "promotions",
+      "type": "base",
+      "fields": [
+        { "name": "appwriteId", "type": "text", "required": false, "max": 255 },
+        { "name": "teamId", "type": "text", "required": true, "max": 256 },
+        { "name": "slug", "type": "text", "required": true, "max": 128 },
+        { "name": "title", "type": "text", "required": true, "max": 512 },
+        { "name": "destination", "type": "text", "required": false, "max": 256 },
+        { "name": "price", "type": "text", "required": false, "max": 512 },
+        { "name": "validUntil", "type": "text", "required": false, "max": 128 },
+        { "name": "description", "type": "text", "required": false, "max": 8000 },
+        { "name": "highlights", "type": "text", "required": false, "max": 4000 },
+        { "name": "tags", "type": "json", "required": false },
+        { "name": "isActive", "type": "bool", "required": false },
+        { "name": "createdAt", "type": "date", "required": false },
+        { "name": "updatedAt", "type": "date", "required": false }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_promotions_appwriteId ON promotions (appwriteId)",
+        "CREATE INDEX idx_promotions_team_slug ON promotions (teamId, slug)",
+        "CREATE INDEX idx_promotions_team_active ON promotions (teamId, isActive)"
+      ]
     }
   ]
 }
