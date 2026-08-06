@@ -12,6 +12,7 @@
     "setup-db": "node scripts/setup-database.js",
     "setup-db:prod": "cross-env NODE_ENV=production node scripts/setup-database.js",
     "setup-pocketbase": "node scripts/setup-pocketbase.mjs",
+    "seed-travel-data": "node scripts/seed-travel-data.mjs",
     "migrate-pocketbase:cache": "node scripts/migrate-local-cache-to-pocketbase.mjs",
     "migrate-pocketbase:appwrite": "node scripts/migrate-appwrite-to-pocketbase.mjs",
     "migrate-pocketbase:remaining": "node scripts/migrate-appwrite-to-pocketbase.mjs business_configs,staff,campaigns,campaign_logs,gbp_posts,gbp_reviews,wa_local_templates,gbp_media,website_knowledge"
