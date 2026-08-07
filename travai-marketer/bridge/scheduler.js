@@ -786,18 +786,27 @@ async function runStalledConversationJob() {
         continue;
       }
 
-      // At most one nudge per unanswered question: skip if a nudge was already
-      // sent after this AI question. A new customer reply resets the stall, so
-      // the next question can be nudged once too.
+      // Strict rule: at most ONE nudge per customer message (per 24h window).
+      // Anchor on the customer's last inbound message — if a nudge marker already
+      // exists after it, this window has been nudged, so skip. When the customer
+      // messages again, their last message moves past the marker, allowing one more.
+      const lastUser = await pb.collection('conversations').getList(1, 1, {
+        filter: `phone = "${escapeFilterValue(phone)}" && role = "user"`,
+        sort: '-createdAt',
+      });
+      const lastUserTs =
+        lastUser.totalItems > 0
+          ? new Date(lastUser.items[0].createdAt || 0).getTime()
+          : aiTs;
       const alreadyNudged = await pb.collection('conversations').getList(1, 1, {
         filter:
           `phone = "${escapeFilterValue(phone)}" && ` +
           `sentBy = "ai" && ` +
           `message = "nudge:stalled" && ` +
-          `createdAt > "${escapeFilterValue(pbDateStr(new Date(aiTs)))}"`,
+          `createdAt > "${escapeFilterValue(pbDateStr(new Date(lastUserTs)))}"`,
       });
       if (alreadyNudged.totalItems > 0) {
-        console.log(`[Scheduler] Skipping stall nudge to ${phone} — already nudged for this question`);
+        console.log(`[Scheduler] Skipping stall nudge to ${phone} — already nudged after customer's last message`);
         continue;
       }
 
