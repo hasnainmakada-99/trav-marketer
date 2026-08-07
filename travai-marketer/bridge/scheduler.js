@@ -76,6 +76,14 @@ function escapeFilterValue(value) {
     .replace(/"/g, '\\"');
 }
 
+// PocketBase stores datetime fields in "YYYY-MM-DD HH:MM:SS.mmmZ" form and
+// compares them lexicographically. toISOString() uses a "T" separator, which
+// never matches recent records in filter comparisons. Convert before filtering.
+function pbDateStr(value) {
+  const d = value instanceof Date ? value : new Date(value);
+  return d.toISOString().replace('T', ' ');
+}
+
 async function listLeadsForFollowup(threeDaysAgo) {
   if (APP_DATA_BACKEND === 'pocketbase') {
     const pb = await getPocketBaseClient();
@@ -83,7 +91,7 @@ async function listLeadsForFollowup(threeDaysAgo) {
       filter:
         `teamId = "${escapeFilterValue(TEAM_ID)}" && ` +
         `status != "converted" && status != "closed" && ` +
-        `lastContactedAt < "${escapeFilterValue(threeDaysAgo)}"`,
+        `lastContactedAt < "${escapeFilterValue(pbDateStr(threeDaysAgo))}"`,
       sort: '-createdAt',
     });
   }
@@ -120,7 +128,7 @@ async function listScheduledCampaigns(nowIso) {
     return await pb.collection('campaigns').getFullList({
       filter:
         `teamId = "${escapeFilterValue(TEAM_ID)}" && ` +
-        `status = "scheduled" && scheduledAt <= "${escapeFilterValue(nowIso)}"`,
+        `status = "scheduled" && scheduledAt <= "${escapeFilterValue(pbDateStr(nowIso))}"`,
       sort: '+scheduledAt',
     });
   }
@@ -137,7 +145,7 @@ async function listScheduledCampaigns(nowIso) {
 async function hasRecentCustomerMessage(phone) {
   const normalized = String(phone || '').replace(/[^\d]/g, '');
   if (!normalized) return false;
-  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const cutoff = pbDateStr(new Date(Date.now() - 24 * 60 * 60 * 1000));
 
   try {
     if (APP_DATA_BACKEND === 'pocketbase') {
@@ -331,8 +339,8 @@ async function listConvertedLeadsForReview() {
         `teamId = "${escapeFilterValue(TEAM_ID)}" && ` +
         `status = "converted" && ` +
         `(reviewRequestSentAt = null || reviewRequestSentAt = "") && ` +
-        `updatedAt >= "${escapeFilterValue(sevenDaysAgo)}" && ` +
-        `updatedAt <= "${escapeFilterValue(twoDaysAgo)}"`,
+        `updatedAt >= "${escapeFilterValue(pbDateStr(sevenDaysAgo))}" && ` +
+        `updatedAt <= "${escapeFilterValue(pbDateStr(twoDaysAgo))}"`,
       sort: '-updatedAt',
     });
   }
@@ -475,8 +483,8 @@ async function listPendingTransactions(sinceDate, untilDate) {
     return await pb.collection('transactions').getFullList({
       filter:
         `status = "pending" && ` +
-        `createdAt >= "${escapeFilterValue(sinceDate)}" && ` +
-        `createdAt <= "${escapeFilterValue(untilDate)}"`,
+        `createdAt >= "${escapeFilterValue(pbDateStr(sinceDate))}" && ` +
+        `createdAt <= "${escapeFilterValue(pbDateStr(untilDate))}"`,
       sort: '-createdAt',
     });
   }
@@ -581,7 +589,7 @@ async function listRenewableTransactions(keywords, monthlyFrom, monthlyTo, annua
   if (APP_DATA_BACKEND === 'pocketbase') {
     const pb = await getPocketBaseClient();
     const svcFilter = keywords.map(k => `service ~ "${escapeFilterValue(k)}"`).join(' || ');
-    const dateFilter = `((date >= "${escapeFilterValue(monthlyFrom)}" && date <= "${escapeFilterValue(monthlyTo)}") || (date >= "${escapeFilterValue(annualFrom)}" && date <= "${escapeFilterValue(annualTo)}"))`;
+    const dateFilter = `((date >= "${escapeFilterValue(pbDateStr(monthlyFrom))}" && date <= "${escapeFilterValue(pbDateStr(monthlyTo))}") || (date >= "${escapeFilterValue(pbDateStr(annualFrom))}" && date <= "${escapeFilterValue(pbDateStr(annualTo))}"))`;
     return await pb.collection('transactions').getFullList({
       filter: `(${svcFilter}) && ${dateFilter}`,
       sort: '-date',
@@ -604,7 +612,7 @@ async function listRenewableLeads(keywords, monthlyFrom, monthlyTo, annualFrom, 
   if (APP_DATA_BACKEND === 'pocketbase') {
     const pb = await getPocketBaseClient();
     const notesFilter = keywords.map(k => `notes ~ "${escapeFilterValue(k)}"`).join(' || ');
-    const dateFilter = `((lastContactedAt >= "${escapeFilterValue(monthlyFrom)}" && lastContactedAt <= "${escapeFilterValue(monthlyTo)}") || (lastContactedAt >= "${escapeFilterValue(annualFrom)}" && lastContactedAt <= "${escapeFilterValue(annualTo)}"))`;
+    const dateFilter = `((lastContactedAt >= "${escapeFilterValue(pbDateStr(monthlyFrom))}" && lastContactedAt <= "${escapeFilterValue(pbDateStr(monthlyTo))}") || (lastContactedAt >= "${escapeFilterValue(pbDateStr(annualFrom))}" && lastContactedAt <= "${escapeFilterValue(pbDateStr(annualTo))}"))`;
     return await pb.collection('leads').getFullList({
       filter: `(${notesFilter}) && ${dateFilter}`,
       sort: '-lastContactedAt',
@@ -674,7 +682,7 @@ async function listCompletedTransactions(sinceDate) {
   if (APP_DATA_BACKEND === 'pocketbase') {
     const pb = await getPocketBaseClient();
     return await pb.collection('transactions').getFullList({
-      filter: `status = "completed" && date >= "${escapeFilterValue(sinceDate)}"`,
+      filter: `status = "completed" && date >= "${escapeFilterValue(pbDateStr(sinceDate))}"`,
       sort: '-date',
     });
   }
@@ -728,7 +736,7 @@ async function runStalledConversationJob() {
   console.log('[Scheduler] Stalled conversation nudge job...');
   const stallMinutes = Number(process.env.WA_STALL_NUDGE_MINUTES || '30');
   const nudgeCooldownHours = Number(process.env.WA_STALL_NUDGE_COOLDOWN_HOURS || 2);
-  const staleCutoff = new Date(Date.now() - stallMinutes * 60 * 1000).toISOString();
+  const staleCutoff = pbDateStr(new Date(Date.now() - stallMinutes * 60 * 1000));
 
   try {
     if (APP_DATA_BACKEND !== 'pocketbase') {
@@ -743,6 +751,7 @@ async function runStalledConversationJob() {
       filter:
         `teamId = "${escapeFilterValue(TEAM_ID)}" && ` +
         `sentBy = "ai" && ` +
+        `message != "nudge:stalled" && ` +
         `createdAt <= "${escapeFilterValue(staleCutoff)}"`,
       sort: '-createdAt',
     });
@@ -770,23 +779,25 @@ async function runStalledConversationJob() {
         filter:
           `phone = "${escapeFilterValue(phone)}" && ` +
           `role = "user" && ` +
-          `createdAt > "${escapeFilterValue(new Date(aiTs).toISOString())}"`,
+          `createdAt > "${escapeFilterValue(pbDateStr(new Date(aiTs)))}"`,
       });
       if (userReplyAfter.totalItems > 0) {
         console.log(`[Scheduler] Skipping stall nudge to ${phone} — customer replied after question`);
         continue;
       }
 
-      // Avoid spamming: skip if a nudge was already sent recently.
-      const recentNudges = await pb.collection('conversations').getList(1, 1, {
+      // At most one nudge per unanswered question: skip if a nudge was already
+      // sent after this AI question. A new customer reply resets the stall, so
+      // the next question can be nudged once too.
+      const alreadyNudged = await pb.collection('conversations').getList(1, 1, {
         filter:
           `phone = "${escapeFilterValue(phone)}" && ` +
           `sentBy = "ai" && ` +
           `message = "nudge:stalled" && ` +
-          `createdAt > "${escapeFilterValue(new Date(Date.now() - nudgeCooldownHours * 60 * 60 * 1000).toISOString())}"`,
+          `createdAt > "${escapeFilterValue(pbDateStr(new Date(aiTs)))}"`,
       });
-      if (recentNudges.totalItems > 0) {
-        console.log(`[Scheduler] Skipping stall nudge to ${phone} — already nudged recently`);
+      if (alreadyNudged.totalItems > 0) {
+        console.log(`[Scheduler] Skipping stall nudge to ${phone} — already nudged for this question`);
         continue;
       }
 
