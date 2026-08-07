@@ -735,7 +735,6 @@ async function runUpsellJob() {
 async function runStalledConversationJob() {
   console.log('[Scheduler] Stalled conversation nudge job...');
   const stallMinutes = Number(process.env.WA_STALL_NUDGE_MINUTES || '30');
-  const nudgeCooldownHours = Number(process.env.WA_STALL_NUDGE_COOLDOWN_HOURS || 2);
   const staleCutoff = pbDateStr(new Date(Date.now() - stallMinutes * 60 * 1000));
 
   try {
