@@ -51,7 +51,6 @@ import {
   buildConfirmedWorkflowReply,
   isAffirmativeContinuationReply,
   isCallbackConfirmationMessage,
-  isConversationClosureReply,
   isQuestionLike,
   isTravelOrPlatformQueryLike,
   type WorkflowIntent,
@@ -897,18 +896,20 @@ async function processIncomingMessage(
     }
 
     const greetingMessage = isGreetingMessage(text);
-    // Preprocess: fix typos via AI + classify intent in one call
+    // Preprocess: fix typos via AI + classify intent + detect closure in one call
     const businessContext = `Team: ${teamId}, channel: whatsapp`;
     let intent = 'other';
     let correctedText = text; // AI-corrected version used for workflow/slot extraction
+    let isClosure = false;
     if (!greetingMessage && process.env.OPENAI_API_KEY) {
       const preprocessed = await withTimeout(
-        preprocessMessage(text, businessContext).catch(() => ({ correctedText: text, intent: 'other' })),
+        preprocessMessage(text, businessContext).catch(() => ({ correctedText: text, intent: 'other', isClosure: false })),
         CLASSIFY_TIMEOUT_MS,
-        { correctedText: text, intent: 'other' }
+        { correctedText: text, intent: 'other', isClosure: false }
       );
       correctedText = preprocessed.correctedText;
       intent = preprocessed.intent;
+      isClosure = preprocessed.isClosure;
       if (correctedText !== text) {
         console.log(`[WhatsApp] Typo corrected: "${text}" → "${correctedText}"`);
       }
@@ -916,10 +917,9 @@ async function processIncomingMessage(
       intent = 'greeting';
     }
 
-    // Record a conversation-closure marker when the customer ends the chat
-    // (e.g. "No", "not interested", "bye", "thanks"). The scheduler uses this
-    // to stop nudging the conversation until the customer messages again.
-    if (isConversationClosureReply(text) || isConversationClosureReply(correctedText)) {
+    // Record a conversation-closure marker when the customer ends the chat.
+    // The LLM pre-processor now detects closure/decline semantically, not just via regex.
+    if (isClosure) {
       createDocument('conversations', {
         teamId,
         customerId: customer.$id,
@@ -943,7 +943,8 @@ async function processIncomingMessage(
         intent,
         teamId,
         requestUrl,
-        messageId
+        messageId,
+        isClosure
       );
     } else {
       // Route complaints to staff
@@ -1240,7 +1241,8 @@ async function generateAndSendResponse(
   intent: string,
   teamId: string,
   requestUrl: string,
-  inboundMessageId: string | null
+  inboundMessageId: string | null,
+  isClosure: boolean
 ) {
   try {
     const resolvedTeamId =
@@ -1494,7 +1496,7 @@ async function generateAndSendResponse(
     const callbackConfirmationFollowUp =
       isCallbackConfirmationMessage(recentAiDoc?.message || null) &&
       (
-        isConversationClosureReply(correctedText) ||
+        isClosure ||
         isAffirmativeContinuationReply(correctedText)
       );
 

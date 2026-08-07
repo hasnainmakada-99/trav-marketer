@@ -527,8 +527,8 @@ Respond with ONLY the category name.`,
 export async function preprocessMessage(
   message: string,
   businessContext: string
-): Promise<{ correctedText: string; intent: string }> {
-  const fallback = { correctedText: message, intent: 'other' };
+): Promise<{ correctedText: string; intent: string; isClosure: boolean }> {
+  const fallback = { correctedText: message, intent: 'other', isClosure: false };
   if (!message?.trim()) return fallback;
   try {
     const response = await getOpenAI().chat.completions.create({
@@ -536,14 +536,15 @@ export async function preprocessMessage(
       messages: [
         {
           role: 'system',
-          content: `You are a travel-assistant pre-processor. Do exactly two things:
+          content: `You are a travel-assistant pre-processor. Do exactly three things:
 1. SPELL-CHECK: Fix ONLY misspelled words, one word at a time. Do NOT add new words, do NOT reorder words, do NOT restructure the sentence, do NOT infer missing context or destinations. Only correct spelling. Examples: "fligths"→"flights", "exlcusive"→"exclusive", "Bangalroe"→"Bangalore", "Banglore"→"Bangalore", "persomalized"→"personalized", "Elusive"→"Exclusive". If a word is correct, leave it unchanged. If no errors, return the original text exactly as-is — do NOT expand, rephrase, or add any words.
 2. CLASSIFY INTENT into one of: inquiry | complaint | booking | followup | greeting | spam | other
+3. CLOSURE DETECTION: Does this message indicate the customer wants to END the conversation, DECLINE further engagement, or say they're NOT INTERESTED? Return true for things like: "no", "not interested", "stop", "bye", "thanks I'm done", "already booked", "found better deal", "maybe later", "not right now", "I'm good", "leave me alone", "unsubscribe", "remove me", "no thanks", "not needed". Return false for genuine questions, bookings, follow-ups, or anything that continues the conversation.
 
 CRITICAL: If the message has no spelling errors, corrected must be EXACTLY the original message — not modified, not expanded, not rephrased. No exceptions.
 
 Reply with ONLY valid JSON on a single line:
-{"corrected":"<fixed message, or identical to original if no errors>","intent":"<category>"}`,
+{"corrected":"<fixed message, or identical to original if no errors>","intent":"<category>","isClosure":<true|false>}`,
         },
         {
           role: 'user',
@@ -563,6 +564,7 @@ Reply with ONLY valid JSON on a single line:
       intent: (typeof parsed.intent === 'string' ? parsed.intent : 'other')
         .toLowerCase()
         .trim(),
+      isClosure: Boolean(parsed.isClosure),
     };
   } catch {
     return fallback;
