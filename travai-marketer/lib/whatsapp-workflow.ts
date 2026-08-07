@@ -1297,7 +1297,7 @@ export function isCallbackConfirmationMessage(message: string | null | undefined
 export function isConversationClosureReply(message: string | null | undefined): boolean {
   const text = normalizeSelectionText(message || '');
   if (!text) return false;
-  return /^(no|nope|nah|not now|nothing else|thats all|that s all|all good|done|bye|ok thanks|okay thanks|thanks|thank you|no thanks|no thank you)$/.test(text);
+  return /^(no|nope|nah|not now|nothing else|thats all|that s all|all good|done|bye|ok thanks|okay thanks|thanks|thank you|no thanks|no thank you|not interested|not needed|no need|no thanks i am done|stop|stop messaging|leave me alone|unsubscribe|please stop|no more|enough)$/.test(text);
 }
 
 export function isAffirmativeContinuationReply(message: string | null | undefined): boolean {

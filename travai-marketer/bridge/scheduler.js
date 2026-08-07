@@ -752,6 +752,7 @@ async function runStalledConversationJob() {
         `teamId = "${escapeFilterValue(TEAM_ID)}" && ` +
         `sentBy = "ai" && ` +
         `message != "nudge:stalled" && ` +
+        `message != "nudge:closed" && ` +
         `createdAt <= "${escapeFilterValue(staleCutoff)}"`,
       sort: '-createdAt',
     });
@@ -807,6 +808,22 @@ async function runStalledConversationJob() {
       });
       if (alreadyNudged.totalItems > 0) {
         console.log(`[Scheduler] Skipping stall nudge to ${phone} — already nudged after customer's last message`);
+        continue;
+      }
+
+      // Skip if the customer already ended the conversation (e.g. replied "No",
+      // "not interested", "bye"). The webhook writes a "nudge:closed" marker
+      // when it detects such a reply. A new customer message resets this, so the
+      // next conversation can be nudged once again.
+      const conversationClosed = await pb.collection('conversations').getList(1, 1, {
+        filter:
+          `phone = "${escapeFilterValue(phone)}" && ` +
+          `sentBy = "ai" && ` +
+          `message = "nudge:closed" && ` +
+          `createdAt > "${escapeFilterValue(pbDateStr(new Date(lastUserTs)))}"`,
+      });
+      if (conversationClosed.totalItems > 0) {
+        console.log(`[Scheduler] Skipping stall nudge to ${phone} — customer ended the conversation`);
         continue;
       }
 

@@ -916,6 +916,23 @@ async function processIncomingMessage(
       intent = 'greeting';
     }
 
+    // Record a conversation-closure marker when the customer ends the chat
+    // (e.g. "No", "not interested", "bye", "thanks"). The scheduler uses this
+    // to stop nudging the conversation until the customer messages again.
+    if (isConversationClosureReply(text) || isConversationClosureReply(correctedText)) {
+      createDocument('conversations', {
+        teamId,
+        customerId: customer.$id,
+        phone,
+        role: 'assistant',
+        message: 'nudge:closed',
+        messageType: 'text',
+        sentBy: 'ai',
+        deliveryStatus: 'sent',
+        createdAt: new Date().toISOString(),
+      }).catch(() => {});
+    }
+
     // Generate AI response for all non-complaint intents.
     if (intent !== 'complaint') {
       await generateAndSendResponse(
@@ -1247,11 +1264,15 @@ async function generateAndSendResponse(
 
     const historyRows = convos.documents as Array<{ role?: string; message?: string; sentBy?: string }>;
 
-    // Full chronological history (all 40) — used for workflow state resolution
-    const fullHistory = [...historyRows].reverse().map((c) => ({
-      role: (c.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
-      content: c.message || '[media]',
-    }));
+    // Full chronological history (all 40) — used for workflow state resolution.
+    // Nudge markers are internal bookkeeping and must never reach the AI as messages.
+    const fullHistory = [...historyRows]
+      .filter((c) => c.message !== 'nudge:stalled' && c.message !== 'nudge:closed')
+      .reverse()
+      .map((c) => ({
+        role: (c.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+        content: c.message || '[media]',
+      }));
 
     // Remove the current inbound message from the tail (already stored above)
     if (fullHistory.length > 0) {
