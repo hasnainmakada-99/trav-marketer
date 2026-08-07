@@ -725,10 +725,10 @@ async function runUpsellJob() {
 }
 
 async function runStalledConversationJob() {
-  console.log('[Scheduler] Running stalled conversation nudge job...');
-  const stallHours = Number(process.env.WA_STALL_NUDGE_HOURS || '3');
-  const staleCutoff = new Date(Date.now() - stallHours * 60 * 60 * 1000).toISOString();
-  const oneHourAgo = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  console.log('[Scheduler] Stalled conversation nudge job...');
+  const stallMinutes = Number(process.env.WA_STALL_NUDGE_MINUTES || '30');
+  const nudgeCooldownHours = Number(process.env.WA_STALL_NUDGE_COOLDOWN_HOURS || 2);
+  const staleCutoff = new Date(Date.now() - stallMinutes * 60 * 1000).toISOString();
 
   try {
     if (APP_DATA_BACKEND !== 'pocketbase') {
@@ -736,41 +736,54 @@ async function runStalledConversationJob() {
       return;
     }
     const pb = await getPocketBaseClient();
-    const result = await pb.collection('conversations').getFullList({
+
+    // Latest AI question per phone. We only nudge conversations whose most recent
+    // message is an AI question — i.e. the customer has NOT replied since.
+    const aiResult = await pb.collection('conversations').getFullList({
       filter:
         `teamId = "${escapeFilterValue(TEAM_ID)}" && ` +
         `sentBy = "ai" && ` +
-        `createdAt <= "${escapeFilterValue(staleCutoff)}" && ` +
-        `createdAt >= "${escapeFilterValue(oneHourAgo)}"`,
+        `createdAt <= "${escapeFilterValue(staleCutoff)}"`,
       sort: '-createdAt',
     });
 
-    // Group by phone, get latest AI message per phone
-    const latestPerPhone = new Map();
-    for (const msg of result) {
+    // Choose the newest AI message per phone
+    const latestAiPerPhone = new Map();
+    for (const msg of aiResult) {
       const phone = msg.phone;
-      if (!phone || latestPerPhone.has(phone)) continue;
-      const existing = latestPerPhone.get(phone);
-      if (!existing || msg.createdAt > existing.createdAt) {
-        latestPerPhone.set(phone, msg);
-      }
+      if (!phone || latestAiPerPhone.has(phone)) continue;
+      latestAiPerPhone.set(phone, msg);
     }
 
     let sent = 0;
-    for (const phone of latestPerPhone.keys()) {
+    for (const phone of latestAiPerPhone.keys()) {
+      // Only nudges while inside the free 24h customer-initiated session window.
       const canSend = await hasRecentCustomerMessage(phone);
       if (!canSend) {
         console.log(`[Scheduler] Skipping stall nudge to ${phone} — no recent inbound (would be paid)`);
         continue;
       }
 
-      // Check if a nudge was already sent in the last 2 hours (avoid spam)
+      // Skip if the customer has already replied after the identified AI question.
+      const aiTs = new Date(latestAiPerPhone.get(phone).createdAt || 0).getTime();
+      const userReplyAfter = await pb.collection('conversations').getList(1, 1, {
+        filter:
+          `phone = "${escapeFilterValue(phone)}" && ` +
+          `role = "user" && ` +
+          `createdAt > "${escapeFilterValue(new Date(aiTs).toISOString())}"`,
+      });
+      if (userReplyAfter.totalItems > 0) {
+        console.log(`[Scheduler] Skipping stall nudge to ${phone} — customer replied after question`);
+        continue;
+      }
+
+      // Avoid spamming: skip if a nudge was already sent recently.
       const recentNudges = await pb.collection('conversations').getList(1, 1, {
         filter:
           `phone = "${escapeFilterValue(phone)}" && ` +
           `sentBy = "ai" && ` +
           `message = "nudge:stalled" && ` +
-          `createdAt > "${escapeFilterValue(new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString())}"`,
+          `createdAt > "${escapeFilterValue(new Date(Date.now() - nudgeCooldownHours * 60 * 60 * 1000).toISOString())}"`,
       });
       if (recentNudges.totalItems > 0) {
         console.log(`[Scheduler] Skipping stall nudge to ${phone} — already nudged recently`);
@@ -778,11 +791,11 @@ async function runStalledConversationJob() {
       }
 
       const msg =
-        `Hey there! 😊 Just checking in — still thinking about your trip? No rush, just reply when you're ready and I'll be happy to help! 🌍✈️`;
+        `Hey there! 😊 Just checking back in — were you still interested in those travel options? No rush at all, just reply whenever you're ready and I'll be happy to help! 🌍✈️`;
       const ok = await sendWhatsApp(phone, msg);
       if (ok) {
         sent++;
-        // Store the nudge in conversations for dedup tracking
+        // Mark nudge for dedup tracking (never read back into AI history).
         await pb.collection('conversations').create({
           teamId: TEAM_ID,
           phone,
@@ -798,7 +811,7 @@ async function runStalledConversationJob() {
       await new Promise(r => setTimeout(r, 500));
     }
 
-    console.log(`[Scheduler] Stalled conversation job done. Sent: ${sent}/${latestPerPhone.size}`);
+    console.log(`[Scheduler] Stalled conversation job done. Success: ${sent}/${latestAiPerPhone.size}`);
   } catch (err) {
     console.error('[Scheduler] Stalled conversation job error:', err?.message);
   }
@@ -809,11 +822,14 @@ function isMonday() {
 }
 
 console.log('[Scheduler] Started. Checking every minute for scheduled jobs...');
-console.log(`[Scheduler] Follow-up: 10:00 | Review: 11:00 | Payment reminder: 12:00 | Renewal: 13:00 | Upsell: 14:00 | Campaign: 18:00 | GPB post: 09:00 Mon | Stalled nudge: 15:00`);
+console.log(`[Scheduler] Follow-up: 10:00 | Review: 11:00 | Payment reminder: 12:00 | Renewal: 13:00 | Upsell: 14:00 | Campaign: 18:00 | GPB post: 09:00 Mon | Stalled nudge: every 15 min`);
 console.log(`[Scheduler] Target: ${TEAM_ID} | App: ${APP_URL}`);
 
 // Run immediately on startup to catch missed jobs (e.g. server was down)
 runCampaignDispatchJob().catch(() => {});
+
+let lastStallNudgeRun = 0;
+const STALL_NUDGE_INTERVAL_MS = 15 * 60 * 1000;
 
 setInterval(async () => {
   const hhmm = getHHMM();
@@ -832,7 +848,9 @@ setInterval(async () => {
   if (hhmm === '14:00') {
     await runUpsellJob().catch(err => console.error('[Scheduler] Upsell error:', err?.message));
   }
-  if (hhmm === '15:00') {
+  // Nudge unanswered AI questions on a fixed 15-min cadence (not a single fixed hour)
+  if (Date.now() - lastStallNudgeRun >= STALL_NUDGE_INTERVAL_MS) {
+    lastStallNudgeRun = Date.now();
     await runStalledConversationJob().catch(err => console.error('[Scheduler] Stalled conversation error:', err?.message));
   }
   if (hhmm === '18:00') {
