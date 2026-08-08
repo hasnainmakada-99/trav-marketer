@@ -261,6 +261,17 @@ async function hasHumanTakeover(teamId: string, phone: string) {
   if (DISABLE_HUMAN_HANDOVER) {
     return false;
   }
+  // Check lead-level human_takeover flag first
+  const leadCheck = await readCachedDocuments('leads', [
+    Query.equal('teamId', teamId),
+    Query.equal('phone', phone),
+    Query.equal('human_takeover', true),
+    Query.limit(1),
+  ]);
+  if (leadCheck.documents.length > 0) {
+    return true;
+  }
+
   const rows = await readCachedDocuments('conversations', [
     Query.equal('teamId', teamId),
     Query.equal('phone', phone),

@@ -88,6 +88,7 @@
         { "name": "reviewRequestSentAt", "type": "date", "required": false },
         { "name": "emailNotifiedAt", "type": "date", "required": false },
         { "name": "callbackNotifiedAt", "type": "date", "required": false },
+        { "name": "human_takeover", "type": "bool", "required": false },
         { "name": "createdAt", "type": "date", "required": false },
         { "name": "updatedAt", "type": "date", "required": false }
       ],
