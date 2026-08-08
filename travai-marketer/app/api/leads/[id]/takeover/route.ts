@@ -1,33 +1,98 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { updateDocument } from '@/lib/appwrite';
 
-export async function PATCH(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+const PB_URL = (process.env.POCKETBASE_URL || 'http://127.0.0.1:8090').replace(/\/+$/, '');
+const PB_EMAIL = (process.env.POCKETBASE_SUPERUSER_EMAIL || '').trim();
+const PB_PASSWORD = (process.env.POCKETBASE_SUPERUSER_PASSWORD || '').trim();
+
+let adminToken: string | null = null;
+let tokenExpiry = 0;
+
+async function getAdminToken(): Promise<string> {
+  const now = Date.now();
+  if (adminToken && Date.now() < tokenExpiry) return adminToken;
+
+  const res = await fetch(`${PB_URL}/api/admins/auth-with-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identity: PB_EMAIL, password: PB_PASSWORD }),
+  });
+  if (!res.ok) throw new Error(`Admin auth failed: ${res.status}`);
+  const data = await res.json();
+  adminToken = data.token;
+  tokenExpiry = Date.now() + 55 * 60 * 1000;
+  return adminToken;
+}
+
+async function findLeadByIdOrPhone(id: string): Promise<{ id: string } | null> {
+  const token = await getAdminToken();
+  if (/^[a-z0-9]{15}$/i.test(id)) {
+    const res = await fetch(`${PB_URL}/api/collections/leads/records/${id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) return { id } as any;
+  }
+  const searchRes = await fetch(
+    `${PB_URL}/api/collections/leads/records?filter=(id="${id}"||appwriteId="${id}")&limit=1`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (searchRes.ok) {
+    const data = await searchRes.json();
+    if (data.items?.length) return data.items[0];
+  }
+  return null;
+}
+
+export async function GET(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { human_takeover, taken_over_by } = body;
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+    const human_takeover = searchParams.get('human_takeover');
+    const taken_over_by = searchParams.get('taken_over_by');
 
-    if (typeof human_takeover !== 'boolean') {
+    if (!id || human_takeover === null) {
       return NextResponse.json(
-        { error: 'human_takeover must be boolean' },
+        { error: 'id and human_takeover required' },
         { status: 400 }
       );
     }
 
+    const takeover = human_takeover === 'true';
+
+    const lead = await findLeadByIdOrPhone(id);
+    if (!lead) {
+      return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
+    }
+
+    const token = await getAdminToken();
     const updateData: Record<string, unknown> = {
-      human_takeover,
+      human_takeover: takeover,
       updatedAt: new Date().toISOString(),
     };
 
-    if (taken_over_by) {
-      updateData.taken_over_by = taken_over_by;
-      updateData.taken_over_at = new Date().toISOString();
+    if (searchParams.get('taken_over_by')) {
+      (updateData as any).taken_over_by = searchParams.get('taken_over_by');
+      (updateData as any).taken_over_at = new Date().toISOString();
     }
 
-    const updated = await updateDocument('leads', params.id, updateData);
+    const token = await getAdminToken();
+    const res = await fetch(`${PB_URL}/api/collections/leads/records/${lead.id}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        human_takeover: takeover,
+        updatedAt: new Date().toISOString(),
+      }),
+    });
 
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`PocketBase update failed: ${res.status} ${err}`);
+    }
+
+    const updated = await res.json();
     return NextResponse.json({ success: true, lead: updated });
   } catch (error) {
     console.error('[Lead Takeover] Error:', error);
