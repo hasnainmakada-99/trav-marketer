@@ -526,6 +526,10 @@ export default function LeadsPage() {
                           className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50">
                           View conversation
                         </button>
+                        <a href={`https://app.ycloud.com/conversations/${lead.phone}`} target="_blank" rel="noopener noreferrer"
+                          className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 ring-1 ring-blue-200 transition hover:bg-blue-100">
+                          Open in YCloud
+                        </a>
                         <button onClick={() => { setInvoiceLead(lead); setInvoiceForm({ service: '', amount: '', date: new Date().toISOString().slice(0, 10), notes: '' }); }}
                           className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">
                           Send invoice
